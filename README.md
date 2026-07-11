@@ -4,9 +4,9 @@
 
 A deliberately tiny, readable pipeline that shows how a CLIP-style
 vision-language model turns **images + prompt templates** into **embeddings**,
-stores them in a **database**, and answers **searches**. Six short Python
-files, standard-library SQLite, no frameworks. Read it top to bottom in
-15 minutes, then swap in your own images.
+stores them in a **database**, and answers **searches**. Six short pipeline
+files (plus a sample downloader and a smoke test), standard-library SQLite,
+no frameworks. Read it top to bottom in 15 minutes, then swap in your own images.
 
 ## The whole idea in one picture
 

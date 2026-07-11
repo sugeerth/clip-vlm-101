@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CLIP VLM 101 — vision-language embeddings, from zero to search</title>
 <meta name="description" content="A tiny, readable CLIP pipeline: image + prompt-template embeddings, concatenated features, a database, and live in-browser retrieval.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
 <style>
   :root {
     --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e;
@@ -135,7 +136,7 @@
       <label><input type="radio" name="mode" value="image"> image — visual match</label>
       <label><input type="radio" name="mode" value="text"> text — tag/caption match</label>
     </div>
-    <p class="status" id="searchStatus">The CLIP text encoder loads on your first search (~25&nbsp;MB, cached after that).</p>
+    <p class="status" id="searchStatus">The CLIP text encoder loads on your first search (~65&nbsp;MB, cached after that).</p>
     <div class="bar-track hidden" id="loadTrack"><div class="bar-fill" id="loadFill" style="width:0%"></div></div>
     <div id="results"></div>
   </div>
@@ -212,7 +213,7 @@ const scoreItem = (item, q, mode) => mode === 'image' ? dot(item.image_emb, q)
 
 // ------------------------------------------------- model (lazy, cached) ---
 const MODEL_ID = 'Xenova/clip-vit-base-patch32';
-let hf = null, textEncoder = null, imageEncoder = null, tagEmbs = null;
+let hf = null, textEncoderP = null, imageEncoderP = null, tagEmbs = null;
 const loadTrack = document.getElementById('loadTrack');
 const loadFill = document.getElementById('loadFill');
 
@@ -226,34 +227,38 @@ async function lib() {
   hf ??= await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.2');
   return hf;
 }
-async function getTextEncoder(statusEl) {
-  if (textEncoder) return textEncoder;
-  statusEl.textContent = 'Loading CLIP text encoder…';
-  const { AutoTokenizer, CLIPTextModelWithProjection } = await lib();
-  const tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID, { progress_callback: progressBar });
-  const model = await CLIPTextModelWithProjection.from_pretrained(MODEL_ID, { dtype: 'q8', progress_callback: progressBar });
-  textEncoder = async texts => {
-    const inputs = tokenizer(texts, { padding: true, truncation: true });
-    const { text_embeds } = await model(inputs);
-    return sliceRows(text_embeds);
-  };
-  loadTrack.classList.add('hidden');
-  return textEncoder;
+// Memoize the in-flight promise (not the result) so two concurrent first
+// uses share one download; clear it on failure so a retry can succeed.
+function getTextEncoder(statusEl) {
+  textEncoderP ??= (async () => {
+    statusEl.textContent = 'Loading CLIP text encoder…';
+    const { AutoTokenizer, CLIPTextModelWithProjection } = await lib();
+    const tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID, { progress_callback: progressBar });
+    const model = await CLIPTextModelWithProjection.from_pretrained(MODEL_ID, { dtype: 'q8', progress_callback: progressBar });
+    loadTrack.classList.add('hidden');
+    return async texts => {
+      const inputs = tokenizer(texts, { padding: true, truncation: true });
+      const { text_embeds } = await model(inputs);
+      return sliceRows(text_embeds);
+    };
+  })().catch(err => { textEncoderP = null; loadTrack.classList.add('hidden'); throw err; });
+  return textEncoderP;
 }
-async function getImageEncoder(statusEl) {
-  if (imageEncoder) return imageEncoder;
-  statusEl.textContent = 'Loading CLIP vision encoder…';
-  const { AutoProcessor, CLIPVisionModelWithProjection, RawImage } = await lib();
-  const processor = await AutoProcessor.from_pretrained(MODEL_ID, { progress_callback: progressBar });
-  const model = await CLIPVisionModelWithProjection.from_pretrained(MODEL_ID, { dtype: 'q8', progress_callback: progressBar });
-  imageEncoder = async blob => {
-    const image = await RawImage.fromBlob(blob);
-    const inputs = await processor(image);
-    const { image_embeds } = await model(inputs);
-    return sliceRows(image_embeds)[0];
-  };
-  loadTrack.classList.add('hidden');
-  return imageEncoder;
+function getImageEncoder(statusEl) {
+  imageEncoderP ??= (async () => {
+    statusEl.textContent = 'Loading CLIP vision encoder…';
+    const { AutoProcessor, CLIPVisionModelWithProjection, RawImage } = await lib();
+    const processor = await AutoProcessor.from_pretrained(MODEL_ID, { progress_callback: progressBar });
+    const model = await CLIPVisionModelWithProjection.from_pretrained(MODEL_ID, { dtype: 'q8', progress_callback: progressBar });
+    loadTrack.classList.add('hidden');
+    return async blob => {
+      const image = await RawImage.fromBlob(blob);
+      const inputs = await processor(image);
+      const { image_embeds } = await model(inputs);
+      return sliceRows(image_embeds)[0];
+    };
+  })().catch(err => { imageEncoderP = null; loadTrack.classList.add('hidden'); throw err; });
+  return imageEncoderP;
 }
 // (n, d) tensor -> array of n unit-length plain arrays
 function sliceRows(tensor) {
@@ -312,6 +317,9 @@ async function runSearch() {
     searchStatus.textContent = 'Model failed to load here, showing keyword matches instead — run search.py locally for the real thing.';
   }
   searching = false;
+  // if the query changed while we were busy (e.g. a second chip click), run it now
+  const now = qInput.value.trim();
+  if (now && now !== query) runSearch();
 }
 qInput.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
 document.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', runSearch));
@@ -339,7 +347,10 @@ drop.addEventListener('drop', e => {
 });
 fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleUpload(fileInput.files[0]); });
 
+let uploading = false;
 async function handleUpload(file) {
+  if (uploading) return;
+  uploading = true;
   preview.src = URL.createObjectURL(file);
   preview.classList.remove('hidden');
   uploadTags.replaceChildren(); uploadResults.replaceChildren();
@@ -375,6 +386,7 @@ async function handleUpload(file) {
     console.error(err);
     uploadStatus.textContent = 'Could not run the vision model in this browser — try Chrome/Edge/Safari 17+, or run ingest.py locally.';
   }
+  uploading = false;
 }
 </script>
 </body>

@@ -20,11 +20,12 @@ def main():
 
     (DOCS / "images").mkdir(parents=True, exist_ok=True)
     out = []
-    for it in items:
+    for i, it in enumerate(items):
         src = pathlib.Path(it["path"])
-        shutil.copy(src, DOCS / "images" / src.name)
+        name = f"{i:03d}_{src.name}"  # index prefix: same-named files from different folders must not clobber
+        shutil.copy(src, DOCS / "images" / name)
         out.append({
-            "file": f"images/{src.name}",
+            "file": f"images/{name}",
             "caption": it["caption"],
             "tags": it["tags"],
             # rounding keeps db.json small; retrieval quality is unaffected
