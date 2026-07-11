@@ -53,10 +53,20 @@ for your own project:
 ```python
 from features import FeatureExtractor
 
-fx = FeatureExtractor()            # loads CLIP once, embeds the tag vocabulary
-record = fx.extract("photo.jpg")   # meta tags + all three vectors
+fx = FeatureExtractor()            # loads CLIP once
+fx.embed("photo.jpg")              # IMAGE-ONLY: one (512,) unit vector — the
+                                   #   text tower is never touched
+record = fx.extract("photo.jpg")   # full record: meta tags + all three vectors
 record["tags"]                     # ['cat', 'pet', 'animal', 'portrait', 'wildlife']
 record["caption"]                  # 'a photo of cat, pet, animal, portrait, wildlife'
+```
+
+Batch it from the shell — one prompt template, many images:
+
+```bash
+.venv/bin/python features.py images/*.jpg                 # meta tags per image
+.venv/bin/python features.py images/*.jpg --image-only    # embeddings only
+.venv/bin/python features.py images/*.jpg --tag-template "a drawing of a {tag}"
 ```
 
 **Exact dimensions** (model `openai/clip-vit-base-patch32`; these are what
@@ -85,11 +95,11 @@ Suggested reading order:
 | `embedder.py` | ~55 | CLIP → unit-length 512-d vectors for images AND text |
 | `tagger.py` | ~25 | zero-shot meta tags = dot products + argsort, no training |
 | `fusion.py` | ~30 | the concatenation: `[image ; text] / √2`, and why it works |
-| `features.py` | ~90 | **the one-call API**: image → tags + all three embeddings |
+| `features.py` | ~115 | **the one-call API**: image-only `embed()`, batch tags, full records |
 | `db.py` | ~70 | vectors as float32 BLOBs in plain SQLite |
 | `ingest.py` | ~45 | *composition*: loop `features.extract` over files → store |
 | `search.py` | ~70 | text / image / fused retrieval with dot products |
-| `export_web.py` | ~45 | dump the DB to `docs/db.json` for the static web demo |
+| `export_web.py` | ~80 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 The browser demo mirrors the same pipeline in `docs/js/` with **matching
 module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
@@ -124,6 +134,11 @@ to `docs/db.json`; the page then runs the *same* CLIP model in your browser via
 [transformers.js](https://huggingface.co/docs/transformers.js) to embed your
 query (text or an uploaded image) and ranks with the same dot products as
 `search.py`. Nothing you upload leaves your machine.
+
+The page also **visualizes the embeddings**: a 2-D PCA map of every image
+embedding (coordinates computed by `export_web.py`; similar images land close
+together — click any image for its raw-value fingerprint strip), and uploads
+are projected onto the same map live with two dot products.
 
 ## Tests
 

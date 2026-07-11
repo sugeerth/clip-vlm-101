@@ -1,9 +1,10 @@
 // The page itself: wires the mirrored pipeline modules to the DOM.
 //   templates.js (prompts) + clip.js (encoders) + rank.js (dot products)
-// Sections below match the page: gallery, search, upload.
+// Sections below match the page: gallery, map, search, upload.
 import { VOCAB, tagPrompts, captionFor } from './templates.js';
 import { dot, rank, topTags, fuse } from './rank.js';
 import { getTextEncoder, getImageEncoder } from './clip.js';
+import { drawMap, markUpload, project, stripRow } from './viz.js';
 
 const $ = id => document.getElementById(id);
 const EXAMPLES = ['a fluffy animal', 'famous landmark in europe',
@@ -23,6 +24,17 @@ for (const item of DB.items) {
   fig.append(img, cap);
   $('gallery').append(fig);
 }
+
+// -------------------------------------------------------- embedding map --
+// Gallery embeddings at their PCA spots; click one to see its raw numbers.
+if (DB.pca) drawMap($('map'), DB.items, item => {
+  const who = document.createElement('p');
+  who.className = 'who';
+  who.textContent = `${item.caption} — every bar below is one stored number (blue < 0 < red)`;
+  $('mapDetail').replaceChildren(who,
+    stripRow('image_emb', item.image_emb),
+    stripRow('text_emb', item.text_emb));
+});
 
 // ------------------------------------------------------------- shared UI --
 // Progress bar for model downloads (transformers.js progress events).
@@ -149,7 +161,9 @@ async function handleUpload(file) {
     const fmt = (name, v) => `${name.padEnd(10)} (${String(v.length).padStart(4)},)  unit-length  [${v.slice(0, 5).map(x => x.toFixed(4).padStart(7)).join(' ')} …]`;
     dims.textContent = 'your database-ready record (same shapes features.py stores):\n'
       + fmt('image_emb', imgEmb) + '\n' + fmt('text_emb', txtEmb) + '\n' + fmt('fused_emb', fusedEmb);
-    $('uploadTags').append(tagLine, capLine, dims);
+    $('uploadTags').append(tagLine, capLine, dims,
+      stripRow('image_emb', imgEmb), stripRow('text_emb', txtEmb), stripRow('fused_emb', fusedEmb));
+    if (DB.pca) markUpload($('map'), project(imgEmb, DB.pca));  // drop it on the map
 
     // Most similar gallery images (image-to-image, like search.py --image).
     const similar = DB.items.map(item => ({ item, score: dot(item.image_emb, imgEmb) }))

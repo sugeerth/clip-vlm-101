@@ -61,6 +61,16 @@ def test_feature_extractor():
     assert r["caption"] == templates.caption_for(r["tags"])
 
 
+def test_pca_2d():
+    from export_web import pca_2d
+    rng = np.random.default_rng(3)
+    X = rng.normal(size=(10, 16))
+    coords, mean, components = pca_2d(X)
+    assert coords.shape == (10, 2) and mean.shape == (16,) and components.shape == (2, 16)
+    # projecting a vector with mean+components reproduces its coordinate
+    assert np.allclose((X[0] - mean) @ components.T, coords[0])
+
+
 def test_db_roundtrip():
     rng = np.random.default_rng(1)
     a, b = rng.normal(size=512), rng.normal(size=512)

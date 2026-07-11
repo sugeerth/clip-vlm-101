@@ -53,7 +53,16 @@
   </div>
   <div class="grid" id="gallery"></div>
 
-  <h2>3 · Search it</h2>
+  <h2>3 · See the embeddings</h2>
+  <p class="sub">Every 512-number embedding is squashed to a dot on a 2-D map with PCA (computed by
+  <code>export_web.py</code>) — images that look alike land close together. <strong>Click any image</strong>
+  to see its raw numbers as a fingerprint strip; upload your own below and it appears on this map too.</p>
+  <div class="card">
+    <svg id="map" viewBox="0 0 100 62" role="img" aria-label="2-D PCA map of the image embeddings"></svg>
+    <div id="mapDetail"></div>
+  </div>
+
+  <h2>4 · Search it</h2>
   <div class="card">
     <input type="search" id="q" placeholder="Describe what you're looking for… e.g. a fluffy animal" autocomplete="off">
     <div class="row" id="examples"></div>
@@ -67,7 +76,7 @@
     <div id="results"></div>
   </div>
 
-  <h2>4 · Or upload your own image</h2>
+  <h2>5 · Or upload your own image</h2>
   <div class="card">
     <div class="drop" id="drop">
       <strong>Click or drop an image here.</strong><br>
@@ -80,7 +89,7 @@
     <div id="uploadResults"></div>
   </div>
 
-  <h2>5 · Read the code</h2>
+  <h2>6 · Read the code</h2>
   <p class="sub">One concept per file. The browser demo mirrors the Python pipeline with matching module names.</p>
   <div class="card">
     <table>
@@ -98,7 +107,8 @@
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/templates.js"><code>js/templates.js</code></a></td><td>mirror of <code>templates.py</code> — same template, same vocabulary</td></tr>
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/clip.js"><code>js/clip.js</code></a></td><td>mirror of <code>embedder.py</code> — the same model via transformers.js</td></tr>
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/rank.js"><code>js/rank.js</code></a></td><td>mirror of <code>tagger.py</code> + <code>fusion.py</code> + <code>search.py</code> — the pure math</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/app.js"><code>js/app.js</code></a></td><td>wires the modules to this page (gallery, search, upload)</td></tr>
+      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/viz.js"><code>js/viz.js</code></a></td><td>the embedding map (PCA projection) + raw-value fingerprint strips</td></tr>
+      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/app.js"><code>js/app.js</code></a></td><td>wires the modules to this page (gallery, map, search, upload)</td></tr>
     </table>
   </div>
 
