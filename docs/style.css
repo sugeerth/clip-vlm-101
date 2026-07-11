@@ -83,6 +83,13 @@ input[type="search"] {
 .drop.armed { border-color: var(--accent); color: var(--accent-ink); }
 #uploadPreview { max-width: 220px; max-height: 170px; border-radius: 8px; display: block; margin: 12px auto 4px; }
 
+/* uploaded-image record dims (mirror of features.py's CLI output) */
+.dims {
+  font: 0.76rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted); background: var(--page); border: 1px solid var(--hairline);
+  border-radius: 6px; padding: 8px 10px; overflow-x: auto; margin: 8px 0 4px;
+}
+
 /* misc */
 table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
 td, th { text-align: left; padding: 6px 10px 6px 0; border-top: 1px solid var(--hairline); vertical-align: top; }

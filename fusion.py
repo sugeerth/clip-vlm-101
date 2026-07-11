@@ -19,7 +19,8 @@ import numpy as np
 
 def fuse(image_emb: np.ndarray, text_emb: np.ndarray) -> np.ndarray:
     """Concatenate an image vector and a text vector into one unit vector."""
-    return np.concatenate([image_emb, text_emb]) / np.sqrt(2)
+    fused = np.concatenate([image_emb, text_emb]) / np.sqrt(2)
+    return fused.astype(np.float32)  # keep the whole pipeline in float32
 
 
 def fused_query(query_emb: np.ndarray) -> np.ndarray:

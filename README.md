@@ -4,7 +4,7 @@
 
 A deliberately tiny, readable pipeline that shows how a CLIP-style
 vision-language model turns **images + prompt templates** into **embeddings**,
-stores them in a **database**, and answers **searches**. Eight tiny pipeline
+stores them in a **database**, and answers **searches**. Nine tiny pipeline
 files — one concept each — plus a sample downloader and a smoke test.
 Standard-library SQLite, no frameworks. Read it top to bottom in 15 minutes,
 then swap in your own images.
@@ -36,6 +36,7 @@ single dot product.
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python download_samples.py        # or drop your own images in images/
+.venv/bin/python features.py images/cat.jpg # one image → meta tags + embeddings
 .venv/bin/python ingest.py images/*.jpg     # embed + auto-tag + store in SQLite
 .venv/bin/python search.py "a fluffy animal"
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
@@ -43,6 +44,35 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 First run downloads the CLIP model (~600 MB). Device is auto-detected:
 CUDA → Apple Silicon MPS → CPU (all work; this model is small).
+
+## Given an image → meta tags + embeddings
+
+`features.py` is the one-call API if you just want database-ready features
+for your own project:
+
+```python
+from features import FeatureExtractor
+
+fx = FeatureExtractor()            # loads CLIP once, embeds the tag vocabulary
+record = fx.extract("photo.jpg")   # meta tags + all three vectors
+record["tags"]                     # ['cat', 'pet', 'animal', 'portrait', 'wildlife']
+record["caption"]                  # 'a photo of cat, pet, animal, portrait, wildlife'
+```
+
+**Exact dimensions** (model `openai/clip-vit-base-patch32`; these are what
+`db.py` stores as BLOBs — `export_web.py` ships `image_emb` and `text_emb`
+to the web demo, which recomputes the fused score as their average):
+
+| vector | shape | dtype | unit-length | bytes as BLOB | meaning |
+|---|---|---|---|---|---|
+| `image_emb` | `(512,)` | float32 | yes | 2 048 | what the image *looks* like (vision tower) |
+| `text_emb` | `(512,)` | float32 | yes | 2 048 | what its caption/tags *mean* (text tower) |
+| `fused_emb` | `(1024,)` | float32 | yes | 4 096 | `[image_emb ; text_emb] / √2` — both signals |
+
+Both towers project into the same 512-d space, which is why one image and
+one sentence can be compared with a plain dot product (cosine similarity,
+range −1…1). Or from the shell: `python3 features.py photo.jpg` prints the
+tags and all three vectors' shapes; `--json` dumps the full record.
 
 ## The files — one concept each
 
@@ -55,8 +85,9 @@ Suggested reading order:
 | `embedder.py` | ~55 | CLIP → unit-length 512-d vectors for images AND text |
 | `tagger.py` | ~25 | zero-shot meta tags = dot products + argsort, no training |
 | `fusion.py` | ~30 | the concatenation: `[image ; text] / √2`, and why it works |
+| `features.py` | ~90 | **the one-call API**: image → tags + all three embeddings |
 | `db.py` | ~70 | vectors as float32 BLOBs in plain SQLite |
-| `ingest.py` | ~55 | *composition*: embed → tag → caption → fuse → store |
+| `ingest.py` | ~45 | *composition*: loop `features.extract` over files → store |
 | `search.py` | ~70 | text / image / fused retrieval with dot products |
 | `export_web.py` | ~45 | dump the DB to `docs/db.json` for the static web demo |
 

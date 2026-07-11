@@ -28,3 +28,7 @@ export const rank = (items, q, mode, k = 5) =>
 export const topTags = (imageEmb, tagEmbs, vocab, k = 5) =>
   vocab.map((tag, i) => ({ tag, score: dot(tagEmbs[i], imageEmb) }))
     .sort((a, b) => b.score - a.score).slice(0, k);
+
+// Mirror of fusion.fuse: [image ; text] / √2 — one unit vector, both signals.
+export const fuse = (imageEmb, textEmb) =>
+  [...imageEmb, ...textEmb].map(x => x / Math.SQRT2);

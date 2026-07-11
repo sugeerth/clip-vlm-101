@@ -2,7 +2,7 @@
 //   templates.js (prompts) + clip.js (encoders) + rank.js (dot products)
 // Sections below match the page: gallery, search, upload.
 import { VOCAB, tagPrompts, captionFor } from './templates.js';
-import { dot, rank, topTags } from './rank.js';
+import { dot, rank, topTags, fuse } from './rank.js';
 import { getTextEncoder, getImageEncoder } from './clip.js';
 
 const $ = id => document.getElementById(id);
@@ -134,6 +134,9 @@ async function handleUpload(file) {
     }
     const scored = topTags(imgEmb, tagEmbs, VOCAB);
     const caption = captionFor(scored.map(s => s.tag));
+    const [txtEmb] = await encodeText([caption]);
+    const fusedEmb = fuse(imgEmb, txtEmb);
+    // this is the complete database-ready record — the mirror of features.extract()
 
     const tagLine = document.createElement('p');
     tagLine.append('meta tags: ', ...scored.map(s =>
@@ -141,7 +144,12 @@ async function handleUpload(file) {
         { className: 'pill', textContent: `${s.tag} ${s.score.toFixed(3)}` })));
     const capLine = document.createElement('p');
     capLine.className = 'sub'; capLine.textContent = `templated caption: “${caption}”`;
-    $('uploadTags').append(tagLine, capLine);
+    const dims = document.createElement('pre');
+    dims.className = 'dims';
+    const fmt = (name, v) => `${name.padEnd(10)} (${String(v.length).padStart(4)},)  unit-length  [${v.slice(0, 5).map(x => x.toFixed(4).padStart(7)).join(' ')} …]`;
+    dims.textContent = 'your database-ready record (same shapes features.py stores):\n'
+      + fmt('image_emb', imgEmb) + '\n' + fmt('text_emb', txtEmb) + '\n' + fmt('fused_emb', fusedEmb);
+    $('uploadTags').append(tagLine, capLine, dims);
 
     // Most similar gallery images (image-to-image, like search.py --image).
     const similar = DB.items.map(item => ({ item, score: dot(item.image_emb, imgEmb) }))

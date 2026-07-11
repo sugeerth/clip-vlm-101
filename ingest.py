@@ -1,8 +1,8 @@
 """Ingest images into the gallery — the whole pipeline, composed.
 
-pipeline: image ─► embedder ─► tagger ─► templates.caption_for ─► fusion ─► db
+pipeline: image ─► features (embed + tag + caption + fuse) ─► db
 
-Each step lives in the module named after it; this file just wires them up.
+features.py does the extraction; this file just loops and stores.
 
 Usage:
     python3 ingest.py images/*.jpg
@@ -12,10 +12,8 @@ Usage:
 import argparse
 
 import db
-import fusion
-import tagger
 import templates
-from embedder import ClipEmbedder
+from features import FeatureExtractor
 
 
 def main():
@@ -27,21 +25,15 @@ def main():
     ap.add_argument("--db", default=db.DB_PATH)
     args = ap.parse_args()
 
-    clip = ClipEmbedder()
-    print(f"model {clip.model.name_or_path} on {clip.device}")
+    fx = FeatureExtractor(args.tag_template, args.caption_template)
+    print(f"model {fx.clip.model.name_or_path} on {fx.clip.device}")
     con = db.connect(args.db)
 
-    # Embed the whole tag vocabulary once, phrased through the prompt template.
-    tag_embs = clip.embed_texts(templates.tag_prompts(args.tag_template))
-
     for path in args.paths:
-        image_emb = clip.embed_images([path])[0]
-        tags = tagger.top_tags(image_emb, tag_embs, templates.TAG_VOCABULARY)
-        caption = args.caption or templates.caption_for(tags, args.caption_template)
-        text_emb = clip.embed_texts([caption])[0]
-        db.add_image(con, path, caption, tags, image_emb, text_emb,
-                     fusion.fuse(image_emb, text_emb))
-        print(f"  + {path}\n      tags    {tags}\n      caption {caption!r}")
+        r = fx.extract(path, caption=args.caption)
+        db.add_image(con, r["path"], r["caption"], r["tags"],
+                     r["image_emb"], r["text_emb"], r["fused_emb"])
+        print(f"  + {path}\n      tags    {r['tags']}\n      caption {r['caption']!r}")
 
     print(f"done — {len(db.all_images(con))} images in {args.db}")
 

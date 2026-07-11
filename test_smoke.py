@@ -40,6 +40,27 @@ def test_fusion_math():
     assert abs(score(item, q, "fused") - expected) < 1e-6
 
 
+def test_feature_extractor():
+    """FeatureExtractor with a stub CLIP — checks shapes, tags, and caption."""
+    from features import FeatureExtractor
+
+    class StubClip:  # deterministic fake encoder, no model download
+        def embed_texts(self, texts):
+            rng = np.random.default_rng(42)
+            v = rng.normal(size=(len(texts), 512))
+            return (v / np.linalg.norm(v, axis=1, keepdims=True)).astype(np.float32)
+        def embed_images(self, paths):
+            return self.embed_texts(paths)
+
+    fx = FeatureExtractor(clip=StubClip())
+    r = fx.extract("fake.jpg")
+    assert r["image_emb"].shape == (512,) and r["text_emb"].shape == (512,)
+    assert r["fused_emb"].shape == (1024,)
+    assert abs(np.linalg.norm(r["fused_emb"]) - 1.0) < 1e-5
+    assert len(r["tags"]) == 5 and all(t in templates.TAG_VOCABULARY for t in r["tags"])
+    assert r["caption"] == templates.caption_for(r["tags"])
+
+
 def test_db_roundtrip():
     rng = np.random.default_rng(1)
     a, b = rng.normal(size=512), rng.normal(size=512)

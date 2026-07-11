@@ -40,7 +40,17 @@
 
   <h2>2 · The database</h2>
   <p class="sub">These 14 images were ingested by <code>ingest.py</code>: embedded, auto-tagged with the
-  prompt template (zero-shot — no training), captioned, and stored. This page loads that exported database.</p>
+  prompt template (zero-shot — no training), captioned, and stored. Every SQLite row carries exactly
+  three vectors (this page loads the exported <code>image_emb</code> + <code>text_emb</code> and
+  recomputes the fused score as their average — same math):</p>
+  <div class="card">
+    <table>
+      <tr><th>vector</th><th>shape</th><th>dtype</th><th>bytes as BLOB</th><th>meaning</th></tr>
+      <tr><td><code>image_emb</code></td><td><code>(512,)</code></td><td>float32, unit-length</td><td>2 048</td><td>what the image <em>looks</em> like (vision tower)</td></tr>
+      <tr><td><code>text_emb</code></td><td><code>(512,)</code></td><td>float32, unit-length</td><td>2 048</td><td>what its caption/tags <em>mean</em> (text tower)</td></tr>
+      <tr><td><code>fused_emb</code></td><td><code>(1024,)</code></td><td>float32, unit-length</td><td>4 096</td><td><code>[image_emb ; text_emb] / √2</code> — both signals</td></tr>
+    </table>
+  </div>
   <div class="grid" id="gallery"></div>
 
   <h2>3 · Search it</h2>
@@ -79,6 +89,7 @@
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/embedder.py"><code>embedder.py</code></a></td><td>CLIP → unit-length 512-d vectors for images and text</td></tr>
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/tagger.py"><code>tagger.py</code></a></td><td>zero-shot meta tags = dot products + argsort, no training</td></tr>
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/fusion.py"><code>fusion.py</code></a></td><td>the concatenation: [image ; text] / √2, and why the math works</td></tr>
+      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/features.py"><code>features.py</code></a></td><td>the one-call API: image → meta tags + all three embeddings</td></tr>
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/db.py"><code>db.py</code></a></td><td>vectors as float32 BLOBs in plain SQLite</td></tr>
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/ingest.py"><code>ingest.py</code></a></td><td>composes the pipeline: embed → tag → caption → fuse → store</td></tr>
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/search.py"><code>search.py</code></a></td><td>text / image / fused retrieval with dot products</td></tr>
