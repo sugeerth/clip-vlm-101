@@ -1,5 +1,7 @@
 """Export the SQLite gallery to docs/db.json (+ copy images) for the web demo.
 
+pipeline: gallery.sqlite ──► [export_web] ──► docs/db.json + docs/images/
+
 The GitHub Pages demo is 100% static: it loads this JSON, computes the query
 embedding in the browser with transformers.js, and ranks with dot products —
 the exact same math as search.py.

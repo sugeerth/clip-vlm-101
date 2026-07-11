@@ -1,5 +1,7 @@
 """CLIP wrapper: images and sentences go in, unit-length 512-d vectors come out.
 
+pipeline: image / sentence ──► [embedder] ──► 512-d unit vector
+
 Because both encoders project into the SAME vector space, an image of a cat
 and the sentence "a photo of a cat" land close together. Every feature in
 this repo (tagging, captioning, search) is just cosine similarity on these

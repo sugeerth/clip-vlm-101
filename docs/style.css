@@ -1,0 +1,92 @@
+/* CLIP VLM 101 — page styles. Light + dark via prefers-color-scheme. */
+:root {
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e;
+  --muted: #898781; --hairline: #e1e0d9; --border: rgba(11,11,11,0.10);
+  --accent: #2a78d6; --accent-ink: #1c5cab;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7;
+    --muted: #898781; --hairline: #2c2c2a; --border: rgba(255,255,255,0.10);
+    --accent: #3987e5; --accent-ink: #86b6ef;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--page); color: var(--ink);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 980px; margin: 0 auto; padding: 24px 20px 80px; }
+a { color: var(--accent-ink); }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 24px 0 8px; }
+h2 { font-size: 1.3rem; margin: 48px 0 6px; }
+.sub { color: var(--ink-2); margin: 0 0 12px; }
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 18px 20px; margin: 16px 0;
+}
+.pill {
+  display: inline-block; font-size: 0.78rem; color: var(--ink-2);
+  border: 1px solid var(--hairline); border-radius: 999px; padding: 1px 9px;
+  margin: 2px 3px 2px 0; background: var(--page);
+}
+
+/* pipeline diagram */
+.pipe { display: flex; gap: 8px; align-items: stretch; overflow-x: auto; padding: 6px 2px; }
+.pipe .step {
+  flex: 1 0 128px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; font-size: 0.85rem;
+}
+.pipe .step b { display: block; font-size: 0.9rem; margin-bottom: 2px; }
+.pipe .step span { color: var(--ink-2); }
+.pipe .arrow { align-self: center; color: var(--muted); flex: 0 0 auto; }
+
+/* gallery */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.grid figure { margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.grid img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; }
+.grid figcaption { padding: 6px 8px 8px; font-size: 0.75rem; color: var(--ink-2); }
+
+/* demo controls */
+input[type="search"] {
+  width: 100%; padding: 10px 12px; font-size: 1rem; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: 8px;
+}
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+.chip {
+  font: inherit; font-size: 0.82rem; cursor: pointer; color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: 999px; padding: 3px 11px;
+}
+.chip:hover { border-color: var(--accent); color: var(--accent-ink); }
+.mode label { font-size: 0.85rem; color: var(--ink-2); margin-right: 10px; cursor: pointer; }
+.status { font-size: 0.85rem; color: var(--muted); min-height: 1.4em; }
+.bar-track { height: 6px; background: var(--hairline); border-radius: 4px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--accent); border-radius: 4px; }
+
+/* results */
+.result { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--hairline); }
+.result:first-child { border-top: none; }
+.result img { width: 88px; height: 66px; object-fit: cover; border-radius: 6px; flex: 0 0 auto; }
+.result .meta { flex: 1; min-width: 0; }
+.result .name { font-size: 0.9rem; }
+.result .score {
+  font-variant-numeric: tabular-nums; font-size: 0.85rem; color: var(--ink-2);
+  width: 56px; text-align: right; flex: 0 0 auto;
+}
+.result .bar-track { max-width: 420px; margin-top: 4px; }
+
+/* upload */
+.drop {
+  border: 2px dashed var(--hairline); border-radius: 10px; padding: 22px;
+  text-align: center; color: var(--ink-2); cursor: pointer;
+}
+.drop.armed { border-color: var(--accent); color: var(--accent-ink); }
+#uploadPreview { max-width: 220px; max-height: 170px; border-radius: 8px; display: block; margin: 12px auto 4px; }
+
+/* misc */
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+td, th { text-align: left; padding: 6px 10px 6px 0; border-top: 1px solid var(--hairline); vertical-align: top; }
+th { border-top: none; color: var(--ink-2); font-weight: 600; }
+code { background: var(--surface); border: 1px solid var(--hairline); border-radius: 4px; padding: 0 4px; font-size: 0.9em; }
+.foot { margin-top: 56px; font-size: 0.8rem; color: var(--muted); border-top: 1px solid var(--hairline); padding-top: 14px; }
+.hidden { display: none; }

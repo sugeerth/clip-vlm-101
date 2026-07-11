@@ -1,5 +1,7 @@
 """Prompt templates: how we phrase questions to a vision-language model.
 
+pipeline: tag vocabulary ──► [templates] ──► sentences ready to embed
+
 CLIP was trained on (image, caption) pairs, so it understands images best
 through natural-language sentences. A "prompt template" is just a sentence
 with a hole in it — we fill the hole with a candidate tag and ask CLIP

@@ -1,5 +1,7 @@
 """The database: one SQLite row per image.
 
+pipeline: caption + tags + 3 vectors ──► [db] ──► gallery.sqlite
+
 Each row stores the image path, its caption, its meta tags, and THREE vectors:
 
   image_emb  (512) - what the image LOOKS like        (vision encoder)

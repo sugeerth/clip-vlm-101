@@ -1,7 +1,9 @@
 """Search the gallery with plain text (or another image).
 
-The query goes through the SAME encoder as the stored items, so retrieval is
-one dot product per row — no index needed at this scale.
+pipeline: query ─► embedder ─► dot products against every db row ─► top-k
+
+The query goes through the SAME encoder as the stored items, so retrieval
+is one dot product per row — no index needed at this scale.
 
 Modes:
   image  compare against what images LOOK like        (visual match)
@@ -18,18 +20,18 @@ import argparse
 import numpy as np
 
 import db
+import fusion
 from embedder import ClipEmbedder
 
 
 def score(item: dict, query: np.ndarray, mode: str) -> float:
+    """Similarity of one db row to a 512-d query vector, under one mode."""
     if mode == "image":
         return float(item["image_emb"] @ query)
     if mode == "text":
         return float(item["text_emb"] @ query)
-    # fused: duplicate the 512-d query to 1024-d, renormalize; the dot product
-    # then equals mean(image similarity, text similarity).
-    fused_query = np.concatenate([query, query]) / np.sqrt(2)
-    return float(item["fused_emb"] @ fused_query)
+    # fused: equals the mean of the image and text scores (see fusion.py)
+    return float(item["fused_emb"] @ fusion.fused_query(query))
 
 
 def main():

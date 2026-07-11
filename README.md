@@ -4,9 +4,10 @@
 
 A deliberately tiny, readable pipeline that shows how a CLIP-style
 vision-language model turns **images + prompt templates** into **embeddings**,
-stores them in a **database**, and answers **searches**. Six short pipeline
-files (plus a sample downloader and a smoke test), standard-library SQLite,
-no frameworks. Read it top to bottom in 15 minutes, then swap in your own images.
+stores them in a **database**, and answers **searches**. Eight tiny pipeline
+files — one concept each — plus a sample downloader and a smoke test.
+Standard-library SQLite, no frameworks. Read it top to bottom in 15 minutes,
+then swap in your own images.
 
 ## The whole idea in one picture
 
@@ -43,19 +44,30 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 First run downloads the CLIP model (~600 MB). Device is auto-detected:
 CUDA → Apple Silicon MPS → CPU (all work; this model is small).
 
-## The six files
+## The files — one concept each
 
-| file | lines | what it teaches |
+Each file's docstring starts with a `pipeline:` line showing where it sits.
+Suggested reading order:
+
+| file | lines | the one concept it teaches |
 |---|---|---|
-| `templates.py` | ~50 | prompt templates: sentences with holes, filled per tag |
-| `embedder.py` | ~50 | CLIP → unit-length 512-d vectors for images AND text |
+| `templates.py` | ~45 | prompt templates: sentences with holes, filled per tag |
+| `embedder.py` | ~55 | CLIP → unit-length 512-d vectors for images AND text |
+| `tagger.py` | ~25 | zero-shot meta tags = dot products + argsort, no training |
+| `fusion.py` | ~30 | the concatenation: `[image ; text] / √2`, and why it works |
 | `db.py` | ~70 | vectors as float32 BLOBs in plain SQLite |
-| `ingest.py` | ~80 | embed → zero-shot tag → caption → fuse → store |
+| `ingest.py` | ~55 | *composition*: embed → tag → caption → fuse → store |
 | `search.py` | ~70 | text / image / fused retrieval with dot products |
-| `export_web.py` | ~40 | dump the DB to `docs/db.json` for the static web demo |
+| `export_web.py` | ~45 | dump the DB to `docs/db.json` for the static web demo |
+
+The browser demo mirrors the same pipeline in `docs/js/` with **matching
+module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
+`rank.js` ↔ `tagger.py`+`fusion.py`+`search.py`, and `app.js` wires them to
+the page. Read a Python file, then its twin — same pipeline, two languages.
 
 ## Why concatenate embeddings?
 
+`fusion.py` is the whole answer in 30 lines:
 `fused_emb = [image_emb ; text_emb] / √2` keeps the fused vector unit-length,
 so a dot product against a duplicated query `[q ; q] / √2` equals the
 **average of the visual similarity and the semantic (tag/caption) similarity**.

@@ -5,8 +5,9 @@ import tempfile
 import numpy as np
 
 import db
+import fusion
+import tagger
 import templates
-from ingest import fuse
 from search import score
 
 
@@ -18,11 +19,18 @@ def test_templates():
     assert templates.caption_for(["cat", "pet"]) == "a photo of cat, pet"
 
 
-def test_fuse_math():
+def test_top_tags():
+    vocab = ["cat", "dog", "car"]
+    tag_embs = np.eye(3, 4)                       # 3 fake unit prompt vectors in 4-d
+    image_emb = np.array([0.1, 0.9, 0.0, 0.0])    # closest to "dog", then "cat"
+    assert tagger.top_tags(image_emb, tag_embs, vocab, k=2) == ["dog", "cat"]
+
+
+def test_fusion_math():
     rng = np.random.default_rng(0)
     a = rng.normal(size=512); a /= np.linalg.norm(a)
     b = rng.normal(size=512); b /= np.linalg.norm(b)
-    fused = fuse(a, b)
+    fused = fusion.fuse(a, b)
     assert fused.shape == (1024,)
     assert abs(np.linalg.norm(fused) - 1.0) < 1e-6  # still unit-length
     # fused dot fused-query == mean of the two per-mode similarities
@@ -37,7 +45,7 @@ def test_db_roundtrip():
     a, b = rng.normal(size=512), rng.normal(size=512)
     path = os.path.join(tempfile.mkdtemp(), "t.sqlite")
     con = db.connect(path)
-    db.add_image(con, "x.jpg", "a photo of cat", ["cat"], a, b, fuse(a, b))
+    db.add_image(con, "x.jpg", "a photo of cat", ["cat"], a, b, fusion.fuse(a, b))
     (item,) = db.all_images(con)
     assert item["tags"] == ["cat"] and item["caption"] == "a photo of cat"
     assert np.allclose(item["image_emb"], a.astype(np.float32))

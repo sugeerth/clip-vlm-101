@@ -6,91 +6,7 @@
 <title>CLIP VLM 101 — vision-language embeddings, from zero to search</title>
 <meta name="description" content="A tiny, readable CLIP pipeline: image + prompt-template embeddings, concatenated features, a database, and live in-browser retrieval.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
-<style>
-  :root {
-    --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e;
-    --muted: #898781; --hairline: #e1e0d9; --border: rgba(11,11,11,0.10);
-    --accent: #2a78d6; --accent-ink: #1c5cab;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7;
-      --muted: #898781; --hairline: #2c2c2a; --border: rgba(255,255,255,0.10);
-      --accent: #3987e5; --accent-ink: #86b6ef;
-    }
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--page); color: var(--ink);
-    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  main { max-width: 980px; margin: 0 auto; padding: 24px 20px 80px; }
-  a { color: var(--accent-ink); }
-  h1 { font-size: 1.9rem; line-height: 1.25; margin: 24px 0 8px; }
-  h2 { font-size: 1.3rem; margin: 48px 0 6px; }
-  .sub { color: var(--ink-2); margin: 0 0 12px; }
-  .card {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 18px 20px; margin: 16px 0;
-  }
-  .pill {
-    display: inline-block; font-size: 0.78rem; color: var(--ink-2);
-    border: 1px solid var(--hairline); border-radius: 999px; padding: 1px 9px;
-    margin: 2px 3px 2px 0; background: var(--page);
-  }
-  /* pipeline diagram */
-  .pipe { display: flex; gap: 8px; align-items: stretch; overflow-x: auto; padding: 6px 2px; }
-  .pipe .step {
-    flex: 1 0 128px; background: var(--surface); border: 1px solid var(--border);
-    border-radius: 8px; padding: 10px 12px; font-size: 0.85rem;
-  }
-  .pipe .step b { display: block; font-size: 0.9rem; margin-bottom: 2px; }
-  .pipe .step span { color: var(--ink-2); }
-  .pipe .arrow { align-self: center; color: var(--muted); flex: 0 0 auto; }
-  /* gallery */
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
-  .grid figure { margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .grid img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; }
-  .grid figcaption { padding: 6px 8px 8px; font-size: 0.75rem; color: var(--ink-2); }
-  /* demo controls */
-  input[type="search"] {
-    width: 100%; padding: 10px 12px; font-size: 1rem; color: var(--ink);
-    background: var(--surface); border: 1px solid var(--hairline); border-radius: 8px;
-  }
-  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
-  .chip {
-    font: inherit; font-size: 0.82rem; cursor: pointer; color: var(--ink-2);
-    background: var(--surface); border: 1px solid var(--hairline); border-radius: 999px; padding: 3px 11px;
-  }
-  .chip:hover { border-color: var(--accent); color: var(--accent-ink); }
-  .mode label { font-size: 0.85rem; color: var(--ink-2); margin-right: 10px; cursor: pointer; }
-  .status { font-size: 0.85rem; color: var(--muted); min-height: 1.4em; }
-  .bar-track { height: 6px; background: var(--hairline); border-radius: 4px; overflow: hidden; }
-  .bar-fill { height: 100%; background: var(--accent); border-radius: 4px; }
-  /* results */
-  .result { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--hairline); }
-  .result:first-child { border-top: none; }
-  .result img { width: 88px; height: 66px; object-fit: cover; border-radius: 6px; flex: 0 0 auto; }
-  .result .meta { flex: 1; min-width: 0; }
-  .result .name { font-size: 0.9rem; }
-  .result .score {
-    font-variant-numeric: tabular-nums; font-size: 0.85rem; color: var(--ink-2);
-    width: 56px; text-align: right; flex: 0 0 auto;
-  }
-  .result .bar-track { max-width: 420px; margin-top: 4px; }
-  .drop {
-    border: 2px dashed var(--hairline); border-radius: 10px; padding: 22px;
-    text-align: center; color: var(--ink-2); cursor: pointer;
-  }
-  .drop.armed { border-color: var(--accent); color: var(--accent-ink); }
-  #uploadPreview { max-width: 220px; max-height: 170px; border-radius: 8px; display: block; margin: 12px auto 4px; }
-  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
-  td, th { text-align: left; padding: 6px 10px 6px 0; border-top: 1px solid var(--hairline); vertical-align: top; }
-  th { border-top: none; color: var(--ink-2); font-weight: 600; }
-  code { background: var(--surface); border: 1px solid var(--hairline); border-radius: 4px; padding: 0 4px; font-size: 0.9em; }
-  .foot { margin-top: 56px; font-size: 0.8rem; color: var(--muted); border-top: 1px solid var(--hairline); padding-top: 14px; }
-  .hidden { display: none; }
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 <main>
@@ -155,15 +71,23 @@
   </div>
 
   <h2>5 · Read the code</h2>
+  <p class="sub">One concept per file. The browser demo mirrors the Python pipeline with matching module names.</p>
   <div class="card">
     <table>
-      <tr><th>file</th><th>what it teaches</th></tr>
+      <tr><th>Python pipeline</th><th>what it teaches</th></tr>
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/templates.py"><code>templates.py</code></a></td><td>prompt templates: sentences with holes, filled per candidate tag</td></tr>
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/embedder.py"><code>embedder.py</code></a></td><td>CLIP → unit-length 512-d vectors for images and text</td></tr>
+      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/tagger.py"><code>tagger.py</code></a></td><td>zero-shot meta tags = dot products + argsort, no training</td></tr>
+      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/fusion.py"><code>fusion.py</code></a></td><td>the concatenation: [image ; text] / √2, and why the math works</td></tr>
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/db.py"><code>db.py</code></a></td><td>vectors as float32 BLOBs in plain SQLite</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/ingest.py"><code>ingest.py</code></a></td><td>embed → zero-shot tag → caption → concatenate → store</td></tr>
+      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/ingest.py"><code>ingest.py</code></a></td><td>composes the pipeline: embed → tag → caption → fuse → store</td></tr>
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/search.py"><code>search.py</code></a></td><td>text / image / fused retrieval with dot products</td></tr>
       <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/export_web.py"><code>export_web.py</code></a></td><td>dump the SQLite gallery to the <code>db.json</code> this page uses</td></tr>
+      <tr><th>…and its browser twin</th><th>same pipeline, in JavaScript</th></tr>
+      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/templates.js"><code>js/templates.js</code></a></td><td>mirror of <code>templates.py</code> — same template, same vocabulary</td></tr>
+      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/clip.js"><code>js/clip.js</code></a></td><td>mirror of <code>embedder.py</code> — the same model via transformers.js</td></tr>
+      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/rank.js"><code>js/rank.js</code></a></td><td>mirror of <code>tagger.py</code> + <code>fusion.py</code> + <code>search.py</code> — the pure math</td></tr>
+      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/app.js"><code>js/app.js</code></a></td><td>wires the modules to this page (gallery, search, upload)</td></tr>
     </table>
   </div>
 
@@ -174,220 +98,6 @@
     MIT licensed · <a href="https://github.com/sugeerth/clip-vlm-101">github.com/sugeerth/clip-vlm-101</a>
   </p>
 </main>
-
-<script type="module">
-// ------------------------------------------------------------------ data ---
-const DB = await (await fetch('db.json')).json();
-
-// Must mirror templates.py — same vocabulary, same prompt template.
-const TAG_TEMPLATE = 'a photo of a {tag}';
-const CAPTION_TEMPLATE = 'a photo of {tags}';
-const VOCAB = ["cat","dog","bear","parrot","bird","horse","fish","insect",
-  "animal","pet","wildlife","waterfall","mountain","forest","beach","lake",
-  "river","sky","sunset","snow","flower","sunflower","tree","garden",
-  "landscape","city","street","tower","castle","palace","church","bridge",
-  "building","landmark","architecture","house","car","bicycle","train",
-  "airplane","boat","vehicle","pizza","apple","strawberry","fruit","food",
-  "drink","dessert","person","portrait","crowd","planet","moon","stars",
-  "space","painting","toy","book","computer"];
-const EXAMPLES = ['a fluffy animal', 'famous landmark in europe',
-  'something delicious to eat', 'outer space', 'water in nature'];
-
-// -------------------------------------------------------------- gallery ---
-const gallery = document.getElementById('gallery');
-for (const item of DB.items) {
-  const fig = document.createElement('figure');
-  const img = Object.assign(document.createElement('img'), { src: item.file, alt: item.caption, loading: 'lazy' });
-  const cap = document.createElement('figcaption');
-  cap.append(...item.tags.map(t => Object.assign(document.createElement('span'), { className: 'pill', textContent: t })));
-  fig.append(img, cap);
-  gallery.append(fig);
-}
-
-// ------------------------------------------------------------ math bits ---
-const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
-const unit = v => { const n = Math.hypot(...v) || 1; return v.map(x => x / n); };
-const scoreItem = (item, q, mode) => mode === 'image' ? dot(item.image_emb, q)
-  : mode === 'text' ? dot(item.text_emb, q)
-  : (dot(item.image_emb, q) + dot(item.text_emb, q)) / 2;   // fused = the average
-
-// ------------------------------------------------- model (lazy, cached) ---
-const MODEL_ID = 'Xenova/clip-vit-base-patch32';
-let hf = null, textEncoderP = null, imageEncoderP = null, tagEmbs = null;
-const loadTrack = document.getElementById('loadTrack');
-const loadFill = document.getElementById('loadFill');
-
-function progressBar(p) {
-  if (p.status === 'progress' && p.total) {
-    loadTrack.classList.remove('hidden');
-    loadFill.style.width = Math.round(100 * p.loaded / p.total) + '%';
-  }
-}
-async function lib() {
-  hf ??= await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.2');
-  return hf;
-}
-// Memoize the in-flight promise (not the result) so two concurrent first
-// uses share one download; clear it on failure so a retry can succeed.
-function getTextEncoder(statusEl) {
-  textEncoderP ??= (async () => {
-    statusEl.textContent = 'Loading CLIP text encoder…';
-    const { AutoTokenizer, CLIPTextModelWithProjection } = await lib();
-    const tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID, { progress_callback: progressBar });
-    const model = await CLIPTextModelWithProjection.from_pretrained(MODEL_ID, { dtype: 'q8', progress_callback: progressBar });
-    loadTrack.classList.add('hidden');
-    return async texts => {
-      const inputs = tokenizer(texts, { padding: true, truncation: true });
-      const { text_embeds } = await model(inputs);
-      return sliceRows(text_embeds);
-    };
-  })().catch(err => { textEncoderP = null; loadTrack.classList.add('hidden'); throw err; });
-  return textEncoderP;
-}
-function getImageEncoder(statusEl) {
-  imageEncoderP ??= (async () => {
-    statusEl.textContent = 'Loading CLIP vision encoder…';
-    const { AutoProcessor, CLIPVisionModelWithProjection, RawImage } = await lib();
-    const processor = await AutoProcessor.from_pretrained(MODEL_ID, { progress_callback: progressBar });
-    const model = await CLIPVisionModelWithProjection.from_pretrained(MODEL_ID, { dtype: 'q8', progress_callback: progressBar });
-    loadTrack.classList.add('hidden');
-    return async blob => {
-      const image = await RawImage.fromBlob(blob);
-      const inputs = await processor(image);
-      const { image_embeds } = await model(inputs);
-      return sliceRows(image_embeds)[0];
-    };
-  })().catch(err => { imageEncoderP = null; loadTrack.classList.add('hidden'); throw err; });
-  return imageEncoderP;
-}
-// (n, d) tensor -> array of n unit-length plain arrays
-function sliceRows(tensor) {
-  const [n, d] = tensor.dims, data = tensor.data, rows = [];
-  for (let i = 0; i < n; i++) rows.push(unit(Array.from(data.slice(i * d, (i + 1) * d))));
-  return rows;
-}
-
-// -------------------------------------------------------------- results ---
-function renderResults(el, ranked) {
-  el.replaceChildren();
-  const top = Math.max(...ranked.map(r => r.score), 1e-6);
-  for (const { item, score } of ranked) {
-    const row = document.createElement('div'); row.className = 'result';
-    const img = Object.assign(document.createElement('img'), { src: item.file, alt: item.caption });
-    const meta = document.createElement('div'); meta.className = 'meta';
-    const name = document.createElement('div'); name.className = 'name'; name.textContent = item.caption;
-    const track = document.createElement('div'); track.className = 'bar-track';
-    const fill = document.createElement('div'); fill.className = 'bar-fill';
-    fill.style.width = Math.max(2, Math.min(100, 100 * score / top)) + '%'; // bars relative to the best hit; exact score shown beside
-    track.append(fill); meta.append(name, track);
-    const s = document.createElement('div'); s.className = 'score'; s.textContent = score.toFixed(3);
-    row.append(img, meta, s);
-    el.append(row);
-  }
-}
-
-// --------------------------------------------------------------- search ---
-const qInput = document.getElementById('q');
-const searchStatus = document.getElementById('searchStatus');
-const results = document.getElementById('results');
-let searching = false;
-
-async function runSearch() {
-  const query = qInput.value.trim();
-  if (!query || searching) return;
-  searching = true;
-  const mode = document.querySelector('input[name=mode]:checked').value;
-  try {
-    const encode = await getTextEncoder(searchStatus);
-    searchStatus.textContent = 'Embedding your query…';
-    const [q] = await encode([query]);
-    const ranked = DB.items.map(item => ({ item, score: scoreItem(item, q, mode) }))
-      .sort((a, b) => b.score - a.score).slice(0, 5);
-    renderResults(results, ranked);
-    searchStatus.textContent = `“${query}” — ${mode} similarity, top 5 of ${DB.items.length}. Same math as search.py.`;
-  } catch (err) {
-    console.error(err);
-    // graceful fallback: substring match over tags + captions
-    const ranked = DB.items.map(item => ({
-      item,
-      score: query.toLowerCase().split(/\s+/).filter(w =>
-        item.tags.some(t => t.includes(w)) || item.caption.includes(w)).length / 4,
-    })).sort((a, b) => b.score - a.score).slice(0, 5);
-    renderResults(results, ranked);
-    searchStatus.textContent = 'Model failed to load here, showing keyword matches instead — run search.py locally for the real thing.';
-  }
-  searching = false;
-  // if the query changed while we were busy (e.g. a second chip click), run it now
-  const now = qInput.value.trim();
-  if (now && now !== query) runSearch();
-}
-qInput.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
-document.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', runSearch));
-const examplesRow = document.getElementById('examples');
-for (const ex of EXAMPLES) {
-  const b = Object.assign(document.createElement('button'), { className: 'chip', textContent: ex });
-  b.addEventListener('click', () => { qInput.value = ex; runSearch(); });
-  examplesRow.append(b);
-}
-
-// --------------------------------------------------------------- upload ---
-const drop = document.getElementById('drop');
-const fileInput = document.getElementById('file');
-const uploadStatus = document.getElementById('uploadStatus');
-const uploadTags = document.getElementById('uploadTags');
-const uploadResults = document.getElementById('uploadResults');
-const preview = document.getElementById('uploadPreview');
-
-drop.addEventListener('click', () => fileInput.click());
-drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('armed'); });
-drop.addEventListener('dragleave', () => drop.classList.remove('armed'));
-drop.addEventListener('drop', e => {
-  e.preventDefault(); drop.classList.remove('armed');
-  if (e.dataTransfer.files[0]) handleUpload(e.dataTransfer.files[0]);
-});
-fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleUpload(fileInput.files[0]); });
-
-let uploading = false;
-async function handleUpload(file) {
-  if (uploading) return;
-  uploading = true;
-  preview.src = URL.createObjectURL(file);
-  preview.classList.remove('hidden');
-  uploadTags.replaceChildren(); uploadResults.replaceChildren();
-  try {
-    const encodeImage = await getImageEncoder(uploadStatus);
-    uploadStatus.textContent = 'Embedding your image…';
-    const imgEmb = await encodeImage(file);
-
-    // Zero-shot meta tags: same prompt template as ingest.py.
-    const encodeText = await getTextEncoder(uploadStatus);
-    if (!tagEmbs) {
-      uploadStatus.textContent = 'Embedding the tag vocabulary (once)…';
-      tagEmbs = await encodeText(VOCAB.map(t => TAG_TEMPLATE.replace('{tag}', t)));
-    }
-    const scored = VOCAB.map((tag, i) => ({ tag, score: dot(tagEmbs[i], imgEmb) }))
-      .sort((a, b) => b.score - a.score).slice(0, 5);
-    const caption = CAPTION_TEMPLATE.replace('{tags}', scored.map(s => s.tag).join(', '));
-
-    const tagHtml = document.createElement('p');
-    tagHtml.append('meta tags: ',
-      ...scored.map(s => Object.assign(document.createElement('span'),
-        { className: 'pill', textContent: `${s.tag} ${s.score.toFixed(3)}` })));
-    const capP = document.createElement('p');
-    capP.className = 'sub'; capP.textContent = `templated caption: “${caption}”`;
-    uploadTags.append(tagHtml, capP);
-
-    // Most similar gallery images (image-to-image, like search.py --image).
-    const ranked = DB.items.map(item => ({ item, score: dot(item.image_emb, imgEmb) }))
-      .sort((a, b) => b.score - a.score).slice(0, 3);
-    renderResults(uploadResults, ranked);
-    uploadStatus.textContent = 'Done — tagged with the prompt template, then matched image-to-image. All local.';
-  } catch (err) {
-    console.error(err);
-    uploadStatus.textContent = 'Could not run the vision model in this browser — try Chrome/Edge/Safari 17+, or run ingest.py locally.';
-  }
-  uploading = false;
-}
-</script>
+<script type="module" src="js/app.js"></script>
 </body>
 </html>
