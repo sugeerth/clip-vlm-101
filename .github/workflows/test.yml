@@ -19,3 +19,6 @@ jobs:
       # the model-free CLI demos must keep running on the committed gallery
       - run: python temperature.py
       - run: python similarity.py --json docs/db.json
+      - run: python evaluate.py --json docs/db.json
+      - run: python arithmetic.py --centroid animal --json docs/db.json
+      - run: python quantize.py --json docs/db.json

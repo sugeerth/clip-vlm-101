@@ -4,8 +4,9 @@
 
 A deliberately tiny, readable pipeline that shows how a CLIP-style
 vision-language model turns **images + prompt templates** into **embeddings**,
-stores them in a **database**, and answers **searches**. Ten tiny pipeline
-files — one concept each — plus a sample downloader and a smoke test.
+stores them in a **database**, and answers **searches**. Nine tiny pipeline
+files plus five standalone math lessons — one concept each — a sample
+downloader, and a smoke test.
 Standard-library SQLite, no frameworks. Read it top to bottom in 15 minutes,
 then swap in your own images.
 
@@ -99,9 +100,18 @@ Suggested reading order:
 | `db.py` | ~75 | vectors as float32 BLOBs in plain SQLite |
 | `ingest.py` | ~60 | *composition*: batch `features.extract_batch` over files → store |
 | `search.py` | ~85 | text / image / fused retrieval with dot products |
+| `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
+
+Five standalone lessons build on the stored vectors — every one runs
+**without the model** via `--json docs/db.json` (real committed embeddings):
+
+| lesson | lines | the one concept it teaches |
+|---|---|---|
 | `temperature.py` | ~50 | softmax + CLIP's learned logit scale: scores → probabilities |
 | `similarity.py` | ~90 | the N×N matrix + the modality gap (why scales don't mix) |
-| `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
+| `evaluate.py` | ~80 | retrieval evaluation: leave-one-out precision@k and MRR |
+| `arithmetic.py` | ~90 | vector algebra: `cat + dog − apple`, centroids, renormalize |
+| `quantize.py` | ~75 | int8 scalar quantization: 4× smaller, measure the damage |
 
 The browser demo mirrors the same pipeline in `docs/js/` with **matching
 module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
@@ -163,6 +173,22 @@ The page also **visualizes the embeddings**: a 2-D PCA map of every image
 embedding (coordinates computed by `export_web.py`; similar images land close
 together — click any image for its raw-value fingerprint strip), and uploads
 are projected onto the same map live with two dot products.
+
+## Reproduce these numbers (no model, no downloads)
+
+`docs/db.json` ships the real embeddings of the 14 sample images, so every
+lesson runs on committed data — and CI re-runs all of them on every push:
+
+| command | the number you should see |
+|---|---|
+| `python3 temperature.py` | top hit 7.9% at scale 1 → **99.7%** at CLIP's learned scale 100 |
+| `python3 similarity.py --json docs/db.json` | the modality gap: image·images **+0.57** vs image·own-caption **+0.29** |
+| `python3 evaluate.py --json docs/db.json` | image mode **P@1 = 0.857**, MRR ≈ 0.88 |
+| `python3 arithmetic.py --centroid animal --json docs/db.json` | top 4 = exactly the 4 animal images |
+| `python3 quantize.py --json docs/db.json` | 4× smaller, **39/42** top-3 neighbor slots unchanged |
+
+(The numbers are pinned to the committed sample gallery; re-exporting your
+own gallery changes them — that's the point.)
 
 ## Tests
 

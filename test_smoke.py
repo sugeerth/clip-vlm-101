@@ -123,6 +123,59 @@ def test_similarity():
     assert gap["image · other captions"] < gap["image · OWN caption"]
 
 
+def test_evaluate():
+    from evaluate import evaluate
+
+    def item(tag, v):
+        v = np.asarray(v, float); v /= np.linalg.norm(v)
+        return {"tags": [tag], "image_emb": v, "text_emb": v,
+                "fused_emb": np.concatenate([v, v]) / np.sqrt(2)}
+
+    items = [item("a", [1, 0, 0, 0]), item("a", [0.9, 0.1, 0, 0]),
+             item("b", [0, 0, 1, 0]), item("b", [0, 0, 0.9, 0.1])]
+    m = evaluate(items, "image")  # each query's one groupmate must rank first
+    assert m["P@1"] == 1.0 and m["MRR"] == 1.0
+    assert abs(m["P@3"] - 1 / 3) < 1e-9  # only 1 of any 3 can be relevant
+    # the committed gallery reproduces the README number
+    real = evaluate(db.load_json_gallery(), "image")
+    assert abs(real["P@1"] - 0.857) < 0.01 and real["MRR"] > 0.8
+
+
+def test_arithmetic_combine():
+    from arithmetic import combine
+    a, b, c = np.eye(3)
+    v = combine([a, b, c], [1, 1, -1])
+    assert abs(np.linalg.norm(v) - 1) < 1e-6  # renormalized onto the sphere
+    assert v[0] > 0 and v[2] < 0
+    try:  # a combination that cancels out is an explicit error
+        combine([a, a], [1, -1])
+        assert False, "should have raised"
+    except SystemExit:
+        pass
+    # the 'animal' centroid retrieves exactly the 4 animal images
+    items = db.load_json_gallery()
+    animals = [it for it in items if "animal" in it["tags"]]
+    q = combine([it["image_emb"] for it in animals], [1] * len(animals))
+    ranked = sorted(items, key=lambda it: float(it["image_emb"] @ q), reverse=True)
+    assert {it["path"] for it in ranked[:4]} == {it["path"] for it in animals}
+
+
+def test_quantize():
+    from quantize import dequantize, quantize, top_neighbors
+    rng = np.random.default_rng(5)
+    X = rng.normal(size=(6, 32)).astype(np.float32)
+    X /= np.linalg.norm(X, axis=1, keepdims=True)
+    q, scale = quantize(X)
+    assert q.dtype == np.int8 and q.nbytes * 4 == X.nbytes  # 4x smaller
+    assert np.abs(dequantize(q, scale) - X).max() <= scale / 2 + 1e-6
+    # int8 keeps almost every top-3 neighbor on the committed gallery
+    I = np.asarray([it["image_emb"] for it in db.load_json_gallery()])
+    qi, _ = quantize(I)
+    exact = top_neighbors(I @ I.T)
+    approx = top_neighbors(qi.astype(np.int32) @ qi.astype(np.int32).T)
+    assert sum(x == y for x, y in zip(exact, approx)) >= 12  # 13/14 committed
+
+
 def test_softmax():
     from temperature import softmax
     scores = [0.3, 0.2, 0.1]
