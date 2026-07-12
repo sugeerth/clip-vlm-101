@@ -314,6 +314,22 @@ input[type="search"]:focus { border-color: var(--accent); outline: none; }
   border-radius: 8px; padding: 9px 11px; overflow-x: auto; margin: 10px 0 4px;
 }
 
+/* ----------------------------------------------------------- recommender --- */
+.like { position: relative; padding: 0; border: none; background: none; cursor: pointer; border-radius: 8px; }
+.like img {
+  width: 56px; height: 42px; object-fit: cover; border-radius: 8px; display: block;
+  border: 2px solid transparent; transition: transform 120ms ease;
+}
+.like:hover img { transform: translateY(-2px); }
+.like.on img { border-color: var(--accent); }
+.like .heart {
+  position: absolute; top: -6px; right: -6px; width: 18px; height: 18px;
+  border-radius: 999px; background: var(--accent); color: #fff;
+  font-size: 11px; line-height: 18px; text-align: center;
+  opacity: 0; transform: scale(0.6); transition: opacity 120ms ease, transform 120ms ease;
+}
+.like.on .heart { opacity: 1; transform: scale(1); }
+
 /* --------------------------------------------------------- optimize CLIP --- */
 .opt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
 .opt-grid .card { margin: 0; padding: 16px 18px; }

@@ -191,6 +191,56 @@ def test_item_tower():
     assert paths == ["x.jpg"] and matrix.shape == (1, 1024)
 
 
+def test_user_tower():
+    """user_tower.py: mean-pooled likes rank the catalog, likes excluded."""
+    import user_tower
+
+    # 4 unit item vectors in 4-d: two "animals" near each other, two far away
+    matrix = np.array([[1, 0, 0, 0],
+                       [0.9, 0.1, 0, 0],
+                       [0, 0, 1, 0],
+                       [0, 0, 0, 1.0]], dtype=np.float32)
+    matrix /= np.linalg.norm(matrix, axis=1, keepdims=True)
+    paths = ["cat.jpg", "dog.jpg", "pizza.jpg", "pluto.jpg"]
+
+    u = user_tower.user_vector(matrix[:2])
+    assert abs(np.linalg.norm(u) - 1.0) < 1e-6
+
+    recs = user_tower.recommend(paths, matrix, ["cat.jpg"], k=2)
+    assert recs[0][0] == "dog.jpg"                  # nearest non-liked item
+    assert all(p != "cat.jpg" for p, _ in recs)     # likes never recommended
+
+    try:
+        user_tower.recommend(paths, matrix, ["unknown.jpg"])
+        assert False, "should reject likes missing from the tower"
+    except ValueError:
+        pass
+
+
+def test_eval_harness():
+    """eval.py: hit rates count correctly against the ground-truth table."""
+    import eval as ev
+
+    vocab = ["cat", "dog", "car"]
+    tag_embs = np.eye(3, 4)
+    cat_img = np.array([0.9, 0.1, 0, 0])       # top-1 = cat
+    car_img = np.array([0.2, 0.5, 0.9, 0])     # top-1 = car, top-2 has dog
+    t1, tk, n = ev.hit_rates([cat_img, car_img], [{"cat"}, {"dog"}],
+                             tag_embs, vocab, k=2)
+    assert (t1, tk, n) == (1, 2, 2)            # dog only hits within top-2
+
+    class StubClip:
+        def embed_images(self, paths):
+            rng = np.random.default_rng(5)
+            v = rng.normal(size=(len(paths), 64))
+            return v / np.linalg.norm(v, axis=1, keepdims=True)
+        embed_texts = embed_images
+
+    results = ev.evaluate(StubClip(), ["cat.jpg", "dog.jpg", "mystery.jpg"])
+    assert results["n"] == 2 and results["skipped"] == 1
+    assert len([k for k in results if k not in ("n", "skipped")]) == 2
+
+
 def test_pca_2d():
     from export_web import pca_2d
     rng = np.random.default_rng(3)
