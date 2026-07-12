@@ -61,6 +61,95 @@ def test_feature_extractor():
     assert r["caption"] == templates.caption_for(r["tags"])
 
 
+def test_multi_label():
+    """labels.py: per-tag sigmoid vs neutral prompt — the label set is dynamic."""
+    import labels
+
+    vocab = ["cat", "dog", "car"]
+    tag_embs = np.array([[1, 0, 0, 0],     # "a photo of a cat"
+                         [0, 1, 0, 0],     # "a photo of a dog"
+                         [0, 0, 1, 0.0]])  # "a photo of a car"
+    neutral = np.array([0, 0, 0, 1.0])     # "a photo"
+
+    one_thing = np.array([0.9, 0, 0, 0.1])           # clearly a cat
+    got = labels.multi_label(one_thing, tag_embs, neutral, vocab)
+    assert list(got) == ["cat"] and got["cat"] > 0.99
+
+    two_things = np.array([0.6, 0.6, 0, 0.1])        # a cat AND a dog
+    got = labels.multi_label(two_things, tag_embs, neutral, vocab)
+    assert set(got) == {"cat", "dog"}                # dynamic: 2 labels, not k
+
+    probs = labels.label_probs(one_thing, tag_embs, neutral)
+    assert probs.shape == (3,) and probs[0] > 0.99 and probs[1] < 0.01
+
+
+class ScriptedClip:
+    """A fake encoder that returns fixed vectors per exact sentence."""
+    def __init__(self, image_vec, by_text, default):
+        self.image_vec, self.by_text, self.default = image_vec, by_text, default
+
+    def embed_texts(self, texts):
+        return np.stack([self.by_text.get(t, self.default) for t in texts])
+
+    def embed_images(self, paths):
+        return np.stack([self.image_vec for _ in paths])
+
+
+def test_agent_satisfied():
+    """agent.py: a good proposal passes the critic on round 1 and stops."""
+    import templates
+    from agent import EmbeddingAgent
+
+    image = np.array([1, 0, 0, 0.0])
+    clip = ScriptedClip(
+        image_vec=image,
+        by_text={
+            "a photo of a cat": np.array([0.995, 0, 0.1, 0]),  # matches image
+            "a photo": np.array([0.1, 0, 0.995, 0]),           # neutral, weak
+            "a photo of cat": image,                           # caption aligns
+        },
+        default=np.array([0, 1, 0, 0.0]),  # every other tag: orthogonal
+    )
+    record, verdict = EmbeddingAgent(clip=clip).run("cat.jpg")
+    assert verdict.satisfied
+    assert verdict.template == templates.TEMPLATE_POOL[0]  # stopped on round 1
+    assert list(record["labels"]) == ["cat"] and record["labels"]["cat"] > 0.99
+    assert record["caption"] == "a photo of cat"
+    assert record["fused_emb"].shape == (8,)  # [image ; text] in this 4-d fake
+
+
+def test_agent_unsatisfied():
+    """agent.py: when no template works, every round runs and nothing passes."""
+    from agent import EmbeddingAgent
+
+    # every sentence embeds orthogonal to the image: alignment 0, all gaps 0
+    clip = ScriptedClip(image_vec=np.array([1, 0, 0, 0.0]),
+                        by_text={}, default=np.array([0, 1, 0, 0.0]))
+    bot = EmbeddingAgent(clip=clip)
+    record, verdict = bot.run("mystery.jpg")
+    assert not verdict.satisfied          # caller must not publish this
+    assert verdict.aligned < 0.2
+    assert len(bot._prompt_embs) == len(bot.template_pool)  # all rounds tried
+
+
+def test_item_tower():
+    import item_tower
+
+    rng = np.random.default_rng(2)
+    emb = rng.normal(size=1024).astype(np.float32)
+    record = {"path": "x.jpg", "caption": "a photo of cat",
+              "labels": {"cat": 0.99, "pet": 0.7}, "fused_emb": emb}
+    path = os.path.join(tempfile.mkdtemp(), "items.sqlite")
+    con = item_tower.connect(path)
+    item_tower.add_item(con, record)
+    (item,) = item_tower.all_items(con)
+    assert item["labels"] == {"cat": 0.99, "pet": 0.7}
+    assert item["model"] and item["created_at"]
+    assert np.allclose(item["item_emb"], emb)
+    paths, matrix = item_tower.item_matrix(con)
+    assert paths == ["x.jpg"] and matrix.shape == (1, 1024)
+
+
 def test_pca_2d():
     from export_web import pca_2d
     rng = np.random.default_rng(3)
