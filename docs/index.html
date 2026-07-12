@@ -48,9 +48,8 @@
     <p class="lede">
       CLIP maps <strong>images</strong> and <strong>sentences</strong> into the same
       512-dimensional space, so “how similar are this photo and this phrase?” is a single
-      dot product. This page walks the whole pipeline — embeddings, zero-shot tags,
-      dynamic multi-label classification, a self-critiquing agent — and every demo runs
-      <strong>live in your browser</strong>. Nothing you type or upload leaves your machine.
+      dot product. Every demo below runs <strong>live in your browser</strong> — nothing
+      you type or upload leaves your machine.
     </p>
     <div class="cta-row">
       <a class="btn primary" href="#search">Try the search</a>
@@ -65,26 +64,30 @@
     <p class="eyebrow">01 · The idea</p>
     <h2>One space, two encoders — trained so the diagonal lights up</h2>
     <p class="sub">
-      CLIP was trained contrastively on 400&nbsp;million (image, caption) pairs: pull each image
-      toward its own caption, push it away from every other. Below is that idea, live — each of the
-      14 gallery images scored against each of the 14 stored captions using the <em>exact vectors in
-      the database</em> (no model needed: the embeddings were computed at ingest time). Darker&nbsp;=
-      more similar. The bright diagonal is the training objective, visible.
+      Every gallery image, scored against every stored caption — straight from the database.
+      Darker&nbsp;= more similar. The bright diagonal <em>is</em> the training objective.
     </p>
+    <details class="more"><summary>How this works</summary>
+      <div class="body">CLIP was trained contrastively on 400&nbsp;million (image, caption) pairs:
+      pull each image toward its own caption, push it away from every other. This matrix needs no
+      model download — the vectors were computed at ingest time and shipped with the page, so each
+      cell is just one dot product between stored numbers.</div>
+    </details>
     <div class="card">
       <div class="matrix-wrap">
         <div class="matrix-grid" id="matrix" role="grid" aria-label="Image by caption similarity matrix"></div>
         <div class="matrix-side">
           <div class="matrix-readout" id="matrixReadout">
-            <span class="pair">Hover or tap any cell — rows are images, columns are their captions.
-            Every cell is one dot product: <code>image_emb · text_emb</code>.</span>
+            <span class="pair">Hover or tap any cell — rows are images, columns are their captions.</span>
           </div>
           <div class="matrix-legend">
             <span>less similar</span><span class="ramp" aria-hidden="true"></span><span>more similar</span>
           </div>
-          <p class="hint">Raw CLIP cosines are small numbers (matches land around 0.2–0.35) —
-          that is why the model ships a learned temperature of ~100 to sharpen them before any
-          softmax. Section 06 uses it.</p>
+          <details class="more"><summary>Why are the scores so small?</summary>
+            <div class="body">Raw CLIP cosines live in a narrow band — matching pairs land around
+            0.2–0.35. That is why the model ships a learned temperature of ~100 to sharpen them
+            before any softmax; the Lab’s multi-label meters use it.</div>
+          </details>
         </div>
       </div>
     </div>
@@ -113,9 +116,13 @@
   <section id="gallery-sec">
     <p class="eyebrow">03 · The database</p>
     <h2>Fourteen images, embedded and auto-tagged at ingest</h2>
-    <p class="sub">Every row in <code>gallery.sqlite</code> stores a path, a caption, meta tags, and
-    three float32 vectors (512 + 512 + 1024). Click any image to open it in
-    <a href="#lab">the Lab</a> and inspect its actual numbers.</p>
+    <p class="sub">Click any image to open it in <a href="#lab">the Lab</a> and inspect its numbers.</p>
+    <details class="more"><summary>What each row stores</summary>
+      <div class="body">Every row in <code>gallery.sqlite</code> keeps a path, a caption, meta tags,
+      and three float32 vectors: <code>image_emb</code> (512 — what it looks like),
+      <code>text_emb</code> (512 — what its caption means), and <code>fused_emb</code>
+      (1024 — both, concatenated and renormalized).</div>
+    </details>
     <div class="grid" id="gallery"></div>
   </section>
 
@@ -123,15 +130,19 @@
   <section id="map-sec">
     <p class="eyebrow">04 · The embedding space</p>
     <h2>All 512 dimensions, squashed onto your screen</h2>
-    <p class="sub">PCA projects each image embedding to two dimensions — images that <em>look</em>
-    alike land close together. Hover to see each image’s nearest neighbours in the full 512-d space
-    (thin lines); click to open it in the Lab. Upload something in the Lab and it appears here too.</p>
+    <p class="sub">Images that <em>look</em> alike land close together. Hover for an image’s true
+    neighbours; click to open it in the Lab.</p>
     <div class="card">
       <div class="map-wrap" id="mapWrap">
         <svg id="map" viewBox="0 0 100 62" role="img" aria-label="2-D PCA map of the image embeddings"></svg>
       </div>
-      <p class="hint">The two axes are the top principal components — directions of most variation,
-      not nameable concepts. Distances here approximate (poorly but usefully) distances in 512-d.</p>
+      <details class="more"><summary>What am I looking at?</summary>
+        <div class="body">PCA squashes each 512-d embedding onto the two directions of most
+        variation — the axes are not nameable concepts, and distances here only approximate
+        distances in 512-d. The hover lines show each image’s 3 nearest neighbours in the
+        <em>full</em> space, so you can see what the flattening distorts. Upload an image in the
+        Lab and it lands on this map too.</div>
+      </details>
     </div>
   </section>
 
@@ -139,9 +150,7 @@
   <section id="search">
     <p class="eyebrow">05 · Search</p>
     <h2>Type a sentence, rank the database</h2>
-    <p class="sub">Your query goes through the <em>text</em> encoder; every stored vector is compared
-    with one dot product. Switch the mode to feel the difference between matching what images
-    <em>look like</em> and what they <em>mean</em>.</p>
+    <p class="sub">Your query becomes a vector; every stored image is one dot product away.</p>
     <div class="card">
       <input type="search" id="q" placeholder="Describe what you’re looking for… e.g. a fluffy animal" autocomplete="off" aria-label="Search query">
       <div class="row" id="examples"></div>
@@ -152,6 +161,7 @@
           <label><input type="radio" name="mode" value="text"><span>text</span></label>
         </div>
         <span class="mode-note" id="modeNote">average of visual + semantic similarity — one vector, both signals</span>
+        <button class="chip math-toggle" type="button" aria-pressed="false">show the math</button>
       </div>
       <p class="formula">score(item) = query_emb · item vector&ensp;·&ensp;under each result: <b>looks</b> = q·image_emb, <b>means</b> = q·text_emb — fused is exactly their average</p>
       <p class="status" id="searchStatus">The CLIP text encoder loads on your first search (~65&nbsp;MB, cached after that).</p>
@@ -164,9 +174,7 @@
   <section id="lab">
     <p class="eyebrow">06 · The Lab</p>
     <h2>Pick an image. Watch it become data.</h2>
-    <p class="sub">Choose a gallery image or upload your own, then explore its full record:
-    multi-class tags vs a <em>dynamic</em> multi-label set (drag the threshold!), the embedding
-    agent auditing its own work, and the raw vectors that end up in the database.</p>
+    <p class="sub">Choose a gallery image or upload your own — then watch it become data.</p>
     <div class="card">
       <div class="lab-pickers" id="labPickers">
         <label class="drop" id="drop">
@@ -206,10 +214,15 @@
 
       <div class="agent-panel hidden" id="agentPanel">
         <h3>The embedding agent: propose ⇄ critique</h3>
-        <p class="h-sub" style="color:var(--muted);font-size:0.78rem">Each round drafts labels + a caption
-        through one prompt template, then a critic checks the work: does the caption’s embedding point back
-        at the image (<em>aligned</em> ≥ 0.20)? Are the labels sure of themselves (<em>confident</em> ≥ 0.60)?
-        Only a record that passes gets published (<code>agent.py</code> · <code>item_tower.py</code>).</p>
+        <p class="h-sub" style="color:var(--muted);font-size:0.78rem">A proposer drafts labels through
+        one prompt template; a critic checks the work; only a passing record is published.</p>
+        <details class="more"><summary>What the critic checks</summary>
+          <div class="body">Two dot products a human reviewer would approve of:
+          <em>aligned</em> — does the caption’s embedding point back at the image? (≥ 0.20) — and
+          <em>confident</em> — are the accepted labels sure of themselves, on average? (≥ 0.60).
+          Fail with every template in the pool and the best draft stays unpublished
+          (<code>agent.py</code> · <code>item_tower.py</code>).</div>
+        </details>
         <button class="btn primary" id="runAgent" type="button">Run the agent on this image</button>
         <div id="rounds"></div>
         <div id="verdict" class="verdict"></div>
@@ -222,15 +235,23 @@
   <section id="recommend">
     <p class="eyebrow">07 · Recommend</p>
     <h2>Tap what you like. The two towers do the rest.</h2>
-    <p class="sub">A two-tower recommender scores (user, item) pairs with one dot product. The
-    <strong>item tower</strong> is already finished — it’s the embeddings this page loaded — so the
-    only job left is the <strong>user tower</strong>: turn a user into one vector in the same space.
-    The simplest honest version is the mean of their liked items’ vectors, renormalized
-    (<code>user_tower.py</code>). No model runs here — this is exactly what serving looks like.</p>
+    <p class="sub">Tap a few hearts. Recommendations rank instantly — no model, just dot products
+    against embeddings computed offline.</p>
+    <details class="more"><summary>How two towers work</summary>
+      <div class="body">A two-tower recommender scores (user, item) pairs with one dot product
+      between two encoders that share a space. The <strong>item tower</strong> is already finished —
+      it’s the embeddings this page loaded. The <strong>user tower</strong>’s only job is to turn a
+      user into one vector in that same space, and the simplest honest version is the renormalized
+      mean of their liked items’ vectors (<code>user_tower.py</code>). Swap in a trained user model
+      later; nothing else changes.</div>
+    </details>
     <div class="card">
-      <div class="lab-pickers" id="likePickers" aria-label="Tap images to like them"></div>
+      <div class="row">
+        <div class="lab-pickers" id="likePickers" aria-label="Tap images to like them"></div>
+        <button class="chip math-toggle" type="button" aria-pressed="false">show the math</button>
+      </div>
       <p class="formula">user_vec = unit( mean( [image ; text]/√2 of your likes ) )&ensp;·&ensp;score(item) = item_emb · user_vec = <b>looks + means</b></p>
-      <div id="userVec"></div>
+      <div id="userVec" class="math-only"></div>
       <p class="status" id="recStatus">Tap two or three images you like — recommendations appear instantly.</p>
       <div id="recResults" aria-live="polite"></div>
       <p class="hint" id="recExplain"></p>

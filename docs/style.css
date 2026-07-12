@@ -237,6 +237,28 @@ input[type="search"]:focus { border-color: var(--accent); outline: none; }
 .bar-fill { height: 100%; background: var(--accent); border-radius: 0 4px 4px 0; transition: width 320ms ease; }
 .busy { opacity: 0.45; transition: opacity 150ms ease; }   /* hold previous render on refetch */
 
+/* details on demand: one short sentence on the surface, the rest one tap away */
+details.more { margin: 4px 0 0; }
+details.more summary {
+  cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 7px;
+  font-size: 0.8rem; color: var(--accent-ink); width: fit-content;
+  padding: 3px 12px; border: 1px solid var(--hairline); border-radius: 999px;
+  background: var(--surface); user-select: none;
+}
+details.more summary::-webkit-details-marker { display: none; }
+details.more summary::before { content: '+'; font-weight: 700; transition: transform 160ms ease; }
+details.more[open] summary::before { transform: rotate(45deg); }
+details.more summary:hover { border-color: var(--accent); }
+details.more .body {
+  color: var(--ink-2); font-size: 0.88rem; max-width: 66ch;
+  padding: 10px 2px 2px; line-height: 1.6;
+}
+
+/* "show the math": formulas, component meters and raw vectors, on demand */
+.card .formula, .card .math-only, .card:not(.show-math) .parts { display: none; }
+.card.show-math .formula { display: block; }
+.card.show-math .math-only { display: block; }
+
 /* one-line live formulas: the math each demo is running, verbatim */
 .formula {
   font: 0.78rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
