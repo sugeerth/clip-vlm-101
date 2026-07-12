@@ -142,9 +142,11 @@ Five standalone lessons build on the stored vectors — every one runs
 
 The browser demo mirrors the same pipeline in `docs/js/` with **matching
 module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
-`rank.js` ↔ `tagger.py`+`fusion.py`+`search.py`, `viz.js` ↔ `export_web.py`
-(the 2-D embedding map), and `app.js` wires them to the page. Read a Python
-file, then its twin — same pipeline, two languages.
+`rank.js` ↔ `tagger.py`+`fusion.py`+`search.py`, `labels.js` ↔ `labels.py`,
+`agent.js` ↔ `agent.py`, `recsys.js` ↔ `user_tower.py`; `viz.js`, `motion.js`,
+and `tour.js` are page-only (the matrix, map and strips, the animation
+helpers, the guided tour), and `app.js` wires everything together. Read a
+Python file, then its twin — same pipeline, two languages.
 
 ## Why concatenate embeddings?
 

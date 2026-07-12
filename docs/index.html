@@ -86,7 +86,9 @@
           <details class="more"><summary>Why are the scores so small?</summary>
             <div class="body">Raw CLIP cosines live in a narrow band — matching pairs land around
             0.2–0.35. That is why the model ships a learned temperature of ~100 to sharpen them
-            before any softmax; the Lab’s multi-label meters use it.</div>
+            before any softmax; the Lab’s multi-label meters use it, and
+            <a href="https://github.com/sugeerth/clip-vlm-101/blob/main/temperature.py"><code>temperature.py</code></a>
+            walks through the math on this very data.</div>
           </details>
           <details class="more" id="matrixTable"><summary>View as a table</summary>
             <div class="body table-scroll"></div>
@@ -311,6 +313,12 @@
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/eval.py"><code>eval.py</code></a></td><td>the benchmark: top-1/top-5 hit rates, single template vs ensemble</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/search.py"><code>search.py</code></a></td><td>text / image / fused retrieval with dot products</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/export_web.py"><code>export_web.py</code></a></td><td>dump the SQLite gallery to the <code>db.json</code> this page uses</td></tr>
+        <tr><th>…five standalone lessons</th><th>every one runs on committed data — no model, just numpy</th></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/temperature.py"><code>temperature.py</code></a></td><td>softmax + CLIP's learned logit scale: scores → probabilities</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/similarity.py"><code>similarity.py</code></a></td><td>the N×N image matrix + the modality gap (why scales don't mix)</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/retrieval_eval.py"><code>retrieval_eval.py</code></a></td><td>retrieval evaluation: leave-one-out precision@k and MRR</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/arithmetic.py"><code>arithmetic.py</code></a></td><td>vector algebra: cat + dog − apple, centroids, renormalize</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/quantize.py"><code>quantize.py</code></a></td><td>int8 quantization: 4× smaller, measure the damage</td></tr>
         <tr><th>…and its browser twin</th><th>same pipeline, in JavaScript</th></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/templates.js"><code>js/templates.js</code></a></td><td>mirror of <code>templates.py</code> — templates, vocabulary, agent pool</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/clip.js"><code>js/clip.js</code></a></td><td>mirror of <code>embedder.py</code> — the same model via transformers.js</td></tr>
