@@ -52,6 +52,34 @@ export function markUpload(svg, xy) {
   svg.append(g);
 }
 
+// All-pairs image·image similarity as a clickable grid — similarity.py's
+// twin: one dot product per cell, darker = more similar.
+export function drawHeatmap(canvas, items, onPick) {
+  const embs = items.map(it => it.image_emb);
+  const n = items.length, cell = 24;
+  const M = embs.map(a => embs.map(b => dot(a, b)));
+  let lo = Infinity, hi = -Infinity;
+  for (const row of M) for (const v of row) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const MID = dark ? [26, 26, 25] : [252, 252, 251];
+  const HOT = dark ? [57, 135, 229] : [42, 120, 214];
+  const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+  canvas.width = canvas.height = n * cell;
+  const ctx = canvas.getContext('2d');
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    const t = (M[i][j] - lo) / (hi - lo || 1);
+    const c = mix(MID, HOT, t);
+    ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+    ctx.fillRect(j * cell, i * cell, cell - 1, cell - 1);
+  }
+  canvas.addEventListener('click', e => {
+    const r = canvas.getBoundingClientRect();
+    const j = Math.floor((e.clientX - r.left) / r.width * n);
+    const i = Math.floor((e.clientY - r.top) / r.height * n);
+    if (i >= 0 && i < n && j >= 0 && j < n) onPick(items[i], items[j], M[i][j]);
+  });
+}
+
 // A labeled fingerprint strip: label + <canvas>, one pixel column per value.
 export function stripRow(label, vec) {
   const row = document.createElement('div');

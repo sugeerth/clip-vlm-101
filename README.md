@@ -100,6 +100,7 @@ Suggested reading order:
 | `ingest.py` | ~60 | *composition*: batch `features.extract_batch` over files → store |
 | `search.py` | ~85 | text / image / fused retrieval with dot products |
 | `temperature.py` | ~50 | softmax + CLIP's learned logit scale: scores → probabilities |
+| `similarity.py` | ~90 | the N×N matrix + the modality gap (why scales don't mix) |
 | `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 The browser demo mirrors the same pipeline in `docs/js/` with **matching

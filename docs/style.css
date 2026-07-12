@@ -76,6 +76,9 @@ input[type="search"] {
 .result .bar-track { max-width: 420px; margin-top: 4px; }
 .result .parts { font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 3px; }
 
+/* all-pairs similarity heatmap */
+.heat { width: min(100%, 340px); display: block; image-rendering: pixelated; cursor: crosshair; border-radius: 6px; }
+
 /* upload */
 .drop {
   border: 2px dashed var(--hairline); border-radius: 10px; padding: 22px;

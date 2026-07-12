@@ -109,6 +109,20 @@ def test_feature_extractor():
     assert r["caption"] == templates.caption_for(r["tags"])
 
 
+def test_similarity():
+    from similarity import matrix, modality_gap
+    rng = np.random.default_rng(7)
+    V = rng.normal(size=(5, 8))
+    V /= np.linalg.norm(V, axis=1, keepdims=True)
+    M = matrix(V)
+    assert M.shape == (5, 5)
+    assert np.allclose(M, M.T) and np.allclose(np.diag(M), 1.0)
+    # the modality-gap ordering holds on the committed real gallery
+    gap = modality_gap(db.load_json_gallery())
+    assert gap["image · OWN caption"] + 0.1 < gap["image · other images"]
+    assert gap["image · other captions"] < gap["image · OWN caption"]
+
+
 def test_softmax():
     from temperature import softmax
     scores = [0.3, 0.2, 0.1]

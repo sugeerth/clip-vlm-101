@@ -62,6 +62,15 @@
     <div id="mapDetail"></div>
   </div>
 
+  <p class="sub">Or compare <strong>every pair at once</strong>: one dot product per cell, darker = more
+  similar (<code>similarity.py</code> prints this same matrix in ASCII, plus the <em>modality gap</em>).
+  <strong>Click a cell</strong> to see which pair it is. Notice the blocks: animals with animals,
+  landmarks with landmarks.</p>
+  <div class="card">
+    <canvas id="heat" class="heat" aria-label="all-pairs image similarity heatmap"></canvas>
+    <p class="status" id="heatDetail">Click any cell — the diagonal is every image compared with itself.</p>
+  </div>
+
   <h2>4 · Search it</h2>
   <div class="card">
     <input type="search" id="q" placeholder="Describe what you're looking for… e.g. a fluffy animal" autocomplete="off">

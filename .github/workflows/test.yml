@@ -16,3 +16,6 @@ jobs:
       - run: pip install numpy
       - run: python test_smoke.py
       - run: node docs/js/test_rank.mjs  # the JS math must mirror the Python
+      # the model-free CLI demos must keep running on the committed gallery
+      - run: python temperature.py
+      - run: python similarity.py --json docs/db.json

@@ -4,7 +4,7 @@
 import { VOCAB, tagPrompts, captionFor } from './templates.js';
 import { dot, rank, topTags, fuse, softmax } from './rank.js';
 import { getTextEncoder, getImageEncoder } from './clip.js';
-import { drawMap, markUpload, project, stripRow } from './viz.js';
+import { drawMap, drawHeatmap, markUpload, project, stripRow } from './viz.js';
 
 const $ = id => document.getElementById(id);
 const EXAMPLES = ['a fluffy animal', 'famous landmark in europe',
@@ -41,6 +41,14 @@ if (DB.pca) drawMap($('map'), DB.items, item => {
   $('mapDetail').replaceChildren(who,
     stripRow('image_emb', item.image_emb),
     stripRow('text_emb', item.text_emb));
+});
+
+// ------------------------------------------------------ all-pairs heatmap --
+// One dot product per cell (similarity.py's twin); click shows the pair.
+if (DB.items.length) drawHeatmap($('heat'), DB.items, (a, b, s) => {
+  $('heatDetail').textContent = a === b
+    ? `${a.caption} · itself = ${s.toFixed(3)} — a unit vector times itself is 1`
+    : `${a.caption}  ·  ${b.caption}  =  ${s.toFixed(3)}`;
 });
 
 // ------------------------------------------------------------- shared UI --
