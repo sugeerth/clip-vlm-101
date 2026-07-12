@@ -1,6 +1,9 @@
 # CLIP VLM 101 — vision-language embeddings, from zero to search
 
-**Live demo (runs entirely in your browser):** https://sugeerth.github.io/clip-vlm-101/
+**Live demo (runs entirely in your browser):**
+https://sugeerth.github.io/clip-vlm-101/ — CLIP·search: one box, real
+inference, results. The full explorable walkthrough lives at
+[/explore.html](https://sugeerth.github.io/clip-vlm-101/explore.html).
 
 A deliberately tiny, readable pipeline that shows how a CLIP-style
 vision-language model turns **images + prompt templates** into **embeddings**,
@@ -131,7 +134,7 @@ Suggested reading order:
 
 Five standalone lessons build on the stored vectors — every one runs
 **without the model** via `--json docs/db.json` (real committed embeddings),
-and every one also runs **live on the [demo page](https://sugeerth.github.io/clip-vlm-101/#lessons)**,
+and every one also runs **live on the [explorable page](https://sugeerth.github.io/clip-vlm-101/explore.html#lessons)**,
 where `docs/js/lessons.js` reproduces the same numbers in JavaScript (CI
 holds both languages to it):
 
