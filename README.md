@@ -4,10 +4,13 @@
 
 A deliberately tiny, readable pipeline that shows how a CLIP-style
 vision-language model turns **images + prompt templates** into **embeddings**,
-stores them in a **database**, and answers **searches**. Nine tiny pipeline
-files — one concept each — plus a sample downloader and a smoke test.
-Standard-library SQLite, no frameworks. Read it top to bottom in 15 minutes,
-then swap in your own images.
+stores them in a **database**, and answers **searches** — then takes it one
+step further: **dynamic multi-label meta tags**, a **self-critiquing embedding
+agent** that only publishes features it can defend, and an **item tower**
+ready for two-tower recommendation. Twelve tiny pipeline files — one concept
+each — plus a sample downloader and a smoke test. Standard-library SQLite,
+no frameworks. Read it top to bottom in 20 minutes, then swap in your own
+images.
 
 ## The whole idea in one picture
 
@@ -26,6 +29,20 @@ then swap in your own images.
  search: "a fluffy animal" ──► text encoder ──► dot products ──► top-k results
 ```
 
+And the recommendation-ready extension on top of the same vectors:
+
+```
+ image_emb  ×  "a photo of a {tag}" vs "a photo"   per-tag sigmoid (labels.py)
+      └──► DYNAMIC multi-label set {cat: 0.99, pet: 0.87}  — sized by the image
+                          │
+        agent loop (agent.py): PROPOSE draft ──► CRITIC checks it
+                          │        ▲    aligned? confident?│
+                          │        └──── no: next template ┘ yes ──► publish
+                          │
+        item_tower.py: items.sqlite — verified item embeddings, OFFLINE,
+        the item half of a two-tower recommender (user tower comes later)
+```
+
 Both encoders project into the **same** vector space, so an image of a cat and
 the sentence "a photo of a cat" land close together. Everything here — tagging,
 captioning, search — is just cosine similarity between unit vectors, which is a
@@ -40,6 +57,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python ingest.py images/*.jpg     # embed + auto-tag + store in SQLite
 .venv/bin/python search.py "a fluffy animal"
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
+.venv/bin/python item_tower.py images/*.jpg  # agent-verified item embeddings
 ```
 
 First run downloads the CLIP model (~600 MB). Device is auto-detected:
@@ -91,13 +109,16 @@ Suggested reading order:
 
 | file | lines | the one concept it teaches |
 |---|---|---|
-| `templates.py` | ~45 | prompt templates: sentences with holes, filled per tag |
+| `templates.py` | ~60 | prompt templates: sentences with holes, filled per tag |
 | `embedder.py` | ~55 | CLIP → unit-length 512-d vectors for images AND text |
 | `tagger.py` | ~25 | zero-shot meta tags = dot products + argsort, no training |
+| `labels.py` | ~55 | **multi-label**: per-tag sigmoid vs a neutral prompt → dynamic label sets |
 | `fusion.py` | ~30 | the concatenation: `[image ; text] / √2`, and why it works |
 | `features.py` | ~115 | **the one-call API**: image-only `embed()`, batch tags, full records |
+| `agent.py` | ~130 | **the agent**: propose ⇄ critique loop, publishes only when satisfied |
 | `db.py` | ~70 | vectors as float32 BLOBs in plain SQLite |
 | `ingest.py` | ~45 | *composition*: loop `features.extract` over files → store |
+| `item_tower.py` | ~120 | **two-tower recsys**: agent-verified item embeddings, offline |
 | `search.py` | ~70 | text / image / fused retrieval with dot products |
 | `export_web.py` | ~80 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
@@ -114,6 +135,78 @@ so a dot product against a duplicated query `[q ; q] / √2` equals the
 **average of the visual similarity and the semantic (tag/caption) similarity**.
 One vector, one dot product, both signals — no extra model, no re-ranking step.
 `search.py --mode image|text|fused` lets you compare all three behaviors.
+
+## Multi-class vs multi-label: dynamic meta tags
+
+`tagger.py` is multi-**class**: argsort the scores, keep the top k — every
+image gets exactly 5 tags whether it contains one thing or twelve.
+`labels.py` is multi-**label**: each tag answers its own yes/no question,
+so the label set is **dynamic**, sized by the image.
+
+The whole trick is one comparison per tag. For "cat", CLIP scores which
+sentence describes the image better — `"a photo of a cat"` (tag prompt) or
+`"a photo"` (the same sentence with no tag). A two-way softmax over the two
+scores collapses to a sigmoid on their gap: an independent probability per
+tag. Keep everything above 0.5:
+
+```python
+import labels
+labels.multi_label(image_emb, tag_embs, neutral_emb, vocabulary)
+# {'cat': 0.99, 'pet': 0.87}          ← 2 labels for a simple image
+# {'pizza': 0.98, 'food': 0.91, ...}  ← more labels for a busier one
+```
+
+New labels are new words in `templates.TAG_VOCABULARY` — still no training.
+
+## The embedding agent: propose ⇄ critique, publish only when satisfied
+
+`agent.py` doesn't take the model's first answer on faith. It drafts
+features, **checks its own work**, and refuses to publish a record it
+can't defend:
+
+```
+round 1..n   PROPOSER  one prompt template → labels + caption + vectors
+each round   CRITIC    aligned?   caption embedding · image embedding ≥ 0.20
+                       confident? accepted labels average ≥ 0.60 probability
+the edge     satisfied → stop, publish   |   not → next round, next template
+```
+
+Each round is a different proposer — a different phrasing from
+`templates.TEMPLATE_POOL`. The critic's checks are two dot products a human
+reviewer would approve of: *does the caption actually point back at the
+image?* and *how sure are the labels?* If no proposal passes, the best
+draft is returned **unpublished** and the caller decides.
+
+This is the same shape as a LangGraph state graph — two nodes (propose,
+critique) and one conditional edge (satisfied?) — hand-rolled in ~40 lines
+of plain Python so every decision stays readable. Swap in LangGraph (or any
+agent framework) when you need checkpointing, retries, or parallel fan-out
+across many workers; the loop's logic transfers unchanged.
+
+## Two-tower recommendation: the item side, done offline
+
+A two-tower recommender scores `(user, item)` pairs with a single dot
+product between two encoders that share a vector space. `item_tower.py` is
+the **item tower**: it runs the agent over your catalog images **offline**,
+and stores only critic-approved records in `items.sqlite` — labels with
+probabilities, caption, model version, timestamp, and the 1024-d fused
+embedding as the item vector.
+
+```bash
+.venv/bin/python item_tower.py images/*.jpg   # build the tower, offline
+```
+
+```python
+import item_tower
+con = item_tower.connect()
+paths, matrix = item_tower.item_matrix(con)   # (n, 1024) — the whole tower
+scores = matrix @ user_vec                    # rank every item: one matmul
+```
+
+The user tower comes later (train it to map user history into the same
+space); serving then never touches an image model — just this table and one
+matrix multiply. That's the point of two towers: the expensive half is
+finished ahead of time.
 
 ## Custom prompt templates
 
