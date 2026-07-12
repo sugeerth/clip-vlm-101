@@ -34,6 +34,7 @@
       <a href="#lab">The Lab</a>
       <a href="#recommend">Recommend</a>
       <a href="#optimize">Optimize</a>
+      <a href="#lessons">Lessons</a>
     </div>
     <a class="gh" href="./">← Simple search</a>
     <a class="gh" href="https://github.com/sugeerth/clip-vlm-101">GitHub ↗</a>
@@ -291,8 +292,66 @@
   </section>
 
   <!-- ================================================================ code -->
+  <!-- ============================================================= lessons -->
+  <section id="lessons">
+    <p class="eyebrow">09 · The lessons, live</p>
+    <h2>Five one-file lessons, running on this very data</h2>
+    <p class="sub">Each is a tiny Python file that needs no model — and each runs here in
+    JavaScript on the same stored embeddings, reproducing the same numbers. Same math, two
+    languages; CI holds both to it.</p>
+    <div class="card">
+      <details class="more"><summary>temperature.py — turning scores into confidence</summary>
+        <div class="body">
+          <p class="sub">Raw CLIP cosines huddle in a narrow band. Drag the scale — CLIP
+          <em>learned</em> ≈100 during training — and watch confidence emerge from the mush.
+          Query: the stored caption of the cat photo, against every image.</p>
+          <label class="lsn-slider">scale
+            <input type="range" id="tempScale" min="1" max="200" value="1" step="1">
+            <b id="tempScaleVal">1</b></label>
+          <div id="tempMeters"></div>
+        </div>
+      </details>
+      <details class="more"><summary>similarity.py — the modality gap</summary>
+        <div class="body">
+          <p class="sub">Mean similarities across the whole gallery, computed live. An image is
+          ~2× more similar to <em>other images</em> than to its <em>own caption</em> — cross-modal
+          and within-modal scores live on different scales, so never mix them in one ranking.</p>
+          <div id="gapMeters"></div>
+        </div>
+      </details>
+      <details class="more"><summary>retrieval_eval.py — is retrieval any good? measure it</summary>
+        <div class="body">
+          <p class="sub">Leave-one-out over the 14 images: each takes a turn as the query, the rest
+          are ranked, and a hit is relevant if it shares a tag. Computed in your browser just now:</p>
+          <div class="table-scroll" id="evalTable"></div>
+          <p class="hint">The classic shape: precision falls as k grows. (Honest caveat, same as the
+          Python docstring: the tags came from the model being measured — real evals need
+          independent labels.)</p>
+        </div>
+      </details>
+      <details class="more"><summary>arithmetic.py — cat + dog − apple</summary>
+        <div class="body">
+          <p class="sub">Add and subtract images <em>in embedding space</em>, renormalize (the sum
+          of unit vectors is not unit — that's the one rule), then rank the gallery. Try any mix:</p>
+          <p class="lsn-arith">
+            <select id="arithA" aria-label="first operand"></select> <b>+</b>
+            <select id="arithB" aria-label="second operand"></select> <b>−</b>
+            <select id="arithC" aria-label="subtracted operand"></select>
+          </p>
+          <div id="arithOut"></div>
+        </div>
+      </details>
+      <details class="more"><summary>quantize.py — int8: 4× smaller, rankings barely notice</summary>
+        <div class="body">
+          <p class="sub" id="quantSummary"></p>
+          <p class="hint" id="quantDetail"></p>
+        </div>
+      </details>
+    </div>
+  </section>
+
   <section id="code">
-    <p class="eyebrow">09 · Read the code</p>
+    <p class="eyebrow">10 · Read the code</p>
     <h2>One concept per file, in two languages</h2>
     <p class="sub">The browser demo mirrors the Python pipeline with matching module names — read a
     Python file, then its twin. Same pipeline, same math.</p>
@@ -314,7 +373,7 @@
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/eval.py"><code>eval.py</code></a></td><td>the benchmark: top-1/top-5 hit rates, single template vs ensemble</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/search.py"><code>search.py</code></a></td><td>text / image / fused retrieval with dot products</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/export_web.py"><code>export_web.py</code></a></td><td>dump the SQLite gallery to the <code>db.json</code> this page uses</td></tr>
-        <tr><th>…five standalone lessons</th><th>every one runs on committed data — no model, just numpy</th></tr>
+        <tr><th>…five standalone lessons</th><th>no model, just numpy — and <a href="#lessons">running live above</a></th></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/temperature.py"><code>temperature.py</code></a></td><td>softmax + CLIP's learned logit scale: scores → probabilities</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/similarity.py"><code>similarity.py</code></a></td><td>the N×N image matrix + the modality gap (why scales don't mix)</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/retrieval_eval.py"><code>retrieval_eval.py</code></a></td><td>retrieval evaluation: leave-one-out precision@k and MRR</td></tr>
