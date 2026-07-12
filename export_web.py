@@ -11,6 +11,7 @@ page can draw the "embedding map" (nearby dots = similar images). The PCA
 mean + components ship in db.json, so the browser can project YOUR uploaded
 image onto the same map with two dot products.
 """
+import argparse
 import json
 import pathlib
 import shutil
@@ -38,9 +39,16 @@ def pca_2d(vectors):
 
 
 def main():
-    items = db.all_images(db.connect())
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--db", default=db.DB_PATH)
+    args = ap.parse_args()
+    if not pathlib.Path(args.db).exists():
+        raise SystemExit(f"no database at {args.db} — run ingest.py first")
+
+    items = db.all_images(db.connect(args.db))
     if not items:
-        raise SystemExit("gallery.sqlite is empty — run ingest.py first")
+        raise SystemExit(f"{args.db} is empty — run ingest.py first")
 
     # 2-D map coordinates for every image embedding, normalized to 0..1.
     coords, mean, components = pca_2d([it["image_emb"] for it in items])

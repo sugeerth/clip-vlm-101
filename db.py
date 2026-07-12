@@ -36,11 +36,13 @@ def connect(path: str = DB_PATH) -> sqlite3.Connection:
 
 
 def to_blob(vec) -> bytes:
-    return np.asarray(vec, dtype=np.float32).tobytes()
+    # "<f4" = little-endian float32, spelled out so a gallery.sqlite written
+    # on one machine decodes to the same floats on any other
+    return np.asarray(vec, dtype="<f4").tobytes()
 
 
 def from_blob(blob: bytes) -> np.ndarray:
-    return np.frombuffer(blob, dtype=np.float32)
+    return np.frombuffer(blob, dtype="<f4")  # read-only view over the bytes
 
 
 def add_image(con, path, caption, tags, image_emb, text_emb, fused_emb):

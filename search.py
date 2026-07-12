@@ -16,12 +16,12 @@ Usage:
     python3 search.py --image my_upload.png            # image-to-image search
 """
 import argparse
+import os
 
 import numpy as np
 
 import db
 import fusion
-from embedder import ClipEmbedder
 
 
 def score(item: dict, query: np.ndarray, mode: str) -> float:
@@ -35,7 +35,8 @@ def score(item: dict, query: np.ndarray, mode: str) -> float:
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("query", nargs="?", help="what you are looking for, in words")
     ap.add_argument("--image", help="search with an image instead of words")
     ap.add_argument("--mode", choices=["image", "text", "fused"], default="fused")
@@ -44,6 +45,14 @@ def main():
     args = ap.parse_args()
     if not args.query and not args.image:
         ap.error("give a text query or --image")
+    if args.k < 1:
+        ap.error("-k must be at least 1")
+    if args.image and not os.path.exists(args.image):
+        ap.error(f"query image not found: {args.image}")
+    if not os.path.exists(args.db):  # check BEFORE the 600 MB model load
+        raise SystemExit(f"no database at {args.db} — run ingest.py first")
+
+    from embedder import ClipEmbedder  # deferred: score() above needs only numpy
 
     clip = ClipEmbedder()
     items = db.all_images(db.connect(args.db))
