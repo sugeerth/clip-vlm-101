@@ -4,8 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CLIP VLM 101 — see what a vision-language model sees</title>
-<meta name="description" content="An explorable CLIP pipeline: image + text embeddings, a live contrastive similarity matrix, dynamic multi-label tags, a self-critiquing embedding agent — all running in your browser.">
+<meta name="description" content="An explorable CLIP pipeline: image + text embeddings, a live contrastive similarity matrix, dynamic multi-label tags, a self-critiquing embedding agent, and a two-tower recommender — all running in your browser.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="CLIP VLM 101 — see what a vision-language model sees">
+<meta property="og:description" content="A live, explorable CLIP pipeline: contrastive similarity matrix, embedding map, dynamic multi-label tags, a self-critiquing agent, and a two-tower recommender — all in your browser.">
+<meta property="og:url" content="https://sugeerth.github.io/clip-vlm-101/">
+<meta property="og:image" content="https://sugeerth.github.io/clip-vlm-101/images/004_cat.jpg">
+<meta name="twitter:card" content="summary">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
+<link rel="preload" href="db.json" as="fetch" crossorigin>
 <link rel="stylesheet" href="style.css">
 <script>
   // Apply the saved theme before first paint (no flash). The toggle in the
@@ -25,6 +32,7 @@
       <a href="#map">Map</a>
       <a href="#search">Search</a>
       <a href="#lab">The Lab</a>
+      <a href="#recommend">Recommend</a>
       <a href="#optimize">Optimize</a>
     </div>
     <a class="gh" href="https://github.com/sugeerth/clip-vlm-101">GitHub ↗</a>
@@ -209,9 +217,26 @@
     </div>
   </section>
 
+  <!-- =========================================================== recommend -->
+  <section id="recommend">
+    <p class="eyebrow">07 · Recommend</p>
+    <h2>Tap what you like. The two towers do the rest.</h2>
+    <p class="sub">A two-tower recommender scores (user, item) pairs with one dot product. The
+    <strong>item tower</strong> is already finished — it’s the embeddings this page loaded — so the
+    only job left is the <strong>user tower</strong>: turn a user into one vector in the same space.
+    The simplest honest version is the mean of their liked items’ vectors, renormalized
+    (<code>user_tower.py</code>). No model runs here — this is exactly what serving looks like.</p>
+    <div class="card">
+      <div class="lab-pickers" id="likePickers" aria-label="Tap images to like them"></div>
+      <p class="status" id="recStatus">Tap two or three images you like — recommendations appear instantly.</p>
+      <div id="recResults" aria-live="polite"></div>
+      <p class="hint" id="recExplain"></p>
+    </div>
+  </section>
+
   <!-- ============================================================ optimize -->
   <section id="optimize">
-    <p class="eyebrow">07 · Optimize it</p>
+    <p class="eyebrow">08 · Optimize it</p>
     <h2>Same model, same weights, better answers</h2>
     <p class="sub">Everything above uses one checkpoint. These four levers — all implemented in the
     Python pipeline — make it more accurate or much faster without training anything.</p>
@@ -237,7 +262,7 @@
 
   <!-- ================================================================ code -->
   <section id="code">
-    <p class="eyebrow">08 · Read the code</p>
+    <p class="eyebrow">09 · Read the code</p>
     <h2>One concept per file, in two languages</h2>
     <p class="sub">The browser demo mirrors the Python pipeline with matching module names — read a
     Python file, then its twin. Same pipeline, same math.</p>
@@ -255,6 +280,8 @@
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/db.py"><code>db.py</code></a></td><td>vectors as float32 BLOBs in plain SQLite</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/ingest.py"><code>ingest.py</code></a></td><td>composes the pipeline, in batches: embed → tag → caption → fuse → store</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/item_tower.py"><code>item_tower.py</code></a></td><td>two-tower recsys: agent-verified item embeddings, offline</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/user_tower.py"><code>user_tower.py</code></a></td><td>the user tower: mean-pooled likes → recommendations, one matmul</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/eval.py"><code>eval.py</code></a></td><td>the benchmark: top-1/top-5 hit rates, single template vs ensemble</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/search.py"><code>search.py</code></a></td><td>text / image / fused retrieval with dot products</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/export_web.py"><code>export_web.py</code></a></td><td>dump the SQLite gallery to the <code>db.json</code> this page uses</td></tr>
         <tr><th>…and its browser twin</th><th>same pipeline, in JavaScript</th></tr>
@@ -263,6 +290,7 @@
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/rank.js"><code>js/rank.js</code></a></td><td>mirror of <code>tagger.py</code> + <code>fusion.py</code> + <code>search.py</code></td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/labels.js"><code>js/labels.js</code></a></td><td>mirror of <code>labels.py</code> — the per-tag sigmoid</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/agent.js"><code>js/agent.js</code></a></td><td>mirror of <code>agent.py</code> — propose ⇄ critique in the browser</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/recsys.js"><code>js/recsys.js</code></a></td><td>mirror of <code>user_tower.py</code> — the recommender, no model needed</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/viz.js"><code>js/viz.js</code></a></td><td>the matrix, the map, and the fingerprint strips</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/app.js"><code>js/app.js</code></a></td><td>wires the modules to this page</td></tr>
       </table>

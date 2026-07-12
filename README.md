@@ -7,7 +7,8 @@ vision-language model turns **images + prompt templates** into **embeddings**,
 stores them in a **database**, and answers **searches** — then takes it one
 step further: **dynamic multi-label meta tags**, a **self-critiquing embedding
 agent** that only publishes features it can defend, and an **item tower**
-ready for two-tower recommendation. Twelve tiny pipeline files — one concept
+ready for two-tower recommendation, plus the serving half that turns likes
+into recommendations. Fourteen tiny pipeline files — one concept
 each — plus a sample downloader and a smoke test. Standard-library SQLite,
 no frameworks. Read it top to bottom in 20 minutes, then swap in your own
 images.
@@ -39,8 +40,9 @@ And the recommendation-ready extension on top of the same vectors:
                           │        ▲    aligned? confident?│
                           │        └──── no: next template ┘ yes ──► publish
                           │
-        item_tower.py: items.sqlite — verified item embeddings, OFFLINE,
-        the item half of a two-tower recommender (user tower comes later)
+        item_tower.py: items.sqlite — verified item embeddings, OFFLINE
+                          │
+        user_tower.py: likes ─► unit(mean) ─► user_vec · every item = recs
 ```
 
 Both encoders project into the **same** vector space, so an image of a cat and
@@ -58,6 +60,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python search.py "a fluffy animal"
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
 .venv/bin/python item_tower.py images/*.jpg  # agent-verified item embeddings
+.venv/bin/python user_tower.py images/cat.jpg images/dog.jpg  # likes → recs
+.venv/bin/python eval.py images/*.jpg        # measure: template vs ensemble
 ```
 
 First run downloads the CLIP model (~600 MB). Device is auto-detected:
@@ -120,6 +124,8 @@ Suggested reading order:
 | `db.py` | ~70 | vectors as float32 BLOBs in plain SQLite |
 | `ingest.py` | ~45 | *composition*: loop `features.extract` over files → store |
 | `item_tower.py` | ~120 | **two-tower recsys**: agent-verified item embeddings, offline |
+| `user_tower.py` | ~65 | **the serving half**: mean-pooled likes → recommendations, one matmul |
+| `eval.py` | ~100 | **the benchmark**: top-1/top-5 hit rates — prove an optimization helps |
 | `search.py` | ~70 | text / image / fused retrieval with dot products |
 | `export_web.py` | ~80 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
@@ -204,10 +210,14 @@ paths, matrix = item_tower.item_matrix(con)   # (n, 1024) — the whole tower
 scores = matrix @ user_vec                    # rank every item: one matmul
 ```
 
-The user tower comes later (train it to map user history into the same
-space); serving then never touches an image model — just this table and one
-matrix multiply. That's the point of two towers: the expensive half is
-finished ahead of time.
+`user_tower.py` is the serving half: the simplest honest user tower is the
+renormalized **mean of the liked items' vectors** (the same mean-pooling
+production systems bootstrap with), and recommending is `item_matrix @
+user_vec` — one matrix multiply, no image model at serving time. Swap the
+mean for a trained model later; nothing else changes. That's the point of
+two towers: the expensive half is finished ahead of time. Try it live in
+the demo's **Recommend** section — it runs on the stored vectors with no
+model download at all.
 
 ## Understanding CLIP — and squeezing more out of it
 

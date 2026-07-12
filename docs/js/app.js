@@ -6,6 +6,7 @@ import { VOCAB, tagPrompts, NEUTRAL_PROMPT } from './templates.js';
 import { dot, rank, topTags } from './rank.js';
 import { labelProbs } from './labels.js';
 import { runAgent, MIN_ALIGNED, MIN_CONFIDENT } from './agent.js';
+import { recommend } from './recsys.js';
 import { getTextEncoder, getImageEncoder } from './clip.js';
 import { drawMatrix, drawMap, markUpload, project, stripRow, redrawStrips } from './viz.js';
 
@@ -326,6 +327,44 @@ function renderLabels() {
     'the set resize. Multi-class always answers 5; multi-label answers what the image holds.';
 }
 $('thresh').addEventListener('input', renderLabels);
+
+// -------------------------------------------------------------- recommend --
+// The user tower, served live: likes → mean vector → one dot product per
+// item. No model, no download — this is what two-tower serving looks like.
+const likes = new Set();
+for (const item of DB.items) {
+  const b = Object.assign(document.createElement('button'),
+    { className: 'like', type: 'button', title: item.caption });
+  b.setAttribute('aria-pressed', 'false');
+  const img = Object.assign(document.createElement('img'),
+    { src: item.file, alt: item.caption, loading: 'lazy' });
+  const heart = Object.assign(document.createElement('span'),
+    { className: 'heart', textContent: '♥', ariaHidden: 'true' });
+  b.append(img, heart);
+  b.addEventListener('click', () => {
+    likes.has(item) ? likes.delete(item) : likes.add(item);
+    b.classList.toggle('on', likes.has(item));
+    b.setAttribute('aria-pressed', String(likes.has(item)));
+    renderRecs();
+  });
+  $('likePickers').append(b);
+}
+
+function renderRecs() {
+  if (!likes.size) {
+    $('recResults').replaceChildren();
+    $('recStatus').textContent = 'Tap two or three images you like — recommendations appear instantly.';
+    $('recExplain').textContent = '';
+    return;
+  }
+  renderResults($('recResults'), recommend(DB.items, [...likes], 5));
+  $('recStatus').textContent =
+    `user_vec = unit(mean of ${likes.size} liked item embedding${likes.size === 1 ? '' : 's'}) — ` +
+    'every score is one dot product, exactly like user_tower.py.';
+  $('recExplain').textContent =
+    'Add or remove likes and watch the ranking shift. Liked items are never recommended back. ' +
+    'Replace the mean with a trained user model later — nothing else changes.';
+}
 
 // ---- the agent -------------------------------------------------------------
 $('runAgent').addEventListener('click', async () => {
