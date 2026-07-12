@@ -53,6 +53,10 @@ body {
   font: 16px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
 }
+/* the theme toggle crossfades instead of snapping */
+body, header, .card, .pill, .chip, .seg, .drop, input[type="search"], .dims, code {
+  transition: background-color 220ms ease, border-color 220ms ease, color 220ms ease;
+}
 main { max-width: 1020px; margin: 0 auto; padding: 0 24px 96px; }
 a { color: var(--accent-ink); text-decoration-thickness: 1px; text-underline-offset: 2px; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
@@ -76,6 +80,7 @@ header {
   padding: 5px 10px; border-radius: 999px; white-space: nowrap;
 }
 .nav-links a:hover { background: var(--accent-wash); color: var(--accent-ink); }
+.nav-links a.here { background: var(--accent-wash); color: var(--accent-ink); font-weight: 600; }
 .nav .gh { font-size: 0.82rem; white-space: nowrap; }
 #themeToggle {
   font: inherit; font-size: 0.9rem; line-height: 1; cursor: pointer;
@@ -232,9 +237,25 @@ input[type="search"]:focus { border-color: var(--accent); outline: none; }
 .bar-fill { height: 100%; background: var(--accent); border-radius: 0 4px 4px 0; transition: width 320ms ease; }
 .busy { opacity: 0.45; transition: opacity 150ms ease; }   /* hold previous render on refetch */
 
+/* one-line live formulas: the math each demo is running, verbatim */
+.formula {
+  font: 0.78rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted); background: var(--page); border: 1px solid var(--hairline);
+  border-radius: 8px; padding: 7px 11px; margin: 12px 0 2px; overflow-x: auto; white-space: nowrap;
+}
+.formula b { color: var(--ink-2); font-weight: 600; }
+
 /* results: thin bars, rounded data-end, value printed beside (never inside) */
 .result { display: flex; gap: 14px; align-items: center; padding: 11px 0; border-top: 1px solid var(--hairline); }
 .result:first-child { border-top: none; }
+/* the looks/means breakdown riding under the main bar */
+.parts { display: flex; gap: 18px; margin-top: 6px; }
+.part { display: inline-flex; align-items: center; gap: 7px; transition: opacity 200ms ease; }
+.part.dim { opacity: 0.38; }
+.part .plbl { font-size: 0.72rem; color: var(--muted); width: 40px; text-align: right; }
+.part .pmeter { position: relative; width: 110px; height: 4px; background: var(--hairline); border-radius: 2px; overflow: hidden; display: inline-block; }
+.part .pfill { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 0 2px 2px 0; transition: width 320ms ease; }
+.part .pval { font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .result img { width: 92px; height: 69px; object-fit: cover; border-radius: 8px; flex: 0 0 auto; }
 .result .meta { flex: 1; min-width: 0; }
 .result .name { font-size: 0.9rem; margin-bottom: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
