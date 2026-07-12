@@ -175,6 +175,37 @@ def test_softmax():
     assert np.allclose(softmax([s + 7 for s in scores]), p)      # shift-invariant
 
 
+def test_hermes():
+    """hermes.py: decisive phrasing wins; indecisive queries get ensembled."""
+    import hermes
+
+    def item(v):
+        v = np.asarray(v, float)
+        return {"image_emb": v, "text_emb": v,
+                "fused_emb": np.concatenate([v, v]) / np.sqrt(2)}
+
+    items = [item([1, 0, 0, 0]), item([0, 1, 0, 0]), item([0, 0, 1, 0])]
+    decisive = np.array([0.9, 0.1, 0.0, 0.0])
+    uniform = np.array([1, 1, 1, 0]) / np.sqrt(3)
+
+    def encode_decisive(texts):
+        return np.stack([decisive if t.startswith("a photo of") else uniform
+                         for t in texts])
+
+    out = hermes.search("cat", encode_decisive, items, k=3)
+    assert out["satisfied"] and out["chose"] == "a photo of cat"
+    assert out["ranked"][0][0] is items[0]          # the decisive hit
+    assert len(out["rounds"]) == len(hermes.QUERY_TEMPLATES)
+    ms = [r["margin"] for r in out["rounds"]]
+    assert max(ms) >= hermes.MIN_MARGIN and ms[1] == max(ms)
+
+    out2 = hermes.search("cat", lambda ts: np.stack([uniform] * len(ts)), items, k=3)
+    assert not out2["satisfied"] and "ensemble" in out2["chose"]
+    assert len(out2["ranked"]) == 3                 # still answers
+
+    assert hermes.margin([0.9, 0.1, 0.0]) == 0.85   # the critic's number
+
+
 def test_load_json_gallery():
     items = db.load_json_gallery()
     assert len(items) == 14

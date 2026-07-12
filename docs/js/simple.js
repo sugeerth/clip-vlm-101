@@ -4,7 +4,8 @@
 // the model loads once on first use (with a quiet progress bar), queries
 // are embedded live as you type, and ranking is the same fused dot
 // product as search.py. The explorable at explore.html shows the insides.
-import { dot, rank } from './rank.js';
+import { dot } from './rank.js';
+import { hermesSearch, MIN_MARGIN } from './hermes.js';
 import { getTextEncoder, getImageEncoder } from './clip.js';
 
 const $ = id => document.getElementById(id);
@@ -54,6 +55,20 @@ function show(entries, note = '') {
   status(note);
 }
 
+// details on demand: one line on what Hermes did, the full trace one tap away
+function showTrace(out) {
+  $('trace').classList.remove('hidden');
+  $('traceSummary').textContent = out.satisfied
+    ? `hermes chose “${out.chose}”`
+    : 'hermes: no phrasing was decisive — answered with their ensemble';
+  $('traceBody').replaceChildren(...out.rounds.map(r =>
+    Object.assign(document.createElement('div'), {
+      className: 'round' + (r.margin >= MIN_MARGIN ? ' ok' : ''),
+      textContent: `${r.margin >= MIN_MARGIN ? '✓' : '·'} “${r.phrasing}” — margin ${r.margin >= 0 ? '+' : ''}${r.margin.toFixed(3)}`,
+    })));
+}
+const hideTrace = () => $('trace').classList.add('hidden');
+
 // model unavailable? still answer: plain keyword match over tags + captions
 function keywordResults(query) {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -73,6 +88,7 @@ async function search() {
   searching = true;
   try {
     if (imageQuery) {                         // image → image, like search.py --image
+      hideTrace();
       show(DB.items
         .map(item => ({ item, score: dot(item.image_emb, imageQuery.emb) }))
         .sort((a, b) => b.score - a.score).slice(0, TOP_K));
@@ -80,12 +96,16 @@ async function search() {
       if (!encodeText) status('loading the model — one time, cached after…');
       encodeText ??= await getTextEncoder(status, progress);
       hideBar();
-      const [q] = await encodeText([query]);
-      show(rank(DB.items, q, 'fused', TOP_K));
+      // Hermes works the query: propose phrasings, critique each by its
+      // retrieval margin, ensemble if none is decisive — then answer.
+      const out = await hermesSearch(query, encodeText, DB.items, TOP_K);
+      show(out.ranked);
+      showTrace(out);
     }
   } catch (err) {
     console.error(err);
     hideBar();
+    hideTrace();
     const hits = keywordResults(query);
     show(hits, hits.length ? 'model unavailable here — showing keyword matches'
                            : 'model unavailable and no keyword matches');
