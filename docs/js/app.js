@@ -11,7 +11,7 @@ import { flip, tweenNumber, motionOK } from './motion.js';
 import { startTour } from './tour.js';
 import { getTextEncoder, getImageEncoder } from './clip.js';
 import { drawMatrix, drawMap, markUpload, project, stripRow, redrawStrips } from './viz.js';
-import { modalityGap, evalRetrieval, combine, quantizeInt8, topNeighbors, centerRows, synthetic, buildIVF, searchIVF, recallAtK } from './lessons.js';
+import { modalityGap, evalRetrieval, combine, quantizeInt8, topNeighbors, centerRows, synthetic, buildIVF, searchIVF, recallAtK, hermesRefine } from './lessons.js';
 
 const $ = id => document.getElementById(id);
 const EXAMPLES = ['a fluffy animal', 'famous landmark in europe',
@@ -701,6 +701,22 @@ if (DB.items.length) {
   $('quantDetail').textContent = changed.length
     ? `Only ${changed.map(short).join(', ')} shuffles its neighbour list — ranking needs order, not precision.`
     : 'Every neighbour list survives — ranking needs order, not precision.';
+
+  // hermes.py — the evaluator-guarded searcher, on the real gallery
+  const hermesFused = DB.items.map(it => fuse(it.image_emb, it.text_emb));
+  DB.items.forEach((it, i) => $('hermesPick').append(Object.assign(
+    document.createElement('option'), { value: i, textContent: short(it) })));
+  const renderHermes = () => {
+    const qi = +$('hermesPick').value;
+    const q0 = fuse(DB.items[qi].image_emb, DB.items[qi].image_emb);
+    const { ranked, ledger } = hermesRefine(hermesFused, q0, { excludeIdx: qi });
+    $('hermesLedger').textContent = ledger.map(e =>
+      `pass ${e.pass}: evaluator ${e.eval.toFixed(3)}  — ${e.verdict}`).join('\n');
+    renderResults($('hermesOut'), ranked.map(({ i, s }) => ({ item: DB.items[i], score: s })));
+  };
+  $('hermesPick').addEventListener('change', renderHermes);
+  $('hermesPick').value = DB.items.findIndex(it => it.file.includes('pizza'));
+  renderHermes();
 
   // ann.py — IVF on synthetic clustered vectors, built lazily on first open
   let ann = null;

@@ -4,7 +4,8 @@
 // Run: node docs/js/test_lessons.mjs
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { modalityGap, evalRetrieval, combine, quantizeInt8, topNeighbors, centerRows, synthetic, buildIVF, searchIVF, recallAtK } from './lessons.js';
+import { modalityGap, evalRetrieval, combine, quantizeInt8, topNeighbors, centerRows, synthetic, buildIVF, searchIVF, recallAtK, hermesRefine } from './lessons.js';
+import { fuse } from './rank.js';
 import { softmax, dot } from './rank.js';
 
 const DB = JSON.parse(readFileSync(new URL('../db.json', import.meta.url)));
@@ -79,6 +80,23 @@ const run = probes => {
 const [r1, s1] = run(1), [r8, s8] = run(8);
 check(r1 > 0.7 && s1 < 0.05, `ann: probes 1 → recall ${r1.toFixed(2)} scanning ${(100 * s1).toFixed(1)}%`);
 check(r8 > 0.9 && r8 >= r1 && s8 > s1, 'ann: more probes → more truth, more work');
+
+// hermes.py mirror: the evaluator guard, pinned to the Python behaviour
+const fusedVecs = items.map(it => fuse(it.image_emb, it.text_emb));
+const fusedQ = i => fuse(items[i].image_emb, items[i].image_emb);
+const pizzaIdx = items.findIndex(it => it.file.includes('pizza'));
+const hp = hermesRefine(fusedVecs, fusedQ(pizzaIdx), { excludeIdx: pizzaIdx });
+check(hp.ledger.at(-1).verdict.startsWith('rejected'),
+  'hermes: pizza feedback drifts and the evaluator rejects it');
+const dogIdx = items.findIndex(it => it.file.includes('dog'));
+const hd = hermesRefine(fusedVecs, fusedQ(dogIdx), { excludeIdx: dogIdx });
+check(hd.ledger.at(-1).verdict === 'converged', 'hermes: dog query converges');
+check(items.every((_, i) => {
+  const r = hermesRefine(fusedVecs, fusedQ(i), { excludeIdx: i });
+  return r.ledger.every(e => e.verdict !== 'initial' ? true : true)
+    && r.ranked.reduce((s, { i: j }) => s + dot(fusedVecs[j], fusedQ(i)), 0) / r.ranked.length
+       >= r.ledger[0].eval - 1e-6;
+}), 'hermes: the guard never publishes below the initial evaluation');
 
 if (failed) { console.error('some lessons.js checks FAILED'); process.exit(1); }
 console.log('all lessons.js checks passed — JS reproduces the Python-pinned numbers');
