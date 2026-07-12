@@ -156,3 +156,33 @@ export function searchIVF(q, X, C, lists, k = 10, probes = 4) {
 
 export const recallAtK = (found, truth) =>
   found.filter(i => truth.includes(i)).length / truth.length;
+
+// ---- hermes.py mirrors: the evaluator-guarded refinement loop ------------
+
+// refine() twin. fusedVecs: one 1024-d fused vector per item (rank.js fuse);
+// q0: the fused query. The evaluator scores every pass by fidelity to q0 —
+// better is accepted, worse is rejected and the loop stops. Self-correction
+// is knowing when to stop.
+export function hermesRefine(fusedVecs, q0, { k = 5, passes = 4, alpha = 0.5, excludeIdx = -1 } = {}) {
+  const rank = q => fusedVecs.map((f, i) => ({ i, s: dot(f, q) }))
+    .filter(({ i }) => i !== excludeIdx)
+    .sort((a, b) => b.s - a.s).slice(0, k);
+  const fidelity = ranked =>
+    ranked.reduce((s, { i }) => s + dot(fusedVecs[i], q0), 0) / ranked.length;
+  const key = ranked => ranked.map(({ i }) => i).join();
+
+  let q = q0.slice();
+  let best = rank(q), bestEval = fidelity(best);
+  const ledger = [{ pass: 1, eval: bestEval, verdict: 'initial' }];
+  for (let p = 2; p <= passes; p++) {
+    const top = best.slice(0, 3).map(({ i }) => fusedVecs[i]);
+    const fb = top[0].map((_, d) => top.reduce((s, v) => s + v[d], 0) / top.length);
+    q = q.map((x, d) => (1 - alpha) * x + alpha * fb[d]);
+    const n = Math.hypot(...q); q = q.map(x => x / n);
+    const ranked = rank(q), ev = fidelity(ranked);
+    if (key(ranked) === key(best)) { ledger.push({ pass: p, eval: ev, verdict: 'converged' }); break; }
+    if (ev > bestEval) { best = ranked; bestEval = ev; ledger.push({ pass: p, eval: ev, verdict: 'accepted' }); }
+    else { ledger.push({ pass: p, eval: ev, verdict: 'rejected — stopping' }); break; }
+  }
+  return { ranked: best, ledger };
+}

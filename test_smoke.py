@@ -1,5 +1,6 @@
 """Fast sanity checks — no model download needed. Run: python3 test_smoke.py"""
 import os
+import pathlib
 import tempfile
 
 import numpy as np
@@ -204,6 +205,92 @@ def test_hermes():
     assert len(out2["ranked"]) == 3                 # still answers
 
     assert hermes.margin([0.9, 0.1, 0.0]) == 0.85   # the critic's number
+
+
+def test_hermes_refine():
+    """The evaluator guard: accepts gains, rejects drift, detects convergence."""
+    import fusion
+    import hermes
+
+    items = db.load_json_gallery()
+    # cat: feedback converges (same top-k) — the ledger says so
+    cat = next(it for it in items if "cat" in it["path"])
+    out = hermes.search_image(cat, items, k=5, passes=4)
+    assert out["ledger"][0]["verdict"] == "initial"
+    assert out["ledger"][-1]["verdict"] in ("converged", "rejected — stopping", "accepted")
+    assert len(out["ranked"]) == 5
+    assert all(it is not cat for it, _ in out["ranked"])  # self excluded
+
+    # pizza: the feedback pass drifts; the evaluator must REJECT it and
+    # keep the initial ranking (this is the whole point of the guard)
+    pizza = next(it for it in items if "pizza" in it["path"])
+    out2 = hermes.search_image(pizza, items, k=5, passes=4)
+    ledger = out2["ledger"]
+    assert ledger[-1]["verdict"].startswith("rejected")
+    assert ledger[-1]["eval"] < ledger[0]["eval"]  # it drifted, and was caught
+    # the published ranking is the PASS-1 ranking, not the drifted one
+    q0 = fusion.fused_query(np.asarray(pizza["image_emb"], dtype=np.float64))
+    initial, _ = hermes._rank_fused(items, q0, 5, exclude=pizza)
+    assert [it["path"] for it, _ in out2["ranked"]] == [it["path"] for it, _ in initial]
+
+    # guarded refine can never publish a ranking the evaluator scores below
+    # the initial one — on every gallery image
+    for q_item in items:
+        r = hermes.search_image(q_item, items, k=5, passes=4)
+        assert hermes.evaluate(r["ranked"],
+            fusion.fused_query(np.asarray(q_item["image_emb"], dtype=np.float64))) \
+            >= r["ledger"][0]["eval"] - 1e-6
+
+
+def test_crawler():
+    """crawler.py against a local stub of the Commons API — no real network."""
+    import http.server
+    import json as jsonlib
+    import threading
+
+    import crawler
+
+    JPEG = bytes.fromhex("ffd8ffe000104a46494600010100000100010000ffd9")
+
+    class Stub(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.startswith("/api"):
+                port = self.server.server_address[1]
+                body = jsonlib.dumps({"query": {"pages": {
+                    "1": {"title": "File:Red panda.jpg",
+                          "imageinfo": [{"thumburl": f"http://127.0.0.1:{port}/img/a.jpg",
+                                         "descriptionurl": "https://commons.example/A",
+                                         "extmetadata": {"Artist": {"value": "Ann"},
+                                                         "LicenseShortName": {"value": "CC BY-SA 4.0"}}}]},
+                    "2": {"title": "File:Red panda 2.jpg",
+                          "imageinfo": [{"thumburl": f"http://127.0.0.1:{port}/img/b.jpg",
+                                         "descriptionurl": "https://commons.example/B",
+                                         "extmetadata": {}}]},
+                }}}).encode()
+            else:
+                body = JPEG
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):  # keep the test output quiet
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Stub)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    api = f"http://127.0.0.1:{srv.server_address[1]}/api"
+    out = tempfile.mkdtemp()
+
+    new = crawler.crawl("red panda", n=2, out=out, api=api, pause=0)
+    assert len(new) == 2 and all(p.read_bytes() == JPEG for p in new)
+    manifest = jsonlib.loads((pathlib.Path(out) / crawler.MANIFEST).read_text())
+    assert len(manifest) == 2
+    assert manifest[0]["license"] == "CC BY-SA 4.0" and manifest[0]["author"] == "Ann"
+    assert manifest[0]["source"] == "https://commons.example/A"
+    # idempotent: a second crawl downloads nothing new
+    assert crawler.crawl("red panda", n=2, out=out, api=api, pause=0) == []
+    srv.shutdown()
 
 
 def test_load_json_gallery():

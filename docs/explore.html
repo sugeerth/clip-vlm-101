@@ -295,7 +295,7 @@
   <!-- ============================================================= lessons -->
   <section id="lessons">
     <p class="eyebrow">09 · The lessons, live</p>
-    <h2>Seven one-file lessons, running on this very data</h2>
+    <h2>Eight one-file lessons, running on this very data</h2>
     <p class="sub">Each is a tiny Python file that needs no model — and each runs here in
     JavaScript on the same stored embeddings, reproducing the same numbers. Same math, two
     languages; CI holds both to it.</p>
@@ -351,6 +351,17 @@
           <p class="hint" id="quantDetail"></p>
         </div>
       </details>
+      <details class="more" id="hermesDetails"><summary>hermes.py — the self-correcting searcher, live</summary>
+        <div class="body">
+          <p class="sub">The query is a draft. Hermes refines it in passes — blending it toward its
+          own top hits — but an <em>evaluator anchored to the original query</em> judges every
+          pass: better is accepted, worse is rejected and the loop stops. (Measured honestly:
+          unguarded feedback <em>drifts</em>; the guard never loses ground.) Watch it decide:</p>
+          <p class="lsn-arith">query image <select id="hermesPick" aria-label="query image"></select></p>
+          <div id="hermesLedger" class="dims"></div>
+          <div id="hermesOut"></div>
+        </div>
+      </details>
       <details class="more" id="annDetails"><summary>ann.py — search a sliver, keep most of the truth</summary>
         <div class="body">
           <p class="sub">Exact search is one dot product per stored vector — fine at 14, painful at
@@ -398,6 +409,8 @@
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/arithmetic.py"><code>arithmetic.py</code></a></td><td>vector algebra: cat + dog − apple, centroids, renormalize</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/quantize.py"><code>quantize.py</code></a></td><td>int8 quantization: 4× smaller, measure the damage</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/ann.py"><code>ann.py</code></a></td><td>IVF approximate search: scan a sliver, keep most of the truth</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/hermes.py"><code>hermes.py</code></a></td><td>the agentic searcher: propose ⇄ evaluate ⇄ refine, until convergence</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/crawler.py"><code>crawler.py</code></a></td><td>grow the gallery from Wikimedia Commons — with attribution receipts</td></tr>
         <tr><th>…and its browser twin</th><th>same pipeline, in JavaScript</th></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/templates.js"><code>js/templates.js</code></a></td><td>mirror of <code>templates.py</code> — templates, vocabulary, agent pool</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/clip.js"><code>js/clip.js</code></a></td><td>mirror of <code>embedder.py</code> — the same model via transformers.js</td></tr>

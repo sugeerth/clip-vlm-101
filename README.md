@@ -62,6 +62,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python ingest.py images/*.jpg     # embed + auto-tag + store in SQLite
 .venv/bin/python search.py "a fluffy animal"
 .venv/bin/python hermes.py "a fluffy animal"  # the agentic version, with a trace
+.venv/bin/python crawler.py "red panda" -n 6 # grow the gallery, with receipts
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
 .venv/bin/python item_tower.py images/*.jpg  # agent-verified item embeddings
 .venv/bin/python user_tower.py images/cat.jpg images/dog.jpg  # likes → recs
@@ -131,7 +132,8 @@ Suggested reading order:
 | `user_tower.py` | ~65 | **the serving half**: mean-pooled likes → recommendations, one matmul |
 | `eval.py` | ~100 | **the benchmark**: top-1/top-5 hit rates — prove an optimization helps |
 | `search.py` | ~90 | text / image / fused retrieval with dot products |
-| `hermes.py` | ~110 | **the agentic searcher**: propose phrasings ⇄ critique margins ⇄ refine |
+| `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
+| `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
 | `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 Five standalone lessons build on the stored vectors — every one runs
@@ -337,6 +339,7 @@ lesson runs on committed data — and CI re-runs all of them on every push:
 | `python3 quantize.py --json docs/db.json` | 4× smaller, **39/42** top-3 neighbor slots unchanged |
 | `python3 similarity.py --json docs/db.json --centered` | own-caption margin **+0.120 → +0.388** after centering |
 | `python3 ann.py` | probes 1: recall **0.75** scanning **1.8%**; probes 8: **0.94** at 12.8% |
+| `python3 hermes.py --image pizza --json docs/db.json` | the evaluator **rejects** the drifting pass and keeps the honest ranking |
 
 (The numbers are pinned to the committed sample gallery; re-exporting your
 own gallery changes them — that's the point.)
