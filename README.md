@@ -103,8 +103,9 @@ Suggested reading order:
 
 The browser demo mirrors the same pipeline in `docs/js/` with **matching
 module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
-`rank.js` ↔ `tagger.py`+`fusion.py`+`search.py`, and `app.js` wires them to
-the page. Read a Python file, then its twin — same pipeline, two languages.
+`rank.js` ↔ `tagger.py`+`fusion.py`+`search.py`, `viz.js` ↔ `export_web.py`
+(the 2-D embedding map), and `app.js` wires them to the page. Read a Python
+file, then its twin — same pipeline, two languages.
 
 ## Why concatenate embeddings?
 
@@ -143,8 +144,12 @@ are projected onto the same map live with two dot products.
 ## Tests
 
 ```bash
-.venv/bin/python test_smoke.py   # templates, fusion math, DB round-trip — no model needed
+.venv/bin/python test_smoke.py   # templates, tagging, fusion math, PCA, DB — needs only numpy
 ```
+
+The smoke test stubs the CLIP encoder, so it runs without torch/transformers
+installed (`pip install numpy` is enough) — that's also exactly what CI does
+on every push (`.github/workflows/test.yml`).
 
 ## Sample image credits
 

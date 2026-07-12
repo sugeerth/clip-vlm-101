@@ -69,6 +69,10 @@ def test_pca_2d():
     assert coords.shape == (10, 2) and mean.shape == (16,) and components.shape == (2, 16)
     # projecting a vector with mean+components reproduces its coordinate
     assert np.allclose((X[0] - mean) @ components.T, coords[0])
+    # a 1-image gallery still yields 2 components (second is zero-padded)
+    coords, mean, components = pca_2d(rng.normal(size=(1, 16)))
+    assert coords.shape == (1, 2) and components.shape == (2, 16)
+    assert np.allclose(coords, 0)
 
 
 def test_db_roundtrip():
@@ -81,6 +85,10 @@ def test_db_roundtrip():
     assert item["tags"] == ["cat"] and item["caption"] == "a photo of cat"
     assert np.allclose(item["image_emb"], a.astype(np.float32))
     assert item["fused_emb"].shape == (1024,)
+    # same path again = replace, not duplicate (path is UNIQUE)
+    db.add_image(con, "x.jpg", "a photo of dog", ["dog"], a, b, fusion.fuse(a, b))
+    (item,) = db.all_images(con)
+    assert item["caption"] == "a photo of dog"
 
 
 if __name__ == "__main__":

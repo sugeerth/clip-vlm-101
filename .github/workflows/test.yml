@@ -1,0 +1,17 @@
+# Smoke tests on every push/PR. Only numpy is installed — test_smoke.py
+# stubs the CLIP encoder, so the torch/transformers stack never loads.
+name: test
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy
+      - run: python test_smoke.py
