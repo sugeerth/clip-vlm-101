@@ -38,8 +38,19 @@ function show(entries, note = '') {
         { src: item.file, alt: item.caption, loading: 'lazy' }),
       Object.assign(document.createElement('figcaption'),
         { textContent: item.tags.slice(0, 3).join(' · ') }));
+    // details later: any result opens its full dissection in the Lab
+    const idx = DB.items.indexOf(item);
+    if (idx >= 0) {
+      fig.classList.add('linked');
+      fig.tabIndex = 0;
+      fig.title = 'see why this matched — open it in the Lab';
+      const openLab = () => { location.href = `explore.html?pick=${idx}#lab`; };
+      fig.addEventListener('click', openLab);
+      fig.addEventListener('keydown', e => { if (e.key === 'Enter') openLab(); });
+    }
     return fig;
   }));
+  $('detailsHint').classList.toggle('hidden', !entries.length);
   status(note);
 }
 

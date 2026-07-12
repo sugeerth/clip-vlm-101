@@ -117,3 +117,9 @@ body.dragging .pill { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(42
 
 footer { padding: 14px 20px 18px; text-align: center; font-size: 0.78rem; color: var(--muted); }
 .hidden { display: none !important; }
+
+/* results are doorways: click one to dissect it in the Lab */
+.rgrid figure.linked { cursor: pointer; transition: transform 140ms ease, box-shadow 140ms ease; }
+.rgrid figure.linked:hover, .rgrid figure.linked:focus-visible { transform: translateY(-2px); box-shadow: 0 8px 22px -10px rgba(0, 0, 0, 0.35); }
+.hint { font-size: 0.8rem; color: var(--muted, #898781); text-align: center; margin: 14px auto 0; max-width: 60ch; }
+.hint.hidden { display: none; }
