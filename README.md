@@ -63,6 +63,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python search.py "a fluffy animal"
 .venv/bin/python hermes.py "a fluffy animal"  # the agentic version, with a trace
 .venv/bin/python crawler.py "red panda" -n 6 # grow the gallery, with receipts
+.venv/bin/python spider.py https://example.com/gallery  # or crawl any site
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
 .venv/bin/python item_tower.py images/*.jpg  # agent-verified item embeddings
 .venv/bin/python user_tower.py images/cat.jpg images/dog.jpg  # likes → recs
@@ -134,6 +135,7 @@ Suggested reading order:
 | `search.py` | ~90 | text / image / fused retrieval with dot products |
 | `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
+| `spider.py` | ~170 | **the web crawler**: BFS any site for images — robots.txt, pacing, caps |
 | `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 Five standalone lessons build on the stored vectors — every one runs
@@ -262,6 +264,19 @@ on the READ path: your query is treated as a draft, not a command.
 The live search box at https://sugeerth.github.io/clip-vlm-101/ runs Hermes
 on every text query — the muted "🪽 hermes chose …" line under the results
 expands into the full trace of what it tried and why.
+
+## Two ways to grow the corpus
+
+- **Ask** (`crawler.py`): the Commons search API returns curated, freely
+  licensed images with attribution — every download gets a manifest receipt.
+- **Crawl** (`spider.py`): a real BFS web crawler for any site you point it
+  at. Politeness is enforced in code — robots.txt per host, one request per
+  second, same-domain scope, hard caps on pages and images — plus a quality
+  gate (icon-sized files skipped) and content-hash dedupe. Crawled pages
+  carry no license metadata, and the manifest says so: reuse is on you.
+
+Either way the output feeds the same pipeline: crawl → `ingest.py` →
+`export_web.py`, and the live search box now searches YOUR corpus.
 
 ## Understanding CLIP — and squeezing more out of it
 

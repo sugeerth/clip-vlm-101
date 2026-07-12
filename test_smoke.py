@@ -176,6 +176,58 @@ def test_softmax():
     assert np.allclose(softmax([s + 7 for s in scores]), p)      # shift-invariant
 
 
+def test_spider():
+    """spider.py: BFS a local fixture site — caps, robots, quality gate."""
+    import http.server
+    import json
+    import shutil
+    import threading
+
+    import spider
+
+    site = pathlib.Path(tempfile.mkdtemp())
+    out = pathlib.Path(tempfile.mkdtemp())
+    # two real photos + one icon-sized decoy + a robots-forbidden area
+    shutil.copy("images/cat.jpg", site / "cat.jpg")
+    shutil.copy("images/dog.jpg", site / "dog.jpg")
+    (site / "tiny.jpg").write_bytes(b"\xff\xd8" + b"0" * 100)     # icon-sized
+    (site / "robots.txt").write_text("User-agent: *\nDisallow: /private/\n")
+    private = site / "private"; private.mkdir()
+    shutil.copy("images/bear.jpg", private / "secret.jpg")
+    (site / "index.html").write_text(
+        '<img src="cat.jpg"><img src="tiny.jpg">'
+        '<a href="page2.html">next</a><a href="http://off-domain.example/x">off</a>'
+        '<a href="private/page3.html">private</a>')
+    (site / "page2.html").write_text('<img src="dog.jpg"><img src="cat.jpg">')
+    (private / "page3.html").write_text('<img src="secret.jpg">')
+
+    handler = lambda *a, **k: http.server.SimpleHTTPRequestHandler(
+        *a, directory=str(site), **k)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        saved = spider.crawl([f"{base}/index.html"], max_pages=10,
+                             max_images=10, out=str(out), delay=0)
+        names = {p.name.split("_")[0] for p in saved}
+        assert len(saved) == 2 and names == {"spider"}   # cat + dog, deduped
+        manifest = json.loads((out / spider.MANIFEST).read_text())
+        assert len(manifest) == 2
+        assert all(m["source"].startswith(base) and m["sha1"] for m in manifest)
+        assert not any("secret" in m["name"] for m in manifest)  # robots held
+        assert not any("tiny" in m["name"] for m in manifest)    # gate held
+        # re-crawl finds nothing new (same bytes -> same sha1)
+        again = spider.crawl([f"{base}/index.html"], max_pages=10,
+                             max_images=10, out=str(out), delay=0)
+        assert again == []
+        # caps are hard limits
+        capped = spider.crawl([f"{base}/index.html"], max_pages=10,
+                              max_images=1, out=str(tempfile.mkdtemp()), delay=0)
+        assert len(capped) == 1
+    finally:
+        srv.shutdown()
+
+
 def test_hermes():
     """hermes.py: decisive phrasing wins; indecisive queries get ensembled."""
     import hermes
