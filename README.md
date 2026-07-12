@@ -279,11 +279,14 @@ Either way the output feeds the same pipeline: crawl → `ingest.py` →
 `export_web.py`, and the live search box now searches YOUR corpus.
 
 And **every search crawls, live**: the search box on the demo runs a web
-phase after each text query — it asks Commons for fresh matches, embeds
-the thumbnails *in your browser* with the vision tower, and ranks them
-under the gallery results with license receipts (`js/crawler.js`; toggle
-with the 🌐 chip). The Python twin: `hermes.py "red panda" --crawl 6`
-fetches, embeds and includes fresh images in that same search.
+phase after each text query — it asks [Openverse](https://api.openverse.org)
+(the Creative-Commons image search; anonymous browser use is supported)
+with Wikimedia Commons `origin=*` as the fallback, embeds the thumbnails
+*in your browser* with the vision tower, and ranks them under the gallery
+results with license receipts (`js/crawler.js`; toggle with the 🌐 chip).
+If both providers fail, the page says exactly what each one answered —
+a silent web search is indistinguishable from a broken one. The Python
+twin: `hermes.py "red panda" --crawl 6`.
 
 ## Understanding CLIP — and squeezing more out of it
 

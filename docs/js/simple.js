@@ -143,15 +143,20 @@ async function webPhase(query) {
   grid.replaceChildren();
   try {
     const [q] = await encodeText([query]);
-    const recs = await discover(query, 6);
+    const { records: recs, tried } = await discover(query, 6);
     if (token !== webToken) return;
-    if (!recs.length) { head.textContent = '🌐 the web had nothing for this query'; return; }
+    if (!recs.length) {          // say exactly what happened — never vanish
+      head.textContent = '🌐 web search unavailable — ' + tried.map(t =>
+        t.ok ? `${t.provider}: 0 results` : `${t.provider}: ${t.error}`).join(' · ');
+      return;
+    }
+    const providerName = recs[0].provider;
     const encodeImage = await getImageEncoder(() => {}, progress);
     hideBar();
     const scored = [];
     for (let i = 0; i < recs.length; i++) {
       if (token !== webToken) return;
-      head.textContent = `🌐 from the web (commons) — embedding ${i + 1}/${recs.length} in your browser…`;
+      head.textContent = `🌐 from the web (${providerName}) — embedding ${i + 1}/${recs.length} in your browser…`;
       const rec = recs[i];
       try {
         if (!webCache.has(rec.thumb_url)) {
@@ -166,8 +171,8 @@ async function webPhase(query) {
     if (token !== webToken) return;
     scored.sort((a, b) => b.score - a.score);
     head.textContent = scored.length
-      ? `🌐 from the web — ${scored.length} Commons images, discovered, embedded and ranked just now, locally`
-      : '🌐 the web had nothing usable for this query';
+      ? `🌐 from the web (${providerName}) — ${scored.length} images discovered, embedded and ranked just now, locally`
+      : '🌐 found web results but none of their thumbnails could be fetched';
     grid.replaceChildren(...scored.map(({ rec, obj }, i) => {
       const fig = document.createElement('figure');
       fig.className = 'linked';
@@ -177,15 +182,16 @@ async function webPhase(query) {
       fig.append(
         Object.assign(document.createElement('img'), { src: obj, alt: rec.name }),
         Object.assign(document.createElement('figcaption'),
-          { textContent: `${rec.license || 'license: see source'} · commons ↗` }));
+          { textContent: `${rec.license || 'license: see source'} · ${rec.provider} ↗` }));
       const open = () => window.open(rec.source, '_blank', 'noopener');
       fig.addEventListener('click', open);
       fig.addEventListener('keydown', e => { if (e.key === 'Enter') open(); });
       return fig;
     }));
   } catch (err) {
-    console.error(err);              // offline / API down: vanish quietly
-    if (token === webToken) clearWeb();
+    console.error(err);
+    if (token === webToken)          // even unexpected failures stay visible
+      head.textContent = `🌐 web search failed: ${err?.message ?? err}`;
   }
 }
 
