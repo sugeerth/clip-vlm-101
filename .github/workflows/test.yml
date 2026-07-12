@@ -23,3 +23,5 @@ jobs:
       - run: python retrieval_eval.py --json docs/db.json
       - run: python arithmetic.py --centroid animal --json docs/db.json
       - run: python quantize.py --json docs/db.json
+      - run: python similarity.py --json docs/db.json --centered
+      - run: python ann.py

@@ -130,6 +130,41 @@ def test_quantize():
     assert sum(x == y for x, y in zip(exact, approx)) >= 12  # 13/14 committed
 
 
+def test_centering():
+    from similarity import center, modality_gap
+    items = db.load_json_gallery()
+    I = center([it["image_emb"] for it in items])
+    T = center([it["text_emb"] for it in items])
+    assert np.allclose(np.linalg.norm(I, axis=1), 1.0, atol=1e-9)  # re-unit
+    centered = [dict(it, image_emb=I[i], text_emb=T[i]) for i, it in enumerate(items)]
+    g0, g1 = modality_gap(items), modality_gap(centered)
+    margin = lambda g: g["image · OWN caption"] - g["image · other captions"]
+    assert margin(g1) > 2.5 * margin(g0)   # the fix widens the margin ~3x
+    assert abs(g1["image · other images"]) < 0.1  # noise floor lands near zero
+
+
+def test_ann():
+    from ann import build, recall_at_k, search, synthetic
+    X, Q = synthetic()
+    C, lists = build(X)
+    assert sum(len(l) for l in lists) == len(X)  # every vector in exactly one list
+
+    exact = np.argsort(Q @ X.T, axis=1)[:, ::-1][:, :10]
+
+    def run(probes):
+        rec = scanned = 0
+        for qi, q in enumerate(Q):
+            found, n = search(q, X, C, lists, probes=probes)
+            rec += recall_at_k(found, exact[qi])
+            scanned += n
+        return rec / len(Q), scanned / len(Q) / len(X)
+
+    r1, s1 = run(1)
+    r8, s8 = run(8)
+    assert r1 > 0.7 and s1 < 0.03      # scan under 3%%, keep over 70%% of truth
+    assert r8 > 0.9 and r8 > r1 and s8 > s1  # probes: more truth, more work
+
+
 def test_softmax():
     from temperature import softmax
     scores = [0.3, 0.2, 0.1]

@@ -11,7 +11,7 @@ stores them in a **database**, and answers **searches** — then takes it one
 step further: **dynamic multi-label meta tags**, a **self-critiquing embedding
 agent** that only publishes features it can defend, and an **item tower**
 ready for two-tower recommendation, plus the serving half that turns likes
-into recommendations. Fourteen tiny pipeline files plus five standalone math
+into recommendations. Fourteen tiny pipeline files plus seven standalone math
 lessons — one concept each — a sample downloader, and a smoke test.
 Standard-library SQLite, no frameworks. Read it top to bottom in 20 minutes,
 then swap in your own images.
@@ -134,7 +134,7 @@ Suggested reading order:
 
 Five standalone lessons build on the stored vectors — every one runs
 **without the model** via `--json docs/db.json` (real committed embeddings),
-and every one also runs **live on the [explorable page](https://sugeerth.github.io/clip-vlm-101/explore.html#lessons)**,
+and the lessons also run **live on the [explorable page](https://sugeerth.github.io/clip-vlm-101/explore.html#lessons)**,
 where `docs/js/lessons.js` reproduces the same numbers in JavaScript (CI
 holds both languages to it):
 
@@ -145,6 +145,8 @@ holds both languages to it):
 | `retrieval_eval.py` | ~80 | retrieval evaluation: leave-one-out precision@k and MRR |
 | `arithmetic.py` | ~90 | vector algebra: `cat + dog − apple`, centroids, renormalize |
 | `quantize.py` | ~75 | int8 scalar quantization: 4× smaller, measure the damage |
+| `similarity.py --centered` | +25 | closing the gap: center each modality, margin widens ~3× |
+| `ann.py` | ~110 | IVF (what vector DBs do): scan ~2%, keep ~75% of the truth |
 
 The browser demo mirrors the same pipeline in `docs/js/` with **matching
 module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
@@ -313,6 +315,8 @@ lesson runs on committed data — and CI re-runs all of them on every push:
 | `python3 retrieval_eval.py --json docs/db.json` | image mode **P@1 = 0.857**, MRR ≈ 0.88 |
 | `python3 arithmetic.py --centroid animal --json docs/db.json` | top 4 = exactly the 4 animal images |
 | `python3 quantize.py --json docs/db.json` | 4× smaller, **39/42** top-3 neighbor slots unchanged |
+| `python3 similarity.py --json docs/db.json --centered` | own-caption margin **+0.120 → +0.388** after centering |
+| `python3 ann.py` | probes 1: recall **0.75** scanning **1.8%**; probes 8: **0.94** at 12.8% |
 
 (The numbers are pinned to the committed sample gallery; re-exporting your
 own gallery changes them — that's the point.)

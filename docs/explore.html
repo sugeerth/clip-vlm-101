@@ -295,7 +295,7 @@
   <!-- ============================================================= lessons -->
   <section id="lessons">
     <p class="eyebrow">09 · The lessons, live</p>
-    <h2>Five one-file lessons, running on this very data</h2>
+    <h2>Seven one-file lessons, running on this very data</h2>
     <p class="sub">Each is a tiny Python file that needs no model — and each runs here in
     JavaScript on the same stored embeddings, reproducing the same numbers. Same math, two
     languages; CI holds both to it.</p>
@@ -316,7 +316,11 @@
           <p class="sub">Mean similarities across the whole gallery, computed live. An image is
           ~2× more similar to <em>other images</em> than to its <em>own caption</em> — cross-modal
           and within-modal scores live on different scales, so never mix them in one ranking.</p>
+          <label class="lsn-check"><input type="checkbox" id="gapCenter">
+            center the modalities — subtract each tower's mean direction, renormalize
+            (<code>similarity.py --centered</code>)</label>
           <div id="gapMeters"></div>
+          <p class="hint" id="gapNote">Raw: the own-caption signal sits far below image–image similarity.</p>
         </div>
       </details>
       <details class="more"><summary>retrieval_eval.py — is retrieval any good? measure it</summary>
@@ -345,6 +349,20 @@
         <div class="body">
           <p class="sub" id="quantSummary"></p>
           <p class="hint" id="quantDetail"></p>
+        </div>
+      </details>
+      <details class="more" id="annDetails"><summary>ann.py — search a sliver, keep most of the truth</summary>
+        <div class="body">
+          <p class="sub">Exact search is one dot product per stored vector — fine at 14, painful at
+          millions. IVF, the trick inside every vector database: k-means the vectors into lists,
+          then scan only the lists nearest the query. 2,000 clustered synthetic vectors, indexed
+          in your browser right now — drag the probes dial:</p>
+          <label class="lsn-slider">probes
+            <input type="range" id="annProbes" min="1" max="8" value="1" step="1">
+            <b id="annProbesVal">1</b></label>
+          <div id="annMeters" class="lsn-wide"></div>
+          <p class="hint">More probes = more of the truth, more scanning. Real embeddings cluster
+          (that's what the map above shows) — IVF exploits exactly that structure.</p>
         </div>
       </details>
     </div>
@@ -379,6 +397,7 @@
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/retrieval_eval.py"><code>retrieval_eval.py</code></a></td><td>retrieval evaluation: leave-one-out precision@k and MRR</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/arithmetic.py"><code>arithmetic.py</code></a></td><td>vector algebra: cat + dog − apple, centroids, renormalize</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/quantize.py"><code>quantize.py</code></a></td><td>int8 quantization: 4× smaller, measure the damage</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/ann.py"><code>ann.py</code></a></td><td>IVF approximate search: scan a sliver, keep most of the truth</td></tr>
         <tr><th>…and its browser twin</th><th>same pipeline, in JavaScript</th></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/templates.js"><code>js/templates.js</code></a></td><td>mirror of <code>templates.py</code> — templates, vocabulary, agent pool</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/clip.js"><code>js/clip.js</code></a></td><td>mirror of <code>embedder.py</code> — the same model via transformers.js</td></tr>
