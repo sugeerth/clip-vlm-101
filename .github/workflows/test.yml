@@ -1,0 +1,24 @@
+# Smoke tests on every push/PR. Only numpy is installed — test_smoke.py
+# stubs the CLIP encoder, so the torch/transformers stack never loads.
+name: test
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy
+      - run: python test_smoke.py
+      - run: node docs/js/test_rank.mjs  # the JS math must mirror the Python
+      # the model-free CLI demos must keep running on the committed gallery
+      - run: python temperature.py
+      - run: python similarity.py --json docs/db.json
+      - run: python retrieval_eval.py --json docs/db.json
+      - run: python arithmetic.py --centroid animal --json docs/db.json
+      - run: python quantize.py --json docs/db.json

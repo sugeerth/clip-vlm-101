@@ -32,7 +32,9 @@ from datetime import datetime, timezone
 import numpy as np
 
 from db import from_blob, to_blob
-from embedder import MODEL_ID
+
+# embedder.MODEL_ID, inlined so importing this file never pulls in torch
+MODEL_ID = "openai/clip-vit-base-patch32"
 
 ITEM_DB_PATH = "items.sqlite"
 

@@ -8,10 +8,10 @@ stores them in a **database**, and answers **searches** — then takes it one
 step further: **dynamic multi-label meta tags**, a **self-critiquing embedding
 agent** that only publishes features it can defend, and an **item tower**
 ready for two-tower recommendation, plus the serving half that turns likes
-into recommendations. Fourteen tiny pipeline files — one concept
-each — plus a sample downloader and a smoke test. Standard-library SQLite,
-no frameworks. Read it top to bottom in 20 minutes, then swap in your own
-images.
+into recommendations. Fourteen tiny pipeline files plus five standalone math
+lessons — one concept each — a sample downloader, and a smoke test.
+Standard-library SQLite, no frameworks. Read it top to bottom in 20 minutes,
+then swap in your own images.
 
 ## The whole idea in one picture
 
@@ -119,20 +119,32 @@ Suggested reading order:
 | `labels.py` | ~55 | **multi-label**: per-tag sigmoid vs a neutral prompt → dynamic label sets |
 | `ensemble.py` | ~60 | **prompt ensembling**: average many templates per tag, +3.5% for free |
 | `fusion.py` | ~30 | the concatenation: `[image ; text] / √2`, and why it works |
-| `features.py` | ~115 | **the one-call API**: image-only `embed()`, batch tags, full records |
-| `agent.py` | ~130 | **the agent**: propose ⇄ critique loop, publishes only when satisfied |
-| `db.py` | ~70 | vectors as float32 BLOBs in plain SQLite |
-| `ingest.py` | ~45 | *composition*: loop `features.extract` over files → store |
+| `features.py` | ~130 | **the one-call API**: image-only `embed()`, batch tags, full records |
+| `agent.py` | ~135 | **the agent**: propose ⇄ critique loop, publishes only when satisfied |
+| `db.py` | ~100 | vectors as float32 BLOBs in plain SQLite (+ the JSON gallery loader) |
+| `ingest.py` | ~65 | *composition*: batch `features.extract_batch` over files → store |
 | `item_tower.py` | ~120 | **two-tower recsys**: agent-verified item embeddings, offline |
 | `user_tower.py` | ~65 | **the serving half**: mean-pooled likes → recommendations, one matmul |
 | `eval.py` | ~100 | **the benchmark**: top-1/top-5 hit rates — prove an optimization helps |
-| `search.py` | ~70 | text / image / fused retrieval with dot products |
-| `export_web.py` | ~80 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
+| `search.py` | ~90 | text / image / fused retrieval with dot products |
+| `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
+
+Five standalone lessons build on the stored vectors — every one runs
+**without the model** via `--json docs/db.json` (real committed embeddings):
+
+| lesson | lines | the one concept it teaches |
+|---|---|---|
+| `temperature.py` | ~50 | softmax + CLIP's learned logit scale: scores → probabilities |
+| `similarity.py` | ~90 | the N×N image matrix + the modality gap (why scales don't mix) |
+| `retrieval_eval.py` | ~80 | retrieval evaluation: leave-one-out precision@k and MRR |
+| `arithmetic.py` | ~90 | vector algebra: `cat + dog − apple`, centroids, renormalize |
+| `quantize.py` | ~75 | int8 scalar quantization: 4× smaller, measure the damage |
 
 The browser demo mirrors the same pipeline in `docs/js/` with **matching
 module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
-`rank.js` ↔ `tagger.py`+`fusion.py`+`search.py`, and `app.js` wires them to
-the page. Read a Python file, then its twin — same pipeline, two languages.
+`rank.js` ↔ `tagger.py`+`fusion.py`+`search.py`, `viz.js` ↔ `export_web.py`
+(the 2-D embedding map), and `app.js` wires them to the page. Read a Python
+file, then its twin — same pipeline, two languages.
 
 ## Why concatenate embeddings?
 
@@ -281,11 +293,31 @@ Nothing you type or upload leaves your machine. Highlights:
 Light and dark themes are both hand-tuned (toggle in the header), and every
 JS module mirrors its Python twin by name.
 
+## Reproduce these numbers (no model, no downloads)
+
+`docs/db.json` ships the real embeddings of the 14 sample images, so every
+lesson runs on committed data — and CI re-runs all of them on every push:
+
+| command | the number you should see |
+|---|---|
+| `python3 temperature.py` | top hit 7.9% at scale 1 → **99.7%** at CLIP's learned scale 100 |
+| `python3 similarity.py --json docs/db.json` | the modality gap: image·images **+0.57** vs image·own-caption **+0.29** |
+| `python3 retrieval_eval.py --json docs/db.json` | image mode **P@1 = 0.857**, MRR ≈ 0.88 |
+| `python3 arithmetic.py --centroid animal --json docs/db.json` | top 4 = exactly the 4 animal images |
+| `python3 quantize.py --json docs/db.json` | 4× smaller, **39/42** top-3 neighbor slots unchanged |
+
+(The numbers are pinned to the committed sample gallery; re-exporting your
+own gallery changes them — that's the point.)
+
 ## Tests
 
 ```bash
-.venv/bin/python test_smoke.py   # templates, fusion math, DB round-trip — no model needed
+.venv/bin/python test_smoke.py   # templates, tagging, fusion math, PCA, DB — needs only numpy
 ```
+
+The smoke test stubs the CLIP encoder, so it runs without torch/transformers
+installed (`pip install numpy` is enough) — that's also exactly what CI does
+on every push (`.github/workflows/test.yml`).
 
 ## Sample image credits
 

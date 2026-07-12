@@ -36,11 +36,13 @@ def connect(path: str = DB_PATH) -> sqlite3.Connection:
 
 
 def to_blob(vec) -> bytes:
-    return np.asarray(vec, dtype=np.float32).tobytes()
+    # "<f4" = little-endian float32, spelled out so a gallery.sqlite written
+    # on one machine decodes to the same floats on any other
+    return np.asarray(vec, dtype="<f4").tobytes()
 
 
 def from_blob(blob: bytes) -> np.ndarray:
-    return np.frombuffer(blob, dtype=np.float32)
+    return np.frombuffer(blob, dtype="<f4")  # read-only view over the bytes
 
 
 def add_image(con, path, caption, tags, image_emb, text_emb, fused_emb):
@@ -52,6 +54,31 @@ def add_image(con, path, caption, tags, image_emb, text_emb, fused_emb):
          to_blob(image_emb), to_blob(text_emb), to_blob(fused_emb)),
     )
     con.commit()
+
+
+def load_json_gallery(path="docs/db.json"):
+    """The web demo's exported gallery, reshaped like all_images() rows.
+
+    docs/db.json ships REAL embeddings for the 14 sample images, so any
+    CLI that only does math on stored vectors can run on it without ever
+    loading the model (fused_emb is fusion.fuse, inlined to keep this
+    file standalone)."""
+    with open(path) as f:
+        data = json.load(f)
+    items = []
+    for it in data["items"]:
+        a = np.asarray(it["image_emb"], dtype=np.float32)
+        t = np.asarray(it["text_emb"], dtype=np.float32)
+        items.append({
+            "path": it["file"], "caption": it["caption"], "tags": it["tags"],
+            "image_emb": a, "text_emb": t,
+            "fused_emb": (np.concatenate([a, t]) / np.sqrt(2)).astype(np.float32),
+        })
+    return items
+
+
+def count_images(con) -> int:
+    return con.execute("SELECT COUNT(*) FROM images").fetchone()[0]
 
 
 def all_images(con):

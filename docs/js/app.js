@@ -16,7 +16,14 @@ const $ = id => document.getElementById(id);
 const EXAMPLES = ['a fluffy animal', 'famous landmark in europe',
   'something delicious to eat', 'outer space', 'water in nature'];
 
-const DB = await (await fetch('db.json')).json();
+let DB = { items: [], pca: null };
+try {
+  DB = await (await fetch('db.json')).json();
+} catch (err) { // without this, a failed fetch rejects the whole module and the page goes inert
+  console.error(err);
+  $('searchStatus').textContent =
+    'Could not load db.json — check your connection and reload the page.';
+}
 
 // ------------------------------------------------------------------ theme --
 // prefers-color-scheme sets the default; the toggle stamps data-theme on
@@ -231,24 +238,35 @@ async function runSearch() {
   } catch (err) {
     console.error(err);
     $('loadTrack').classList.add('hidden');
-    // graceful fallback: substring match over tags + captions
-    const words = query.toLowerCase().split(/\s+/);
+    // graceful fallback: keyword match over tags + captions
+    // (skip stopword-length words — "a" would substring-match half the vocab)
+    const words = query.toLowerCase().split(/\s+/).filter(w => w.length >= 3);
     const keyword = DB.items.map(item => ({
       item,
-      score: words.filter(w => item.tags.some(t => t.includes(w)) || item.caption.includes(w)).length / 4,
-    })).sort((a, b) => b.score - a.score).slice(0, 5);
+      score: words.filter(w => item.tags.some(t => t.includes(w)) || item.caption.toLowerCase().includes(w)).length / 4,
+    })).filter(r => r.score > 0).sort((a, b) => b.score - a.score).slice(0, 5);
     renderResults($('results'), keyword);
-    searchStatus.textContent =
-      'Model failed to load here, showing keyword matches instead — run search.py locally for the real thing.';
+    searchStatus.textContent = keyword.length
+      ? 'Model failed to load here, showing keyword matches instead — run search.py locally for the real thing.'
+      : 'Model failed to load here and no keyword matches either — run search.py locally for the real thing.';
+  } finally {
+    $('results').classList.remove('busy');
+    searching = false;
   }
-  $('results').classList.remove('busy');
-  searching = false;
-  // if the query changed while we were busy (e.g. a second chip click), run it now
+  // if the query or mode changed while we were busy (a chip click, a radio
+  // toggled mid-download), run again so the results match the controls
   const now = qInput.value.trim();
-  if (now && now !== query) runSearch();
+  const nowMode = document.querySelector('input[name=mode]:checked').value;
+  if (now && (now !== query || nowMode !== mode)) runSearch();
 }
 
 qInput.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
+qInput.addEventListener('input', () => { // clearing the box clears the results too
+  if (!qInput.value.trim()) {
+    $('results').replaceChildren();
+    searchStatus.textContent = 'The CLIP text encoder loads on your first search (~65 MB, cached after that).';
+  }
+});
 document.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', () => {
   $('modeNote').textContent = MODE_NOTES[r.value];
   syncURL();
@@ -289,7 +307,10 @@ drop.addEventListener('drop', e => {
   e.preventDefault(); drop.classList.remove('armed');
   if (e.dataTransfer.files[0]) handleUpload(e.dataTransfer.files[0]);
 });
-fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleUpload(fileInput.files[0]); });
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) handleUpload(fileInput.files[0]);
+  fileInput.value = ''; // so picking the SAME file again re-fires change (the retry path)
+});
 
 async function handleUpload(file) {
   try {
@@ -299,6 +320,7 @@ async function handleUpload(file) {
     labStatus.textContent = 'Embedding your image (in your browser — it never leaves your machine)…';
     const imageEmb = await encodeImage(file);
     labStatus.textContent = '';
+    if (subject?.isUpload && subject.src.startsWith('blob:')) URL.revokeObjectURL(subject.src);
     setSubject({ imageEmb, src: URL.createObjectURL(file), caption: file.name, tags: null, isUpload: true });
     if (DB.pca) markUpload($('map'), project(imageEmb, DB.pca));   // drop it on the map too
   } catch (err) {

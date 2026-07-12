@@ -33,7 +33,6 @@ import numpy as np
 import fusion
 import labels
 import templates
-from embedder import ClipEmbedder
 
 # the critic's bar — a matching CLIP image/caption pair scores ~0.2-0.35
 MIN_ALIGNED = 0.20
@@ -68,7 +67,10 @@ class EmbeddingAgent:
     def __init__(self, clip=None, template_pool=templates.TEMPLATE_POOL,
                  vocabulary=templates.TAG_VOCABULARY,
                  threshold=labels.DEFAULT_THRESHOLD):
-        self.clip = clip or ClipEmbedder()
+        if clip is None:  # deferred import: pass your own encoder (see the
+            from embedder import ClipEmbedder  # stubs in test_smoke.py) and
+            clip = ClipEmbedder()  # torch/transformers never even import
+        self.clip = clip
         self.template_pool = template_pool
         self.vocabulary = vocabulary
         self.threshold = threshold

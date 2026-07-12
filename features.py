@@ -24,11 +24,15 @@ From the shell (any number of images):
     python3 features.py images/*.jpg --image-only    # embeddings only
     python3 features.py photo.jpg --json             # full record as JSON
     python3 features.py images/*.jpg --tag-template "a drawing of a {tag}"
+    python3 features.py images/*.jpg --ensemble     # average all built-in templates
 """
+import os
+
+import numpy as np
+
 import fusion
 import tagger
 import templates
-from embedder import ClipEmbedder
 
 TOP_TAGS = 5
 
@@ -38,7 +42,10 @@ class FeatureExtractor:
                  caption_template=templates.DEFAULT_CAPTION_TEMPLATE,
                  vocabulary=templates.TAG_VOCABULARY, top_k=TOP_TAGS,
                  clip=None, ensemble=False):
-        self.clip = clip or ClipEmbedder()
+        if clip is None:  # deferred import: pass your own encoder (see the
+            from embedder import ClipEmbedder  # stub in test_smoke.py) and
+            clip = ClipEmbedder()  # torch/transformers never even import
+        self.clip = clip
         self.tag_template = tag_template
         self.caption_template = caption_template
         self.vocabulary = vocabulary
@@ -73,7 +80,9 @@ class FeatureExtractor:
         caption = caption or templates.caption_for(tags, self.caption_template)
         text_emb = self.clip.embed_texts([caption])[0]
         return {
-            "path": str(path), "tags": tags, "caption": caption,
+            # normpath so "images/cat.jpg" and "./images/cat.jpg" hit the
+            # same UNIQUE row in db.py instead of duplicating the image
+            "path": os.path.normpath(str(path)), "tags": tags, "caption": caption,
             "image_emb": image_emb,                          # (512,)
             "text_emb": text_emb,                            # (512,)
             "fused_emb": fusion.fuse(image_emb, text_emb),   # (1024,)
@@ -91,8 +100,8 @@ class FeatureExtractor:
         captions = [templates.caption_for(t, self.caption_template) for t in tags]
         text_embs = self.clip.embed_texts(captions)
         return [
-            {"path": str(p), "tags": t, "caption": c, "image_emb": ie,
-             "text_emb": te, "fused_emb": fusion.fuse(ie, te)}
+            {"path": os.path.normpath(str(p)), "tags": t, "caption": c,
+             "image_emb": ie, "text_emb": te, "fused_emb": fusion.fuse(ie, te)}
             for p, t, c, ie, te in zip(paths, tags, captions, image_embs, text_embs)
         ]
 
@@ -106,7 +115,8 @@ def _describe(name, vec):
 if __name__ == "__main__":
     import argparse, json
 
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("images", nargs="+", help="one or more image files")
     ap.add_argument("--image-only", action="store_true",
                     help="embeddings only — skip tagging and the text tower")

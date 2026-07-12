@@ -32,3 +32,11 @@ export const topTags = (imageEmb, tagEmbs, vocab, k = 5) =>
 // Mirror of fusion.fuse: [image ; text] / √2 — one unit vector, both signals.
 export const fuse = (imageEmb, textEmb) =>
   [...imageEmb, ...textEmb].map(x => x / Math.SQRT2);
+
+// Mirror of temperature.softmax: scores -> probabilities. scale is CLIP's
+// learned logit_scale (~100): it stretches the narrow cosine band apart.
+export const softmax = (scores, scale = 100) => {
+  const z = scores.map(s => s * scale), m = Math.max(...z);
+  const e = z.map(x => Math.exp(x - m)), sum = e.reduce((a, b) => a + b, 0);
+  return e.map(x => x / sum);
+};
