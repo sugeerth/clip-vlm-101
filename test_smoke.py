@@ -11,12 +11,60 @@ import templates
 from search import score
 
 
+class HashClip:
+    """Content-sensitive fake encoder: same text -> same unit vector, no model.
+    (The stub inside test_feature_extractor ignores its input; this one
+    doesn't, which is what ensembling and batching tests need.)"""
+    def embed_texts(self, texts):
+        import zlib
+        rows = []
+        for t in texts:
+            rng = np.random.default_rng(zlib.crc32(str(t).encode()))
+            v = rng.normal(size=512)
+            rows.append(v / np.linalg.norm(v))
+        return np.array(rows, dtype=np.float32)
+    embed_images = embed_texts  # a path is just a string to hash
+
+
 def test_templates():
     assert templates.fill("a photo of a {tag}", tag="cat") == "a photo of a cat"
     prompts = templates.tag_prompts()
     assert len(prompts) == len(templates.TAG_VOCABULARY)
     assert prompts[0] == f"a photo of a {templates.TAG_VOCABULARY[0]}"
     assert templates.caption_for(["cat", "pet"]) == "a photo of cat, pet"
+    assert templates.ENSEMBLE_TAG_TEMPLATES[0] == templates.DEFAULT_TAG_TEMPLATE
+    for t in templates.ENSEMBLE_TAG_TEMPLATES:
+        assert templates.fill(t, tag="cat").count("cat") == 1
+
+
+def test_prompt_ensembling():
+    from features import FeatureExtractor
+    vocab = ["cat", "dog", "car"]
+    tpls = [templates.DEFAULT_TAG_TEMPLATE, "a drawing of a {tag}"]
+    # a 1-template ensemble is exactly that template
+    one = FeatureExtractor(vocabulary=vocab, clip=HashClip()).tag_embs
+    same = FeatureExtractor(tag_template=[tpls[0]], vocabulary=vocab, clip=HashClip()).tag_embs
+    assert np.allclose(one, same)
+    # a 2-template ensemble is the re-normalized mean of the two singles
+    two = FeatureExtractor(tag_template=tpls, vocabulary=vocab, clip=HashClip()).tag_embs
+    a = FeatureExtractor(tag_template=tpls[0], vocabulary=vocab, clip=HashClip()).tag_embs
+    b = FeatureExtractor(tag_template=tpls[1], vocabulary=vocab, clip=HashClip()).tag_embs
+    mean = (a + b) / 2
+    assert two.shape == (3, 512)
+    assert np.allclose(np.linalg.norm(two, axis=1), 1.0, atol=1e-6)
+    assert np.allclose(two, mean / np.linalg.norm(mean, axis=1, keepdims=True), atol=1e-6)
+
+
+def test_extract_batch():
+    from features import FeatureExtractor
+    fx = FeatureExtractor(clip=HashClip())
+    paths = ["./a.jpg", "b.jpg", "c.jpg"]
+    batch = fx.extract_batch(paths, batch_size=2)  # 3 paths -> a chunk boundary
+    assert [r["path"] for r in batch] == ["a.jpg", "b.jpg", "c.jpg"]  # normpathed
+    for r, single in zip(batch, (fx.extract(p) for p in paths)):
+        assert r["tags"] == single["tags"] and r["caption"] == single["caption"]
+        assert np.allclose(r["image_emb"], single["image_emb"])
+        assert np.allclose(r["fused_emb"], single["fused_emb"])
 
 
 def test_top_tags():
@@ -89,6 +137,7 @@ def test_db_roundtrip():
     db.add_image(con, "x.jpg", "a photo of dog", ["dog"], a, b, fusion.fuse(a, b))
     (item,) = db.all_images(con)
     assert item["caption"] == "a photo of dog"
+    assert db.count_images(con) == 1
 
 
 if __name__ == "__main__":

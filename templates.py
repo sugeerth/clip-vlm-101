@@ -11,6 +11,18 @@ with a hole in it — we fill the hole with a candidate tag and ask CLIP
 # The classic zero-shot template from the CLIP paper.
 DEFAULT_TAG_TEMPLATE = "a photo of a {tag}"
 
+# Several phrasings of the SAME question. Tagging with all of them and
+# averaging each tag's embeddings (features.tag_embs does the math) is
+# "prompt ensembling" from the CLIP paper — the average cancels each
+# phrasing's quirks. Zero training, measurably better tags.
+ENSEMBLE_TAG_TEMPLATES = [
+    DEFAULT_TAG_TEMPLATE,
+    "a close-up photo of a {tag}",
+    "a cropped photo of a {tag}",
+    "a bright photo of a {tag}",
+    "a photo of the {tag}",
+]
+
 # How we turn the winning tags into a stored caption.
 DEFAULT_CAPTION_TEMPLATE = "a photo of {tags}"
 

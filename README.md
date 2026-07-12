@@ -91,15 +91,15 @@ Suggested reading order:
 
 | file | lines | the one concept it teaches |
 |---|---|---|
-| `templates.py` | ~45 | prompt templates: sentences with holes, filled per tag |
+| `templates.py` | ~55 | prompt templates: sentences with holes, filled per tag |
 | `embedder.py` | ~55 | CLIP → unit-length 512-d vectors for images AND text |
 | `tagger.py` | ~25 | zero-shot meta tags = dot products + argsort, no training |
 | `fusion.py` | ~30 | the concatenation: `[image ; text] / √2`, and why it works |
-| `features.py` | ~115 | **the one-call API**: image-only `embed()`, batch tags, full records |
-| `db.py` | ~70 | vectors as float32 BLOBs in plain SQLite |
-| `ingest.py` | ~45 | *composition*: loop `features.extract` over files → store |
-| `search.py` | ~70 | text / image / fused retrieval with dot products |
-| `export_web.py` | ~80 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
+| `features.py` | ~160 | **the one-call API**: `embed()`, ensembled tags, batched records |
+| `db.py` | ~75 | vectors as float32 BLOBs in plain SQLite |
+| `ingest.py` | ~60 | *composition*: batch `features.extract_batch` over files → store |
+| `search.py` | ~80 | text / image / fused retrieval with dot products |
+| `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 The browser demo mirrors the same pipeline in `docs/js/` with **matching
 module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
@@ -127,6 +127,27 @@ The template is the interface to the model. Change it and re-ingest:
 
 Add your own candidate tags in `templates.py` (`TAG_VOCABULARY`) — zero-shot
 tagging means new tags need **no training**, just new words.
+
+## Prompt ensembling — the CLIP paper's free accuracy boost
+
+One template is one *phrasing* of the question, and CLIP is sensitive to
+phrasing. The fix from the CLIP paper: embed each tag with **several**
+phrasings and average the vectors (then re-normalize — the math lives in
+`features.tag_embs`, the phrasings in `templates.ENSEMBLE_TAG_TEMPLATES`):
+
+```bash
+.venv/bin/python ingest.py images/*.jpg --ensemble        # all built-in phrasings
+.venv/bin/python ingest.py images/*.jpg \
+    --tag-template "a photo of a {tag}" \
+    --tag-template "a drawing of a {tag}"                  # or roll your own
+```
+
+The average cancels each phrasing's quirks; what survives is the tag's
+meaning. Zero training, one extra flag.
+
+Ingest is also **batched**: `features.extract_batch` runs each encoder once
+per chunk of 16 images instead of twice per file — the same trick that keeps
+real pipelines' GPUs busy.
 
 ## The web demo
 

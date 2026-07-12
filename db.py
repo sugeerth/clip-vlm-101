@@ -56,6 +56,10 @@ def add_image(con, path, caption, tags, image_emb, text_emb, fused_emb):
     con.commit()
 
 
+def count_images(con) -> int:
+    return con.execute("SELECT COUNT(*) FROM images").fetchone()[0]
+
+
 def all_images(con):
     rows = con.execute(
         "SELECT path, caption, tags, image_emb, text_emb, fused_emb FROM images"
