@@ -139,24 +139,27 @@ async function webPhase(query) {
   const token = ++webToken;
   const head = $('webHead'), grid = $('webResults');
   head.classList.remove('hidden');
-  head.textContent = '🌐 searching the web (commons)…';
+  head.textContent = '🌐 searching the web — 5 sources in parallel…';
   grid.replaceChildren();
   try {
     const [q] = await encodeText([query]);
-    const { records: recs, tried } = await discover(query, 6);
+    const { records: recs, tried } = await discover(query, 4);
     if (token !== webToken) return;
+    const oks = tried.filter(t => t.ok && t.count);
+    const fails = tried.filter(t => !t.ok);
+    const ledgerLine = oks.map(t => `${t.provider} ${t.count}`).join(' · ')
+      + (fails.length ? `  (down: ${fails.map(t => `${t.provider}: ${t.error}`).join(' · ')})` : '');
     if (!recs.length) {          // say exactly what happened — never vanish
       head.textContent = '🌐 web search unavailable — ' + tried.map(t =>
         t.ok ? `${t.provider}: 0 results` : `${t.provider}: ${t.error}`).join(' · ');
       return;
     }
-    const providerName = recs[0].provider;
     const encodeImage = await getImageEncoder(() => {}, progress);
     hideBar();
     const scored = [];
     for (let i = 0; i < recs.length; i++) {
       if (token !== webToken) return;
-      head.textContent = `🌐 from the web (${providerName}) — embedding ${i + 1}/${recs.length} in your browser…`;
+      head.textContent = `🌐 from the web — embedding ${i + 1}/${recs.length} in your browser… (${ledgerLine})`;
       const rec = recs[i];
       try {
         if (!webCache.has(rec.thumb_url)) {
@@ -171,7 +174,7 @@ async function webPhase(query) {
     if (token !== webToken) return;
     scored.sort((a, b) => b.score - a.score);
     head.textContent = scored.length
-      ? `🌐 from the web (${providerName}) — ${scored.length} images discovered, embedded and ranked just now, locally`
+      ? `🌐 from the web — ${scored.length} images ranked just now, locally · ${ledgerLine}`
       : '🌐 found web results but none of their thumbnails could be fetched';
     grid.replaceChildren(...scored.map(({ rec, obj }, i) => {
       const fig = document.createElement('figure');

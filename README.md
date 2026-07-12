@@ -278,13 +278,16 @@ expands into the full trace of what it tried and why.
 Either way the output feeds the same pipeline: crawl → `ingest.py` →
 `export_web.py`, and the live search box now searches YOUR corpus.
 
-And **every search crawls, live**: the search box on the demo runs a web
-phase after each text query — it asks [Openverse](https://api.openverse.org)
-(the Creative-Commons image search; anonymous browser use is supported)
-with Wikimedia Commons `origin=*` as the fallback, embeds the thumbnails
-*in your browser* with the vision tower, and ranks them under the gallery
-results with license receipts (`js/crawler.js`; toggle with the 🌐 chip).
-If both providers fail, the page says exactly what each one answered —
+And **every search crawls, live**: after each text query the demo fans out
+to **five independent, keyless, CORS-open image APIs in parallel** —
+[Openverse](https://api.openverse.org), Wikimedia Commons (`origin=*`),
+the [Art Institute of Chicago](https://api.artic.edu/docs/), the
+[Met Open Access collection](https://metmuseum.github.io/), and
+[iNaturalist](https://api.inaturalist.org/v1/docs/) — merges what comes
+back, embeds every thumbnail *in your browser* with the vision tower, and
+ranks them under the gallery results with a license receipt on every card
+(`js/crawler.js`; toggle with the 🌐 chip). One provider down costs only
+its own results, and the section header reports the per-provider ledger —
 a silent web search is indistinguishable from a broken one. The Python
 twin: `hermes.py "red panda" --crawl 6`.
 
