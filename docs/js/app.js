@@ -11,7 +11,7 @@ import { flip, tweenNumber, motionOK } from './motion.js';
 import { startTour } from './tour.js';
 import { getTextEncoder, getImageEncoder } from './clip.js';
 import { drawMatrix, drawMap, markUpload, project, stripRow, redrawStrips } from './viz.js';
-import { modalityGap, evalRetrieval, combine, quantizeInt8, topNeighbors } from './lessons.js';
+import { modalityGap, evalRetrieval, combine, quantizeInt8, topNeighbors, centerRows, synthetic, buildIVF, searchIVF, recallAtK } from './lessons.js';
 
 const $ = id => document.getElementById(id);
 const EXAMPLES = ['a fluffy animal', 'famous landmark in europe',
@@ -629,12 +629,26 @@ if (DB.items.length) {
   $('tempScale').addEventListener('input', () => renderTemp(+$('tempScale').value));
   renderTemp(+$('tempScale').value);
 
-  // similarity.py — the modality gap, as four mean-similarity meters
-  const gap = modalityGap(DB.items);
-  const gapWrap = Object.assign(document.createElement('div'), { className: 'lsn-wide' });
-  for (const [label, v] of Object.entries(gap))
-    gapWrap.append(meterRow(label, v / 0.75, v.toFixed(3), label === 'image · OWN caption', null));
-  $('gapMeters').append(gapWrap);
+  // similarity.py — the modality gap, with the centering fix on a toggle
+  let centeredItems = null; // computed once, on first use
+  const renderGap = centered => {
+    if (centered && !centeredItems) {
+      const Ic = centerRows(DB.items.map(it => it.image_emb));
+      const Tc = centerRows(DB.items.map(it => it.text_emb));
+      centeredItems = DB.items.map((it, i) => ({ ...it, image_emb: Ic[i], text_emb: Tc[i] }));
+    }
+    const gap = modalityGap(centered ? centeredItems : DB.items);
+    const wrap = Object.assign(document.createElement('div'), { className: 'lsn-wide' });
+    for (const [label, v] of Object.entries(gap))
+      wrap.append(meterRow(label, Math.max(0, v) / 0.75, v.toFixed(3),
+        label === 'image · OWN caption', null));
+    $('gapMeters').replaceChildren(wrap);
+    $('gapNote').textContent = centered
+      ? 'Centered: the own-caption signal now stands ALONE above a ~0 noise floor — the margin over other captions widens ~3×. Same data, one subtraction.'
+      : 'Raw: the own-caption signal sits far below image–image similarity.';
+  };
+  $('gapCenter').addEventListener('change', () => renderGap($('gapCenter').checked));
+  renderGap(false);
 
   // retrieval_eval.py — leave-one-out P@k + MRR for all three modes
   const tbl = document.createElement('table');
@@ -687,4 +701,33 @@ if (DB.items.length) {
   $('quantDetail').textContent = changed.length
     ? `Only ${changed.map(short).join(', ')} shuffles its neighbour list — ranking needs order, not precision.`
     : 'Every neighbour list survives — ranking needs order, not precision.';
+
+  // ann.py — IVF on synthetic clustered vectors, built lazily on first open
+  let ann = null;
+  const renderAnn = () => {
+    if (!ann) {
+      const { X, Q } = synthetic();
+      const { C, lists } = buildIVF(X);
+      const exactNN = Q.map(qq => X.map((v, i) => ({ i, s: dot(v, qq) }))
+        .sort((a, b) => b.s - a.s).slice(0, 10).map(({ i }) => i));
+      ann = { X, Q, C, lists, exactNN };
+    }
+    const probes = +$('annProbes').value;
+    $('annProbesVal').textContent = probes;
+    let rec = 0, scanned = 0;
+    ann.Q.forEach((qq, qi) => {
+      const res = searchIVF(qq, ann.X, ann.C, ann.lists, 10, probes);
+      rec += recallAtK(res.found, ann.exactNN[qi]);
+      scanned += res.scanned;
+    });
+    rec /= ann.Q.length;
+    scanned = scanned / ann.Q.length / ann.X.length;
+    $('annMeters').replaceChildren(
+      meterRow('recall@10', rec, (100 * rec).toFixed(0) + '%', rec > 0.9, null),
+      meterRow('data scanned', scanned, (100 * scanned).toFixed(1) + '%', false, null));
+  };
+  $('annProbes').addEventListener('input', renderAnn);
+  $('annDetails').addEventListener('toggle', () => {
+    if ($('annDetails').open && !ann) renderAnn();
+  });
 }

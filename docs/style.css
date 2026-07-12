@@ -423,3 +423,5 @@ img { max-width: 100%; }
   border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 8px;
 }
 #evalTable th, #evalTable td { font-variant-numeric: tabular-nums; }
+.lsn-check { display: block; font-size: 0.85rem; color: var(--ink-2); margin: 4px 0 10px; cursor: pointer; }
+.lsn-check input { accent-color: var(--accent); margin-right: 6px; }

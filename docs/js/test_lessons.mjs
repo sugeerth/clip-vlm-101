@@ -4,7 +4,7 @@
 // Run: node docs/js/test_lessons.mjs
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { modalityGap, evalRetrieval, combine, quantizeInt8, topNeighbors } from './lessons.js';
+import { modalityGap, evalRetrieval, combine, quantizeInt8, topNeighbors, centerRows, synthetic, buildIVF, searchIVF, recallAtK } from './lessons.js';
 import { softmax, dot } from './rank.js';
 
 const DB = JSON.parse(readFileSync(new URL('../db.json', import.meta.url)));
@@ -51,6 +51,34 @@ check(scale > 0 && qv.every(v => v.every(x => Number.isInteger(x) && Math.abs(x)
 const exact = topNeighbors(vecs), approx = topNeighbors(qv);
 const agree = exact.filter((r, i) => r.join() === approx[i].join()).length;
 check(agree >= 13, `quantize: ${agree}/14 top-3 rows identical (>=13)`);
+
+// similarity.center: the gap fix widens the own-caption margin ~3x (Python-pinned)
+const Ic = centerRows(items.map(it => it.image_emb));
+const Tc = centerRows(items.map(it => it.text_emb));
+const centered = items.map((it, i) => ({ ...it, image_emb: Ic[i], text_emb: Tc[i] }));
+const g1 = modalityGap(centered);
+check(close(g1['image · OWN caption'], 0.360, 0.005), 'center: own caption ≈ +0.360');
+check((g1['image · OWN caption'] - g1['image · other captions'])
+  > 2.5 * (gap['image · OWN caption'] - gap['image · other captions']),
+  'center: own-caption margin widens ~3x');
+
+// ann.py mirror: IVF on clustered synthetic data — the recall dial works
+const { X, Q } = synthetic();
+const { C, lists } = buildIVF(X);
+check(lists.reduce((s, l) => s + l.length, 0) === X.length, 'ann: every vector in one list');
+const exactNN = Q.map(q => X.map((v, i) => ({ i, s: dot(v, q) }))
+  .sort((a, b) => b.s - a.s).slice(0, 10).map(({ i }) => i));
+const run = probes => {
+  let rec = 0, scanned = 0;
+  Q.forEach((q, qi) => {
+    const r = searchIVF(q, X, C, lists, 10, probes);
+    rec += recallAtK(r.found, exactNN[qi]); scanned += r.scanned;
+  });
+  return [rec / Q.length, scanned / Q.length / X.length];
+};
+const [r1, s1] = run(1), [r8, s8] = run(8);
+check(r1 > 0.7 && s1 < 0.05, `ann: probes 1 → recall ${r1.toFixed(2)} scanning ${(100 * s1).toFixed(1)}%`);
+check(r8 > 0.9 && r8 >= r1 && s8 > s1, 'ann: more probes → more truth, more work');
 
 if (failed) { console.error('some lessons.js checks FAILED'); process.exit(1); }
 console.log('all lessons.js checks passed — JS reproduces the Python-pinned numbers');
