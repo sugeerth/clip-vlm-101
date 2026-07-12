@@ -61,6 +61,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python features.py images/cat.jpg # one image → meta tags + embeddings
 .venv/bin/python ingest.py images/*.jpg     # embed + auto-tag + store in SQLite
 .venv/bin/python search.py "a fluffy animal"
+.venv/bin/python hermes.py "a fluffy animal"  # the agentic version, with a trace
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
 .venv/bin/python item_tower.py images/*.jpg  # agent-verified item embeddings
 .venv/bin/python user_tower.py images/cat.jpg images/dog.jpg  # likes → recs
@@ -130,6 +131,7 @@ Suggested reading order:
 | `user_tower.py` | ~65 | **the serving half**: mean-pooled likes → recommendations, one matmul |
 | `eval.py` | ~100 | **the benchmark**: top-1/top-5 hit rates — prove an optimization helps |
 | `search.py` | ~90 | text / image / fused retrieval with dot products |
+| `hermes.py` | ~110 | **the agentic searcher**: propose phrasings ⇄ critique margins ⇄ refine |
 | `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 Five standalone lessons build on the stored vectors — every one runs
@@ -240,6 +242,24 @@ mean for a trained model later; nothing else changes. That's the point of
 two towers: the expensive half is finished ahead of time. Try it live in
 the demo's **Recommend** section — it runs on the stored vectors with no
 model download at all.
+
+## Hermes: the agent on the read path
+
+`agent.py` audits the WRITE path — an image's features must satisfy a critic
+before they are stored. **Hermes** (`hermes.py` / `js/hermes.js`) is its twin
+on the READ path: your query is treated as a draft, not a command.
+
+```
+ query ──► PROPOSE 4 phrasings ("cat", "a photo of cat", …)
+              │            each one is a different question to the model
+           CRITIQUE by retrieval margin: top1 − mean(rest of top-k)
+              │            decisive phrasing? ──yes──► publish that ranking
+              └──────────── no ──► REFINE: ensemble the phrasings, publish
+```
+
+The live search box at https://sugeerth.github.io/clip-vlm-101/ runs Hermes
+on every text query — the muted "🪽 hermes chose …" line under the results
+expands into the full trace of what it tried and why.
 
 ## Understanding CLIP — and squeezing more out of it
 

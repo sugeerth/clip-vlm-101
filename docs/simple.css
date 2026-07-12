@@ -95,6 +95,22 @@ body.searched .chips { margin: 12px 0 0; }
 .bar-fill { height: 100%; background: var(--accent); }
 .status { min-height: 1.3em; margin: 10px 0 0; font-size: 0.84rem; color: var(--muted); text-align: center; }
 
+/* hermes trace — one muted line, the full reasoning one tap away */
+.trace { margin: 8px 0 0; max-width: 560px; width: 100%; }
+.trace summary {
+  cursor: pointer; list-style: none; text-align: center;
+  font-size: 0.8rem; color: var(--muted); user-select: none;
+}
+.trace summary::before { content: '🪽 '; }
+.trace summary:hover { color: var(--accent-ink); }
+.trace summary::-webkit-details-marker { display: none; }
+.trace .body {
+  margin: 8px auto 0; width: fit-content; max-width: 100%;
+  font: 0.76rem/1.8 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted); text-align: left;
+}
+.trace .round.ok { color: var(--accent-ink); }
+
 /* results — just images, best first */
 .rgrid {
   width: 100%; margin: 26px 0 40px;
