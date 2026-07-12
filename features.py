@@ -37,20 +37,25 @@ class FeatureExtractor:
     def __init__(self, tag_template=templates.DEFAULT_TAG_TEMPLATE,
                  caption_template=templates.DEFAULT_CAPTION_TEMPLATE,
                  vocabulary=templates.TAG_VOCABULARY, top_k=TOP_TAGS,
-                 clip=None):
+                 clip=None, ensemble=False):
         self.clip = clip or ClipEmbedder()
         self.tag_template = tag_template
         self.caption_template = caption_template
         self.vocabulary = vocabulary
         self.top_k = top_k
+        self.ensemble = ensemble  # average many templates per tag (ensemble.py)
         self._tag_embs = None
 
     @property
     def tag_embs(self):
         """Vocabulary prompt embeddings — computed once, and ONLY if you tag."""
         if self._tag_embs is None:
-            self._tag_embs = self.clip.embed_texts(
-                templates.tag_prompts(self.tag_template, self.vocabulary))
+            if self.ensemble:
+                import ensemble
+                self._tag_embs = ensemble.ensemble_tag_embs(self.clip, self.vocabulary)
+            else:
+                self._tag_embs = self.clip.embed_texts(
+                    templates.tag_prompts(self.tag_template, self.vocabulary))
         return self._tag_embs
 
     def embed(self, path):
@@ -74,6 +79,23 @@ class FeatureExtractor:
             "fused_emb": fusion.fuse(image_emb, text_emb),   # (1024,)
         }
 
+    def extract_batch(self, paths) -> list:
+        """extract() for many images, but ONE forward pass per tower.
+
+        Encoders are fastest when fed batches: n images through the vision
+        tower together, then all n captions through the text tower together
+        — instead of 2n round-trips. Same records, same order as `paths`.
+        """
+        image_embs = self.clip.embed_images(list(paths))
+        tags = [self.tag(e) for e in image_embs]
+        captions = [templates.caption_for(t, self.caption_template) for t in tags]
+        text_embs = self.clip.embed_texts(captions)
+        return [
+            {"path": str(p), "tags": t, "caption": c, "image_emb": ie,
+             "text_emb": te, "fused_emb": fusion.fuse(ie, te)}
+            for p, t, c, ie, te in zip(paths, tags, captions, image_embs, text_embs)
+        ]
+
 
 def _describe(name, vec):
     head = " ".join(f"{x:+.4f}" for x in vec[:6])
@@ -90,11 +112,13 @@ if __name__ == "__main__":
                     help="embeddings only — skip tagging and the text tower")
     ap.add_argument("--tag-template", default=templates.DEFAULT_TAG_TEMPLATE,
                     help="the prompt template used for meta tags")
+    ap.add_argument("--ensemble", action="store_true",
+                    help="average many templates per tag (see ensemble.py)")
     ap.add_argument("--json", action="store_true",
                     help="dump record(s) with embeddings as lists")
     args = ap.parse_args()
 
-    fx = FeatureExtractor(tag_template=args.tag_template)
+    fx = FeatureExtractor(tag_template=args.tag_template, ensemble=args.ensemble)
     records = []
     for path in args.images:
         if args.image_only:

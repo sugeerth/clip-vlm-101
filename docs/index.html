@@ -3,114 +3,271 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CLIP VLM 101 — vision-language embeddings, from zero to search</title>
-<meta name="description" content="A tiny, readable CLIP pipeline: image + prompt-template embeddings, concatenated features, a database, and live in-browser retrieval.">
+<title>CLIP VLM 101 — see what a vision-language model sees</title>
+<meta name="description" content="An explorable CLIP pipeline: image + text embeddings, a live contrastive similarity matrix, dynamic multi-label tags, a self-critiquing embedding agent — all running in your browser.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
 <link rel="stylesheet" href="style.css">
+<script>
+  // Apply the saved theme before first paint (no flash). The toggle in the
+  // header cycles it; without a saved choice the system preference rules.
+  const saved = localStorage.getItem('theme');
+  if (saved) document.documentElement.dataset.theme = saved;
+</script>
 </head>
 <body>
-<main>
-  <h1>CLIP VLM 101</h1>
-  <p class="sub">
-    How a vision-language model turns <strong>images + prompt templates</strong> into
-    <strong>embeddings</strong>, fuses them into one vector, stores them in a
-    <strong>database</strong>, and answers <strong>searches</strong> — with the whole
-    pipeline running live in your browser below.
-    <a href="https://github.com/sugeerth/clip-vlm-101">Read the code on GitHub →</a>
-  </p>
 
-  <h2>1 · How it works</h2>
-  <p class="sub">Both CLIP encoders project into the <em>same</em> vector space, so a cat photo and the
-  sentence “a photo of a cat” land close together. Everything below is dot products between unit vectors.</p>
-  <div class="pipe">
-    <div class="step"><b>Image</b><span>uploaded, or one of the 14 examples</span></div>
-    <div class="arrow">→</div>
-    <div class="step"><b>Vision encoder</b><span>image_emb — 512 numbers: what it <em>looks</em> like</span></div>
-    <div class="arrow">→</div>
-    <div class="step"><b>Prompt template</b><span>“a photo of a {tag}” × vocabulary → top tags = <em>meta&nbsp;tags</em></span></div>
-    <div class="arrow">→</div>
-    <div class="step"><b>Text encoder</b><span>text_emb — 512 numbers: what its caption <em>means</em></span></div>
-    <div class="arrow">→</div>
-    <div class="step"><b>Concatenate</b><span>fused_emb = [image ; text] / √2 — 1024 numbers, both signals</span></div>
-    <div class="arrow">→</div>
-    <div class="step"><b>Database</b><span>SQLite row: path · caption · tags · 3 vectors</span></div>
-    <div class="arrow">→</div>
-    <div class="step"><b>Retrieval</b><span>query → embedding → dot products → top-k</span></div>
-  </div>
-
-  <h2>2 · The database</h2>
-  <p class="sub">These 14 images were ingested by <code>ingest.py</code>: embedded, auto-tagged with the
-  prompt template (zero-shot — no training), captioned, and stored. Every SQLite row carries exactly
-  three vectors (this page loads the exported <code>image_emb</code> + <code>text_emb</code> and
-  recomputes the fused score as their average — same math):</p>
-  <div class="card">
-    <table>
-      <tr><th>vector</th><th>shape</th><th>dtype</th><th>bytes as BLOB</th><th>meaning</th></tr>
-      <tr><td><code>image_emb</code></td><td><code>(512,)</code></td><td>float32, unit-length</td><td>2 048</td><td>what the image <em>looks</em> like (vision tower)</td></tr>
-      <tr><td><code>text_emb</code></td><td><code>(512,)</code></td><td>float32, unit-length</td><td>2 048</td><td>what its caption/tags <em>mean</em> (text tower)</td></tr>
-      <tr><td><code>fused_emb</code></td><td><code>(1024,)</code></td><td>float32, unit-length</td><td>4 096</td><td><code>[image_emb ; text_emb] / √2</code> — both signals</td></tr>
-    </table>
-  </div>
-  <div class="grid" id="gallery"></div>
-
-  <h2>3 · See the embeddings</h2>
-  <p class="sub">Every 512-number embedding is squashed to a dot on a 2-D map with PCA (computed by
-  <code>export_web.py</code>) — images that look alike land close together. <strong>Click any image</strong>
-  to see its raw numbers as a fingerprint strip; upload your own below and it appears on this map too.</p>
-  <div class="card">
-    <svg id="map" viewBox="0 0 100 62" role="img" aria-label="2-D PCA map of the image embeddings"></svg>
-    <div id="mapDetail"></div>
-  </div>
-
-  <h2>4 · Search it</h2>
-  <div class="card">
-    <input type="search" id="q" placeholder="Describe what you're looking for… e.g. a fluffy animal" autocomplete="off">
-    <div class="row" id="examples"></div>
-    <div class="row mode" id="modes">
-      <label><input type="radio" name="mode" value="fused" checked> fused — average of both</label>
-      <label><input type="radio" name="mode" value="image"> image — visual match</label>
-      <label><input type="radio" name="mode" value="text"> text — tag/caption match</label>
+<header>
+  <nav class="nav" aria-label="Sections">
+    <a class="wordmark" href="#top">CLIP&nbsp;VLM&nbsp;<span class="dim">101</span></a>
+    <div class="nav-links">
+      <a href="#idea">The idea</a>
+      <a href="#pipeline">Pipeline</a>
+      <a href="#map">Map</a>
+      <a href="#search">Search</a>
+      <a href="#lab">The Lab</a>
+      <a href="#optimize">Optimize</a>
     </div>
-    <p class="status" id="searchStatus">The CLIP text encoder loads on your first search (~65&nbsp;MB, cached after that).</p>
-    <div class="bar-track hidden" id="loadTrack"><div class="bar-fill" id="loadFill" style="width:0%"></div></div>
-    <div id="results"></div>
-  </div>
+    <a class="gh" href="https://github.com/sugeerth/clip-vlm-101">GitHub ↗</a>
+    <button id="themeToggle" title="Toggle light / dark" aria-label="Toggle light or dark theme">◐</button>
+  </nav>
+</header>
 
-  <h2>5 · Or upload your own image</h2>
-  <div class="card">
-    <div class="drop" id="drop">
-      <strong>Click or drop an image here.</strong><br>
-      It is embedded and tagged <em>in your browser</em> — nothing is uploaded anywhere.
-      <input type="file" id="file" accept="image/*" class="hidden">
+<main id="top">
+
+  <!-- ================================================================ hero -->
+  <div class="hero">
+    <h1>See what a vision-language model <em>sees</em>.</h1>
+    <p class="lede">
+      CLIP maps <strong>images</strong> and <strong>sentences</strong> into the same
+      512-dimensional space, so “how similar are this photo and this phrase?” is a single
+      dot product. This page walks the whole pipeline — embeddings, zero-shot tags,
+      dynamic multi-label classification, a self-critiquing agent — and every demo runs
+      <strong>live in your browser</strong>. Nothing you type or upload leaves your machine.
+    </p>
+    <div class="cta-row">
+      <a class="btn primary" href="#search">Try the search</a>
+      <a class="btn ghost" href="#lab">Open the Lab</a>
+      <a class="btn ghost" href="https://github.com/sugeerth/clip-vlm-101">Read the code</a>
     </div>
-    <img id="uploadPreview" class="hidden" alt="your uploaded image">
-    <p class="status" id="uploadStatus"></p>
-    <div id="uploadTags"></div>
-    <div id="uploadResults"></div>
+    <p class="fine">Model: openai/clip-vit-base-patch32, int8-quantized via transformers.js. Loads on first use (~65 MB text · ~90 MB vision), cached by your browser after that.</p>
   </div>
 
-  <h2>6 · Read the code</h2>
-  <p class="sub">One concept per file. The browser demo mirrors the Python pipeline with matching module names.</p>
-  <div class="card">
-    <table>
-      <tr><th>Python pipeline</th><th>what it teaches</th></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/templates.py"><code>templates.py</code></a></td><td>prompt templates: sentences with holes, filled per candidate tag</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/embedder.py"><code>embedder.py</code></a></td><td>CLIP → unit-length 512-d vectors for images and text</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/tagger.py"><code>tagger.py</code></a></td><td>zero-shot meta tags = dot products + argsort, no training</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/fusion.py"><code>fusion.py</code></a></td><td>the concatenation: [image ; text] / √2, and why the math works</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/features.py"><code>features.py</code></a></td><td>the one-call API: image → meta tags + all three embeddings</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/db.py"><code>db.py</code></a></td><td>vectors as float32 BLOBs in plain SQLite</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/ingest.py"><code>ingest.py</code></a></td><td>composes the pipeline: embed → tag → caption → fuse → store</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/search.py"><code>search.py</code></a></td><td>text / image / fused retrieval with dot products</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/export_web.py"><code>export_web.py</code></a></td><td>dump the SQLite gallery to the <code>db.json</code> this page uses</td></tr>
-      <tr><th>…and its browser twin</th><th>same pipeline, in JavaScript</th></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/templates.js"><code>js/templates.js</code></a></td><td>mirror of <code>templates.py</code> — same template, same vocabulary</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/clip.js"><code>js/clip.js</code></a></td><td>mirror of <code>embedder.py</code> — the same model via transformers.js</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/rank.js"><code>js/rank.js</code></a></td><td>mirror of <code>tagger.py</code> + <code>fusion.py</code> + <code>search.py</code> — the pure math</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/viz.js"><code>js/viz.js</code></a></td><td>the embedding map (PCA projection) + raw-value fingerprint strips</td></tr>
-      <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/app.js"><code>js/app.js</code></a></td><td>wires the modules to this page (gallery, map, search, upload)</td></tr>
-    </table>
-  </div>
+  <!-- ================================================================ idea -->
+  <section id="idea">
+    <p class="eyebrow">01 · The idea</p>
+    <h2>One space, two encoders — trained so the diagonal lights up</h2>
+    <p class="sub">
+      CLIP was trained contrastively on 400&nbsp;million (image, caption) pairs: pull each image
+      toward its own caption, push it away from every other. Below is that idea, live — each of the
+      14 gallery images scored against each of the 14 stored captions using the <em>exact vectors in
+      the database</em> (no model needed: the embeddings were computed at ingest time). Darker&nbsp;=
+      more similar. The bright diagonal is the training objective, visible.
+    </p>
+    <div class="card">
+      <div class="matrix-wrap">
+        <div class="matrix-grid" id="matrix" role="grid" aria-label="Image by caption similarity matrix"></div>
+        <div class="matrix-side">
+          <div class="matrix-readout" id="matrixReadout">
+            <span class="pair">Hover or tap any cell — rows are images, columns are their captions.
+            Every cell is one dot product: <code>image_emb · text_emb</code>.</span>
+          </div>
+          <div class="matrix-legend">
+            <span>less similar</span><span class="ramp" aria-hidden="true"></span><span>more similar</span>
+          </div>
+          <p class="hint">Raw CLIP cosines are small numbers (matches land around 0.2–0.35) —
+          that is why the model ships a learned temperature of ~100 to sharpen them before any
+          softmax. Section 06 uses it.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ pipeline -->
+  <section id="pipeline">
+    <p class="eyebrow">02 · The pipeline</p>
+    <h2>Seven steps from a JPEG to a searchable, recommendable item</h2>
+    <p class="sub">Each step is one small Python file — the browser demo mirrors them with matching
+    JavaScript modules (<a href="#code">reading map below</a>).</p>
+    <div class="card">
+      <div class="pipe">
+        <div class="step"><b>Image</b><span>uploaded, or one of the 14 examples</span></div>
+        <div class="step"><b>Vision encoder</b><span><code>image_emb</code> — 512 numbers: what it <em>looks</em> like</span></div>
+        <div class="step"><b>Prompt templates</b><span>“a photo of a {tag}” × vocabulary → zero-shot <em>meta&nbsp;tags</em></span></div>
+        <div class="step"><b>Text encoder</b><span><code>text_emb</code> — 512 numbers: what its caption <em>means</em></span></div>
+        <div class="step"><b>Fuse</b><span><code>[image ; text] / √2</code> — 1024 numbers, both signals</span></div>
+        <div class="step"><b>Critique</b><span>the agent checks its own work before anything is stored</span></div>
+        <div class="step"><b>Store &amp; serve</b><span>SQLite rows → search, or an item tower for recommendations</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================= gallery -->
+  <section id="gallery-sec">
+    <p class="eyebrow">03 · The database</p>
+    <h2>Fourteen images, embedded and auto-tagged at ingest</h2>
+    <p class="sub">Every row in <code>gallery.sqlite</code> stores a path, a caption, meta tags, and
+    three float32 vectors (512 + 512 + 1024). Click any image to open it in
+    <a href="#lab">the Lab</a> and inspect its actual numbers.</p>
+    <div class="grid" id="gallery"></div>
+  </section>
+
+  <!-- ================================================================= map -->
+  <section id="map-sec">
+    <p class="eyebrow">04 · The embedding space</p>
+    <h2>All 512 dimensions, squashed onto your screen</h2>
+    <p class="sub">PCA projects each image embedding to two dimensions — images that <em>look</em>
+    alike land close together. Hover to see each image’s nearest neighbours in the full 512-d space
+    (thin lines); click to open it in the Lab. Upload something in the Lab and it appears here too.</p>
+    <div class="card">
+      <div class="map-wrap" id="mapWrap">
+        <svg id="map" viewBox="0 0 100 62" role="img" aria-label="2-D PCA map of the image embeddings"></svg>
+      </div>
+      <p class="hint">The two axes are the top principal components — directions of most variation,
+      not nameable concepts. Distances here approximate (poorly but usefully) distances in 512-d.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================== search -->
+  <section id="search">
+    <p class="eyebrow">05 · Search</p>
+    <h2>Type a sentence, rank the database</h2>
+    <p class="sub">Your query goes through the <em>text</em> encoder; every stored vector is compared
+    with one dot product. Switch the mode to feel the difference between matching what images
+    <em>look like</em> and what they <em>mean</em>.</p>
+    <div class="card">
+      <input type="search" id="q" placeholder="Describe what you’re looking for… e.g. a fluffy animal" autocomplete="off" aria-label="Search query">
+      <div class="row" id="examples"></div>
+      <div class="row">
+        <div class="seg" id="modes" role="radiogroup" aria-label="Similarity mode">
+          <label><input type="radio" name="mode" value="fused" checked><span>fused</span></label>
+          <label><input type="radio" name="mode" value="image"><span>image</span></label>
+          <label><input type="radio" name="mode" value="text"><span>text</span></label>
+        </div>
+        <span class="mode-note" id="modeNote">average of visual + semantic similarity — one vector, both signals</span>
+      </div>
+      <p class="status" id="searchStatus">The CLIP text encoder loads on your first search (~65&nbsp;MB, cached after that).</p>
+      <div class="bar-track hidden" id="loadTrack"><div class="bar-fill" id="loadFill" style="width:0%"></div></div>
+      <div id="results" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <!-- ================================================================= lab -->
+  <section id="lab">
+    <p class="eyebrow">06 · The Lab</p>
+    <h2>Pick an image. Watch it become data.</h2>
+    <p class="sub">Choose a gallery image or upload your own, then explore its full record:
+    multi-class tags vs a <em>dynamic</em> multi-label set (drag the threshold!), the embedding
+    agent auditing its own work, and the raw vectors that end up in the database.</p>
+    <div class="card">
+      <div class="lab-pickers" id="labPickers">
+        <label class="drop" id="drop">
+          upload your own ↑
+          <input type="file" id="file" accept="image/*" class="hidden">
+        </label>
+      </div>
+      <p class="status" id="labStatus"></p>
+      <div class="bar-track hidden" id="labTrack"><div class="bar-fill" id="labFill" style="width:0%"></div></div>
+
+      <div class="lab-subject hidden" id="labSubject">
+        <img id="subjectImg" alt="the image being analyzed">
+        <div class="about">
+          <div id="subjectCaption" class="sub" style="margin-bottom:8px"></div>
+          <div id="subjectStrips"></div>
+        </div>
+      </div>
+
+      <div class="lab-cols hidden" id="labCols">
+        <div>
+          <h3>Multi-class: top-5 tags</h3>
+          <p class="h-sub">argsort the scores, keep 5 — every image gets exactly five, no matter what’s in it (<code>tagger.py</code>)</p>
+          <div id="topkList"></div>
+        </div>
+        <div>
+          <h3>Multi-label: every tag decides for itself</h3>
+          <p class="h-sub">per-tag sigmoid against the neutral prompt “a photo” — the label set is sized by the image (<code>labels.py</code>)</p>
+          <div class="thresh-row">
+            <span>threshold</span>
+            <input type="range" id="thresh" min="0.30" max="0.90" step="0.01" value="0.50" aria-label="Label probability threshold">
+            <span class="tval" id="threshVal">0.50</span>
+          </div>
+          <div id="labelList"></div>
+          <p class="hint" id="labelSummary"></p>
+        </div>
+      </div>
+
+      <div class="agent-panel hidden" id="agentPanel">
+        <h3>The embedding agent: propose ⇄ critique</h3>
+        <p class="h-sub" style="color:var(--muted);font-size:0.78rem">Each round drafts labels + a caption
+        through one prompt template, then a critic checks the work: does the caption’s embedding point back
+        at the image (<em>aligned</em> ≥ 0.20)? Are the labels sure of themselves (<em>confident</em> ≥ 0.60)?
+        Only a record that passes gets published (<code>agent.py</code> · <code>item_tower.py</code>).</p>
+        <button class="btn primary" id="runAgent" type="button">Run the agent on this image</button>
+        <div id="rounds"></div>
+        <div id="verdict" class="verdict"></div>
+        <div id="recordOut"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ optimize -->
+  <section id="optimize">
+    <p class="eyebrow">07 · Optimize it</p>
+    <h2>Same model, same weights, better answers</h2>
+    <p class="sub">Everything above uses one checkpoint. These four levers — all implemented in the
+    Python pipeline — make it more accurate or much faster without training anything.</p>
+    <div class="opt-grid">
+      <div class="card"><b>Prompt ensembling</b>
+        <p>Embed each tag through many phrasings — “a photo of…”, “a drawing of…”, “a close-up of…” —
+        and average the unit vectors. Phrasing noise cancels; meaning stays. <code>ensemble.py</code></p>
+        <span class="gain">+3.5% zero-shot accuracy (CLIP paper, 80 templates)</span></div>
+      <div class="card"><b>Batching</b>
+        <p>One forward pass per tower per chunk of images, instead of two round-trips per image.
+        The encoders are happiest when fed. <code>features.extract_batch</code></p>
+        <span class="gain">~an order of magnitude on GPU ingest</span></div>
+      <div class="card"><b>Quantization</b>
+        <p>This very page runs the checkpoint in int8 (<code>q8</code>) — rankings barely move,
+        downloads and memory shrink ~4×. The full-precision model stays offline.</p>
+        <span class="gain">4× smaller, near-identical rankings</span></div>
+      <div class="card"><b>Precompute the item side</b>
+        <p>Embeddings never change after ingest — so compute them offline, verify them with the agent,
+        and serve rankings as one matrix multiply. <code>item_tower.py</code></p>
+        <span class="gain">zero model calls at serving time</span></div>
+    </div>
+  </section>
+
+  <!-- ================================================================ code -->
+  <section id="code">
+    <p class="eyebrow">08 · Read the code</p>
+    <h2>One concept per file, in two languages</h2>
+    <p class="sub">The browser demo mirrors the Python pipeline with matching module names — read a
+    Python file, then its twin. Same pipeline, same math.</p>
+    <div class="card">
+      <table>
+        <tr><th>Python pipeline</th><th>what it teaches</th></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/templates.py"><code>templates.py</code></a></td><td>prompt templates: sentences with holes, filled per candidate tag</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/embedder.py"><code>embedder.py</code></a></td><td>CLIP → unit-length 512-d vectors for images and text</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/tagger.py"><code>tagger.py</code></a></td><td>multi-class zero-shot tags: dot products + argsort, no training</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/labels.py"><code>labels.py</code></a></td><td>multi-label: per-tag sigmoid vs a neutral prompt → dynamic label sets</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/ensemble.py"><code>ensemble.py</code></a></td><td>prompt ensembling: average many templates per tag</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/fusion.py"><code>fusion.py</code></a></td><td>the concatenation: [image ; text] / √2, and why the math works</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/features.py"><code>features.py</code></a></td><td>the one-call API: image → meta tags + all three embeddings</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/agent.py"><code>agent.py</code></a></td><td>the agent: propose ⇄ critique loop, publishes only when satisfied</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/db.py"><code>db.py</code></a></td><td>vectors as float32 BLOBs in plain SQLite</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/ingest.py"><code>ingest.py</code></a></td><td>composes the pipeline, in batches: embed → tag → caption → fuse → store</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/item_tower.py"><code>item_tower.py</code></a></td><td>two-tower recsys: agent-verified item embeddings, offline</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/search.py"><code>search.py</code></a></td><td>text / image / fused retrieval with dot products</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/export_web.py"><code>export_web.py</code></a></td><td>dump the SQLite gallery to the <code>db.json</code> this page uses</td></tr>
+        <tr><th>…and its browser twin</th><th>same pipeline, in JavaScript</th></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/templates.js"><code>js/templates.js</code></a></td><td>mirror of <code>templates.py</code> — templates, vocabulary, agent pool</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/clip.js"><code>js/clip.js</code></a></td><td>mirror of <code>embedder.py</code> — the same model via transformers.js</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/rank.js"><code>js/rank.js</code></a></td><td>mirror of <code>tagger.py</code> + <code>fusion.py</code> + <code>search.py</code></td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/labels.js"><code>js/labels.js</code></a></td><td>mirror of <code>labels.py</code> — the per-tag sigmoid</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/agent.js"><code>js/agent.js</code></a></td><td>mirror of <code>agent.py</code> — propose ⇄ critique in the browser</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/viz.js"><code>js/viz.js</code></a></td><td>the matrix, the map, and the fingerprint strips</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/app.js"><code>js/app.js</code></a></td><td>wires the modules to this page</td></tr>
+      </table>
+    </div>
+  </section>
 
   <p class="foot">
     Model: <a href="https://huggingface.co/openai/clip-vit-base-patch32">openai/clip-vit-base-patch32</a>,
