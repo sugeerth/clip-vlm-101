@@ -411,3 +411,15 @@ th { border-top: none; color: var(--ink-2); font-weight: 600; }
 .foot { margin-top: 84px; font-size: 0.8rem; color: var(--muted); border-top: 1px solid var(--hairline); padding-top: 16px; }
 .hidden { display: none !important; }
 img { max-width: 100%; }
+
+/* ------------------------------------------------------- lessons, live --- */
+.lsn-slider { display: flex; align-items: center; gap: 10px; font-size: 0.85rem; color: var(--ink-2); margin: 6px 0 10px; }
+.lsn-slider input[type=range] { flex: 1; max-width: 340px; accent-color: var(--accent); }
+.lsn-slider b { font-variant-numeric: tabular-nums; min-width: 3ch; color: var(--ink); }
+.lsn-wide .meter-row { grid-template-columns: 180px 1fr 64px; }
+.lsn-arith { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lsn-arith select {
+  font: inherit; font-size: 0.85rem; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--hairline); border-radius: 8px; padding: 4px 8px;
+}
+#evalTable th, #evalTable td { font-variant-numeric: tabular-nums; }

@@ -3,7 +3,7 @@
 //   labels.js (multi-label) · agent.js (propose ⇄ critique) · viz.js (pictures)
 // Sections below match the page: theme, matrix, gallery, map, search, lab.
 import { VOCAB, tagPrompts, NEUTRAL_PROMPT } from './templates.js';
-import { dot, rank, topTags, fuse } from './rank.js';
+import { dot, rank, topTags, fuse, softmax } from './rank.js';
 import { labelProbs } from './labels.js';
 import { runAgent, MIN_ALIGNED, MIN_CONFIDENT } from './agent.js';
 import { recommend, userVector } from './recsys.js';
@@ -11,6 +11,7 @@ import { flip, tweenNumber, motionOK } from './motion.js';
 import { startTour } from './tour.js';
 import { getTextEncoder, getImageEncoder } from './clip.js';
 import { drawMatrix, drawMap, markUpload, project, stripRow, redrawStrips } from './viz.js';
+import { modalityGap, evalRetrieval, combine, quantizeInt8, topNeighbors } from './lessons.js';
 
 const $ = id => document.getElementById(id);
 const EXAMPLES = ['a fluffy animal', 'famous landmark in europe',
@@ -605,3 +606,85 @@ $('runAgent').addEventListener('click', async () => {
 });
 
 restoreFromURL();
+
+// ----------------------------------------------------------- lessons, live --
+// The five standalone Python lessons, mirrored by lessons.js on this data —
+// same math, same numbers (test_lessons.mjs holds both languages to it).
+if (DB.items.length) {
+  const short = it => it.file.split('_').pop().replace('.jpg', '');
+
+  // temperature.py — drag the logit scale, watch confidence emerge
+  const catItem = DB.items.find(it => it.file.includes('cat')) ?? DB.items[0];
+  const tempScores = DB.items.map(it => dot(it.image_emb, catItem.text_emb));
+  const renderTemp = scale => {
+    $('tempScaleVal').textContent = scale;
+    const p = softmax(tempScores, scale);
+    const order = [...p.keys()].sort((a, b) => p[b] - p[a]);
+    const rest = order.slice(5).reduce((s, i) => s + p[i], 0);
+    $('tempMeters').replaceChildren(
+      ...order.slice(0, 5).map((i, r) =>
+        meterRow(short(DB.items[i]), p[i], (100 * p[i]).toFixed(1) + '%', r === 0, null)),
+      meterRow(`${order.length - 5} others`, rest, (100 * rest).toFixed(1) + '%', false, null));
+  };
+  $('tempScale').addEventListener('input', () => renderTemp(+$('tempScale').value));
+  renderTemp(+$('tempScale').value);
+
+  // similarity.py — the modality gap, as four mean-similarity meters
+  const gap = modalityGap(DB.items);
+  const gapWrap = Object.assign(document.createElement('div'), { className: 'lsn-wide' });
+  for (const [label, v] of Object.entries(gap))
+    gapWrap.append(meterRow(label, v / 0.75, v.toFixed(3), label === 'image · OWN caption', null));
+  $('gapMeters').append(gapWrap);
+
+  // retrieval_eval.py — leave-one-out P@k + MRR for all three modes
+  const tbl = document.createElement('table');
+  const head = tbl.insertRow();
+  head.append(...['mode', 'P@1', 'P@3', 'P@5', 'MRR'].map(t =>
+    Object.assign(document.createElement('th'), { textContent: t })));
+  for (const mode of ['image', 'text', 'fused']) {
+    const m = evalRetrieval(DB.items, mode);
+    const tr = tbl.insertRow();
+    tr.append(Object.assign(document.createElement('th'), { textContent: mode }),
+      ...['P@1', 'P@3', 'P@5', 'MRR'].map(k =>
+        Object.assign(document.createElement('td'), { textContent: m[k].toFixed(3) })));
+  }
+  $('evalTable').append(tbl);
+
+  // arithmetic.py — pick images, combine in embedding space, rank
+  const fillSelect = (el, withNone) => {
+    if (withNone) el.append(Object.assign(document.createElement('option'),
+      { value: -1, textContent: '— nothing —' }));
+    DB.items.forEach((it, i) => el.append(Object.assign(document.createElement('option'),
+      { value: i, textContent: short(it) })));
+  };
+  fillSelect($('arithA'), false); fillSelect($('arithB'), true); fillSelect($('arithC'), true);
+  const idxOf = name => DB.items.findIndex(it => it.file.includes(name));
+  $('arithA').value = idxOf('cat'); $('arithB').value = idxOf('dog'); $('arithC').value = idxOf('apple');
+  const renderArith = () => {
+    const picks = [[+$('arithA').value, 1], [+$('arithB').value, 1], [+$('arithC').value, -1]]
+      .filter(([i]) => i >= 0);
+    const q = combine(picks.map(([i]) => DB.items[i].image_emb), picks.map(([, c]) => c));
+    if (!q) {
+      $('arithOut').replaceChildren(Object.assign(document.createElement('p'),
+        { className: 'hint', textContent: 'That combination cancelled itself out to zero — nothing to rank.' }));
+      return;
+    }
+    renderResults($('arithOut'), DB.items.map(item => ({ item, score: dot(item.image_emb, q) }))
+      .sort((a, b) => b.score - a.score).slice(0, 3));
+  };
+  ['arithA', 'arithB', 'arithC'].forEach(id => $(id).addEventListener('change', renderArith));
+  renderArith();
+
+  // quantize.py — computed live: 4x smaller, count what survived
+  const vecs = DB.items.map(it => it.image_emb);
+  const { q: qv, scale } = quantizeInt8(vecs);
+  const bytes = vecs.length * vecs[0].length * 4;
+  const exact = topNeighbors(vecs), approx = topNeighbors(qv);
+  const changed = DB.items.filter((_, i) => exact[i].join() !== approx[i].join());
+  $('quantSummary').textContent = `${bytes.toLocaleString('en-US')} bytes of float32 → `
+    + `${(bytes / 4).toLocaleString('en-US')} bytes of int8 plus one shared scale (${scale.toFixed(6)}) — 4× smaller. `
+    + `Computed just now: top-3 nearest neighbours identical for ${DB.items.length - changed.length} of ${DB.items.length} images.`;
+  $('quantDetail').textContent = changed.length
+    ? `Only ${changed.map(short).join(', ')} shuffles its neighbour list — ranking needs order, not precision.`
+    : 'Every neighbour list survives — ranking needs order, not precision.';
+}

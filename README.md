@@ -130,7 +130,10 @@ Suggested reading order:
 | `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 Five standalone lessons build on the stored vectors — every one runs
-**without the model** via `--json docs/db.json` (real committed embeddings):
+**without the model** via `--json docs/db.json` (real committed embeddings),
+and every one also runs **live on the [demo page](https://sugeerth.github.io/clip-vlm-101/#lessons)**,
+where `docs/js/lessons.js` reproduces the same numbers in JavaScript (CI
+holds both languages to it):
 
 | lesson | lines | the one concept it teaches |
 |---|---|---|
