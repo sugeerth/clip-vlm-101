@@ -317,6 +317,17 @@ function setSubject(s) {
   computeTagsAndLabels();
 }
 
+// -------------------------------------------------------- show the math --
+// Details on demand: formulas, component meters and raw vectors stay hidden
+// until asked for — the default view is the clean overview.
+for (const b of document.querySelectorAll('.math-toggle')) {
+  b.addEventListener('click', () => {
+    const on = b.closest('.card').classList.toggle('show-math');
+    b.textContent = on ? 'hide the math' : 'show the math';
+    b.setAttribute('aria-pressed', String(on));
+  });
+}
+
 // ------------------------------------------------- "you are here" in nav --
 // Purely additive polish: worst case is simply no highlight.
 const navFor = new Map([...document.querySelectorAll('.nav-links a')]
