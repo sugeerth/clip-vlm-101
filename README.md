@@ -4,10 +4,13 @@
 
 A deliberately tiny, readable pipeline that shows how a CLIP-style
 vision-language model turns **images + prompt templates** into **embeddings**,
-stores them in a **database**, and answers **searches**. Nine tiny pipeline
-files plus five standalone math lessons — one concept each — a sample
-downloader, and a smoke test.
-Standard-library SQLite, no frameworks. Read it top to bottom in 15 minutes,
+stores them in a **database**, and answers **searches** — then takes it one
+step further: **dynamic multi-label meta tags**, a **self-critiquing embedding
+agent** that only publishes features it can defend, and an **item tower**
+ready for two-tower recommendation, plus the serving half that turns likes
+into recommendations. Fourteen tiny pipeline files plus five standalone math
+lessons — one concept each — a sample downloader, and a smoke test.
+Standard-library SQLite, no frameworks. Read it top to bottom in 20 minutes,
 then swap in your own images.
 
 ## The whole idea in one picture
@@ -27,6 +30,21 @@ then swap in your own images.
  search: "a fluffy animal" ──► text encoder ──► dot products ──► top-k results
 ```
 
+And the recommendation-ready extension on top of the same vectors:
+
+```
+ image_emb  ×  "a photo of a {tag}" vs "a photo"   per-tag sigmoid (labels.py)
+      └──► DYNAMIC multi-label set {cat: 0.99, pet: 0.87}  — sized by the image
+                          │
+        agent loop (agent.py): PROPOSE draft ──► CRITIC checks it
+                          │        ▲    aligned? confident?│
+                          │        └──── no: next template ┘ yes ──► publish
+                          │
+        item_tower.py: items.sqlite — verified item embeddings, OFFLINE
+                          │
+        user_tower.py: likes ─► unit(mean) ─► user_vec · every item = recs
+```
+
 Both encoders project into the **same** vector space, so an image of a cat and
 the sentence "a photo of a cat" land close together. Everything here — tagging,
 captioning, search — is just cosine similarity between unit vectors, which is a
@@ -41,6 +59,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python ingest.py images/*.jpg     # embed + auto-tag + store in SQLite
 .venv/bin/python search.py "a fluffy animal"
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
+.venv/bin/python item_tower.py images/*.jpg  # agent-verified item embeddings
+.venv/bin/python user_tower.py images/cat.jpg images/dog.jpg  # likes → recs
+.venv/bin/python eval.py images/*.jpg        # measure: template vs ensemble
 ```
 
 First run downloads the CLIP model (~600 MB). Device is auto-detected:
@@ -92,14 +113,20 @@ Suggested reading order:
 
 | file | lines | the one concept it teaches |
 |---|---|---|
-| `templates.py` | ~55 | prompt templates: sentences with holes, filled per tag |
+| `templates.py` | ~60 | prompt templates: sentences with holes, filled per tag |
 | `embedder.py` | ~55 | CLIP → unit-length 512-d vectors for images AND text |
 | `tagger.py` | ~25 | zero-shot meta tags = dot products + argsort, no training |
+| `labels.py` | ~55 | **multi-label**: per-tag sigmoid vs a neutral prompt → dynamic label sets |
+| `ensemble.py` | ~60 | **prompt ensembling**: average many templates per tag, +3.5% for free |
 | `fusion.py` | ~30 | the concatenation: `[image ; text] / √2`, and why it works |
-| `features.py` | ~160 | **the one-call API**: `embed()`, ensembled tags, batched records |
-| `db.py` | ~75 | vectors as float32 BLOBs in plain SQLite |
-| `ingest.py` | ~60 | *composition*: batch `features.extract_batch` over files → store |
-| `search.py` | ~85 | text / image / fused retrieval with dot products |
+| `features.py` | ~130 | **the one-call API**: image-only `embed()`, batch tags, full records |
+| `agent.py` | ~135 | **the agent**: propose ⇄ critique loop, publishes only when satisfied |
+| `db.py` | ~100 | vectors as float32 BLOBs in plain SQLite (+ the JSON gallery loader) |
+| `ingest.py` | ~65 | *composition*: batch `features.extract_batch` over files → store |
+| `item_tower.py` | ~120 | **two-tower recsys**: agent-verified item embeddings, offline |
+| `user_tower.py` | ~65 | **the serving half**: mean-pooled likes → recommendations, one matmul |
+| `eval.py` | ~100 | **the benchmark**: top-1/top-5 hit rates — prove an optimization helps |
+| `search.py` | ~90 | text / image / fused retrieval with dot products |
 | `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 Five standalone lessons build on the stored vectors — every one runs
@@ -108,8 +135,8 @@ Five standalone lessons build on the stored vectors — every one runs
 | lesson | lines | the one concept it teaches |
 |---|---|---|
 | `temperature.py` | ~50 | softmax + CLIP's learned logit scale: scores → probabilities |
-| `similarity.py` | ~90 | the N×N matrix + the modality gap (why scales don't mix) |
-| `evaluate.py` | ~80 | retrieval evaluation: leave-one-out precision@k and MRR |
+| `similarity.py` | ~90 | the N×N image matrix + the modality gap (why scales don't mix) |
+| `retrieval_eval.py` | ~80 | retrieval evaluation: leave-one-out precision@k and MRR |
 | `arithmetic.py` | ~90 | vector algebra: `cat + dog − apple`, centroids, renormalize |
 | `quantize.py` | ~75 | int8 scalar quantization: 4× smaller, measure the damage |
 
@@ -128,6 +155,110 @@ so a dot product against a duplicated query `[q ; q] / √2` equals the
 One vector, one dot product, both signals — no extra model, no re-ranking step.
 `search.py --mode image|text|fused` lets you compare all three behaviors.
 
+## Multi-class vs multi-label: dynamic meta tags
+
+`tagger.py` is multi-**class**: argsort the scores, keep the top k — every
+image gets exactly 5 tags whether it contains one thing or twelve.
+`labels.py` is multi-**label**: each tag answers its own yes/no question,
+so the label set is **dynamic**, sized by the image.
+
+The whole trick is one comparison per tag. For "cat", CLIP scores which
+sentence describes the image better — `"a photo of a cat"` (tag prompt) or
+`"a photo"` (the same sentence with no tag). A two-way softmax over the two
+scores collapses to a sigmoid on their gap: an independent probability per
+tag. Keep everything above 0.5:
+
+```python
+import labels
+labels.multi_label(image_emb, tag_embs, neutral_emb, vocabulary)
+# {'cat': 0.99, 'pet': 0.87}          ← 2 labels for a simple image
+# {'pizza': 0.98, 'food': 0.91, ...}  ← more labels for a busier one
+```
+
+New labels are new words in `templates.TAG_VOCABULARY` — still no training.
+
+## The embedding agent: propose ⇄ critique, publish only when satisfied
+
+`agent.py` doesn't take the model's first answer on faith. It drafts
+features, **checks its own work**, and refuses to publish a record it
+can't defend:
+
+```
+round 1..n   PROPOSER  one prompt template → labels + caption + vectors
+each round   CRITIC    aligned?   caption embedding · image embedding ≥ 0.20
+                       confident? accepted labels average ≥ 0.60 probability
+the edge     satisfied → stop, publish   |   not → next round, next template
+```
+
+Each round is a different proposer — a different phrasing from
+`templates.TEMPLATE_POOL`. The critic's checks are two dot products a human
+reviewer would approve of: *does the caption actually point back at the
+image?* and *how sure are the labels?* If no proposal passes, the best
+draft is returned **unpublished** and the caller decides.
+
+This is the same shape as a LangGraph state graph — two nodes (propose,
+critique) and one conditional edge (satisfied?) — hand-rolled in ~40 lines
+of plain Python so every decision stays readable. Swap in LangGraph (or any
+agent framework) when you need checkpointing, retries, or parallel fan-out
+across many workers; the loop's logic transfers unchanged.
+
+## Two-tower recommendation: the item side, done offline
+
+A two-tower recommender scores `(user, item)` pairs with a single dot
+product between two encoders that share a vector space. `item_tower.py` is
+the **item tower**: it runs the agent over your catalog images **offline**,
+and stores only critic-approved records in `items.sqlite` — labels with
+probabilities, caption, model version, timestamp, and the 1024-d fused
+embedding as the item vector.
+
+```bash
+.venv/bin/python item_tower.py images/*.jpg   # build the tower, offline
+```
+
+```python
+import item_tower
+con = item_tower.connect()
+paths, matrix = item_tower.item_matrix(con)   # (n, 1024) — the whole tower
+scores = matrix @ user_vec                    # rank every item: one matmul
+```
+
+`user_tower.py` is the serving half: the simplest honest user tower is the
+renormalized **mean of the liked items' vectors** (the same mean-pooling
+production systems bootstrap with), and recommending is `item_matrix @
+user_vec` — one matrix multiply, no image model at serving time. Swap the
+mean for a trained model later; nothing else changes. That's the point of
+two towers: the expensive half is finished ahead of time. Try it live in
+the demo's **Recommend** section — it runs on the stored vectors with no
+model download at all.
+
+## Understanding CLIP — and squeezing more out of it
+
+CLIP was trained contrastively on 400M (image, caption) pairs: pull each
+image toward its own caption, push it from everyone else's. Three facts
+fall out of that training, and every optimization here exploits one of them:
+
+1. **Both towers share one space** → similarity is a dot product, so
+   ranking a whole database is a single matrix multiply (`search.py`,
+   `item_tower.item_matrix`). No index needed until ~1M items.
+2. **The prompt is the classifier** → better phrasing = better accuracy,
+   for free. `ensemble.py` embeds each tag through many templates and
+   averages the unit vectors: phrasing noise cancels, meaning stays. The
+   CLIP paper's 80-template ensemble gains **+3.5%** ImageNet zero-shot
+   accuracy (~5% with prompt engineering); it costs one extra text batch,
+   once. Try it: `python3 features.py images/*.jpg --ensemble`
+3. **The model ships a learned temperature** (logit scale ≈ 100) → raw
+   cosines live in a narrow band (~0.2–0.35 for matches); multiply by the
+   scale before a softmax/sigmoid or every probability collapses toward
+   0.5. `labels.py` does exactly this.
+
+Speed levers, in the order worth pulling: **batch** your inputs — one
+forward pass per tower per chunk, not two round-trips per image
+(`features.extract_batch`, used by `ingest.py`); **cache** anything text —
+the vocabulary matrix never changes between runs; **quantize** for
+deployment — the browser demo runs the same checkpoint in int8 (`q8`),
+4× smaller with near-identical rankings; and **precompute the item side**
+entirely (`item_tower.py`) so serving never loads the model at all.
+
 ## Custom prompt templates
 
 The template is the interface to the model. Change it and re-ingest:
@@ -140,39 +271,27 @@ The template is the interface to the model. Change it and re-ingest:
 Add your own candidate tags in `templates.py` (`TAG_VOCABULARY`) — zero-shot
 tagging means new tags need **no training**, just new words.
 
-## Prompt ensembling — the CLIP paper's free accuracy boost
-
-One template is one *phrasing* of the question, and CLIP is sensitive to
-phrasing. The fix from the CLIP paper: embed each tag with **several**
-phrasings and average the vectors (then re-normalize — the math lives in
-`features.tag_embs`, the phrasings in `templates.ENSEMBLE_TAG_TEMPLATES`):
-
-```bash
-.venv/bin/python ingest.py images/*.jpg --ensemble        # all built-in phrasings
-.venv/bin/python ingest.py images/*.jpg \
-    --tag-template "a photo of a {tag}" \
-    --tag-template "a drawing of a {tag}"                  # or roll your own
-```
-
-The average cancels each phrasing's quirks; what survives is the tag's
-meaning. Zero training, one extra flag.
-
-Ingest is also **batched**: `features.extract_batch` runs each encoder once
-per chunk of 16 images instead of twice per file — the same trick that keeps
-real pipelines' GPUs busy.
-
 ## The web demo
 
-`docs/` is a static GitHub Pages site. `export_web.py` dumps the SQLite gallery
-to `docs/db.json`; the page then runs the *same* CLIP model in your browser via
-[transformers.js](https://huggingface.co/docs/transformers.js) to embed your
-query (text or an uploaded image) and ranks with the same dot products as
-`search.py`. Nothing you upload leaves your machine.
+`docs/` is a static GitHub Pages site — an explorable explanation in the
+[distill.pub](https://distill.pub) tradition. `export_web.py` dumps the SQLite
+gallery to `docs/db.json`; the page then runs the *same* CLIP model in your
+browser via [transformers.js](https://huggingface.co/docs/transformers.js).
+Nothing you type or upload leaves your machine. Highlights:
 
-The page also **visualizes the embeddings**: a 2-D PCA map of every image
-embedding (coordinates computed by `export_web.py`; similar images land close
-together — click any image for its raw-value fingerprint strip), and uploads
-are projected onto the same map live with two dot products.
+- **The contrastive matrix** — all 14 images × all 14 captions as one live
+  similarity heatmap, computed from the stored vectors (no model download
+  needed). The bright diagonal *is* the training objective.
+- **The embedding map** — 2-D PCA of every image embedding; hover for each
+  image's true nearest neighbours in 512-d, upload to see yours land on it.
+- **The Lab** — pick or upload an image, then compare multi-class top-5
+  against the dynamic multi-label set with a draggable threshold, and run
+  the embedding agent round by round, critic verdicts and all.
+- **Search** — text / image / fused retrieval with the same dot products as
+  `search.py`, plus a keyword fallback when the model can't load.
+
+Light and dark themes are both hand-tuned (toggle in the header), and every
+JS module mirrors its Python twin by name.
 
 ## Reproduce these numbers (no model, no downloads)
 
@@ -183,7 +302,7 @@ lesson runs on committed data — and CI re-runs all of them on every push:
 |---|---|
 | `python3 temperature.py` | top hit 7.9% at scale 1 → **99.7%** at CLIP's learned scale 100 |
 | `python3 similarity.py --json docs/db.json` | the modality gap: image·images **+0.57** vs image·own-caption **+0.29** |
-| `python3 evaluate.py --json docs/db.json` | image mode **P@1 = 0.857**, MRR ≈ 0.88 |
+| `python3 retrieval_eval.py --json docs/db.json` | image mode **P@1 = 0.857**, MRR ≈ 0.88 |
 | `python3 arithmetic.py --centroid animal --json docs/db.json` | top 4 = exactly the 4 animal images |
 | `python3 quantize.py --json docs/db.json` | 4× smaller, **39/42** top-3 neighbor slots unchanged |
 

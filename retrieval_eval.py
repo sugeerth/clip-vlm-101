@@ -12,7 +12,7 @@ Two honest caveats, both lessons in themselves:
   model being evaluated. Real evals need labels the model never made.
 - 14 images is a toy benchmark; the POINT is the protocol, not the digits.
 
-Run me:  python3 evaluate.py --json docs/db.json   # committed data, no model
+Run me:  python3 retrieval_eval.py --json docs/db.json   # committed data, no model
 """
 import argparse
 import os

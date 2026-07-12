@@ -23,18 +23,16 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", help="image files to ingest")
-    ap.add_argument("--tag-template", action="append",
-                    help="prompt template for tags; repeat the flag to ensemble")
+    ap.add_argument("--tag-template", default=templates.DEFAULT_TAG_TEMPLATE,
+                    help="the prompt template used for meta tags")
     ap.add_argument("--ensemble", action="store_true",
-                    help="tag with all built-in templates, averaged (CLIP-paper trick)")
+                    help="average many templates per tag (see ensemble.py)")
     ap.add_argument("--caption-template", default=templates.DEFAULT_CAPTION_TEMPLATE)
     ap.add_argument("--caption", help="your own caption (skips the template)")
     ap.add_argument("--db", default=db.DB_PATH)
     args = ap.parse_args()
     if args.caption and len(args.paths) > 1:
         ap.error("--caption is one caption for one image — ingest that file by itself")
-    tag_template = (templates.ENSEMBLE_TAG_TEMPLATES if args.ensemble
-                    else args.tag_template or templates.DEFAULT_TAG_TEMPLATE)
 
     # weed out unreadable files first, so one bad path can't spoil a batch
     paths = []
@@ -45,14 +43,22 @@ def main():
         except OSError as e:  # missing / truncated / not-an-image: skip, keep going
             print(f"  SKIP {p}: {e}")
 
-    fx = FeatureExtractor(tag_template, args.caption_template)
+    fx = FeatureExtractor(args.tag_template, args.caption_template,
+                          ensemble=args.ensemble)
     print(f"model {fx.clip.model.name_or_path} on {fx.clip.device}")
     con = db.connect(args.db)
 
-    for r in fx.extract_batch(paths, caption=args.caption):
-        db.add_image(con, r["path"], r["caption"], r["tags"],
-                     r["image_emb"], r["text_emb"], r["fused_emb"])
-        print(f"  + {r['path']}\n      tags    {r['tags']}\n      caption {r['caption']!r}")
+    # Batches keep the encoders fed: one forward pass per tower per chunk,
+    # not two round-trips per image (see features.extract_batch).
+    BATCH = 16
+    for start in range(0, len(paths), BATCH):
+        chunk = paths[start:start + BATCH]
+        records = ([fx.extract(p, caption=args.caption) for p in chunk]
+                   if args.caption else fx.extract_batch(chunk))
+        for r in records:
+            db.add_image(con, r["path"], r["caption"], r["tags"],
+                         r["image_emb"], r["text_emb"], r["fused_emb"])
+            print(f"  + {r['path']}\n      tags    {r['tags']}\n      caption {r['caption']!r}")
 
     print(f"done — {db.count_images(con)} images in {args.db}")
 
