@@ -52,8 +52,8 @@
       you type or upload leaves your machine.
     </p>
     <div class="cta-row">
-      <a class="btn primary" href="#search">Try the search</a>
-      <a class="btn ghost" href="#lab">Open the Lab</a>
+      <button class="btn primary" id="tourBtn" type="button">Take the 60-second tour</button>
+      <a class="btn ghost" href="#search">Try the search</a>
       <a class="btn ghost" href="https://github.com/sugeerth/clip-vlm-101">Read the code</a>
     </div>
     <p class="fine">Model: openai/clip-vit-base-patch32, int8-quantized via transformers.js. Loads on first use (~65 MB text · ~90 MB vision), cached by your browser after that.</p>
@@ -87,6 +87,9 @@
             <div class="body">Raw CLIP cosines live in a narrow band — matching pairs land around
             0.2–0.35. That is why the model ships a learned temperature of ~100 to sharpen them
             before any softmax; the Lab’s multi-label meters use it.</div>
+          </details>
+          <details class="more" id="matrixTable"><summary>View as a table</summary>
+            <div class="body table-scroll"></div>
           </details>
         </div>
       </div>
@@ -316,7 +319,9 @@
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/agent.js"><code>js/agent.js</code></a></td><td>mirror of <code>agent.py</code> — propose ⇄ critique in the browser</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/recsys.js"><code>js/recsys.js</code></a></td><td>mirror of <code>user_tower.py</code> — the recommender, no model needed</td></tr>
         <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/viz.js"><code>js/viz.js</code></a></td><td>the matrix, the map, and the fingerprint strips</td></tr>
-        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/app.js"><code>js/app.js</code></a></td><td>wires the modules to this page</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/motion.js"><code>js/motion.js</code></a></td><td>FLIP re-ranking + number tweens — smoothness with no failure modes</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/tour.js"><code>js/tour.js</code></a></td><td>the guided tour: a moving spotlight, one fixed card, zero coupling</td></tr>
+        <tr><td><a href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/app.js"><code>js/app.js</code></a></td><td>wires the modules to this page (+ deep links: state lives in the URL)</td></tr>
       </table>
     </div>
   </section>

@@ -8,6 +8,7 @@ import { labelProbs } from './labels.js';
 import { runAgent, MIN_ALIGNED, MIN_CONFIDENT } from './agent.js';
 import { recommend, userVector } from './recsys.js';
 import { flip, tweenNumber, motionOK } from './motion.js';
+import { startTour } from './tour.js';
 import { getTextEncoder, getImageEncoder } from './clip.js';
 import { drawMatrix, drawMap, markUpload, project, stripRow, redrawStrips } from './viz.js';
 
@@ -47,6 +48,24 @@ recolorMatrix = drawMatrix($('matrix'), DB.items, (imgItem, capItem, score, isDi
     ? 'This image scored against its own caption — the diagonal the training objective brightens.'
     : 'An off-diagonal pair — contrastive training pushes these apart.';
 });
+
+// Table twin of the heatmap (built lazily on first open): every value the
+// colors encode, readable without color at all.
+$('matrixTable').addEventListener('toggle', () => {
+  const body = $('matrixTable').querySelector('.table-scroll');
+  if (!$('matrixTable').open || body.children.length) return;
+  const table = document.createElement('table');
+  const head = table.insertRow();
+  head.append(Object.assign(document.createElement('th'), { textContent: 'image \\ caption' }),
+    ...DB.items.map((_, j) => Object.assign(document.createElement('th'), { textContent: j + 1 })));
+  DB.items.forEach((a, i) => {
+    const tr = table.insertRow();
+    tr.append(Object.assign(document.createElement('th'), { textContent: `${i + 1} · ${a.tags[0]}` }),
+      ...DB.items.map(b => Object.assign(document.createElement('td'),
+        { textContent: dot(a.image_emb, b.text_emb).toFixed(3) })));
+  });
+  body.append(table);
+}, { once: false });
 
 // ---------------------------------------------------------------- gallery --
 for (const item of DB.items) {
@@ -208,6 +227,7 @@ async function runSearch() {
     })));
     searchStatus.textContent =
       `“${query}” — ${mode} similarity, top 5 of ${DB.items.length}. Same math as search.py.`;
+    syncURL();
   } catch (err) {
     console.error(err);
     $('loadTrack').classList.add('hidden');
@@ -231,6 +251,7 @@ async function runSearch() {
 qInput.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
 document.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', () => {
   $('modeNote').textContent = MODE_NOTES[r.value];
+  syncURL();
   runSearch();
 }));
 for (const ex of EXAMPLES) {
@@ -315,7 +336,57 @@ function setSubject(s) {
     for (const id of ['labSubject', 'labCols'])
       $(id).animate([{ opacity: 0.2 }, { opacity: 1 }], { duration: 260, easing: 'ease' });
   computeTagsAndLabels();
+  syncURL();
 }
+
+// ------------------------------------------------------------ deep links --
+// The page's state fits in a URL: likes, query, mode, threshold, Lab pick.
+// replaceState keeps the address bar current without touching history.
+function syncURL() {
+  const p = new URLSearchParams();
+  if (likes.size) p.set('likes', [...likes].map(it => DB.items.indexOf(it)).join(','));
+  if (qInput.value.trim()) p.set('q', qInput.value.trim());
+  const mode = document.querySelector('input[name=mode]:checked').value;
+  if (mode !== 'fused') p.set('mode', mode);
+  if (+$('thresh').value !== 0.5) p.set('t', $('thresh').value);
+  if (subject && !subject.isUpload) {
+    p.set('pick', DB.items.findIndex(it => it.file === subject.src));
+  }
+  history.replaceState(null, '', p.size ? '?' + p : location.pathname);
+}
+
+function restoreFromURL() {
+  const p = new URLSearchParams(location.search);
+  if (p.get('q')) qInput.value = p.get('q');           // filled, not auto-run
+  if (p.get('mode')) {
+    const r = document.querySelector(`input[name=mode][value="${p.get('mode')}"]`);
+    if (r) { r.checked = true; $('modeNote').textContent = MODE_NOTES[r.value]; }
+  }
+  if (p.get('t')) { $('thresh').value = p.get('t'); $('threshVal').textContent = (+p.get('t')).toFixed(2); }
+  if (p.get('likes')) {
+    for (const idx of p.get('likes').split(',')) {
+      const item = DB.items[+idx], btn = $('likePickers').children[+idx];
+      if (!item || !btn) continue;
+      likes.add(item);
+      btn.classList.add('on'); btn.setAttribute('aria-pressed', 'true');
+    }
+    renderRecs();
+  }
+  const pick = p.has('pick') ? DB.items[+p.get('pick')] : null;
+  if (pick) setSubject(galSubject(pick));
+}
+
+// ------------------------------------------------------- the guided tour --
+$('tourBtn').addEventListener('click', () => startTour([
+  { sel: '#matrix', title: 'The idea', text: 'Every cell is one dot product between an image vector and a caption vector. The dark diagonal is CLIP’s training objective, visible in real data.' },
+  { sel: '#gallery', title: 'The database', text: 'Fourteen images, embedded and auto-tagged offline. Click any of them to open it in the Lab.' },
+  { sel: '#map', title: 'The embedding space', text: '512 dimensions squashed to two with PCA. Hover an image to see its true nearest neighbours; similar things live close together.' },
+  { sel: '#q', title: 'Search', text: 'Type anything. Your sentence becomes a vector and every image is one dot product away. (First search downloads the model — ~65 MB, once.)' },
+  { sel: '#labPickers', title: 'The Lab', text: 'Pick an image to compare multi-class vs dynamic multi-label tags, run the self-critiquing embedding agent, and inspect the raw vectors.' },
+  { sel: '#likePickers', title: 'Recommend', text: 'Tap hearts and a two-tower recommender ranks everything instantly — no model needed, because the item embeddings were computed offline.',
+    prep: () => { if (!likes.size) for (const i of [4, 5]) $('likePickers').children[i].click(); } },
+  { sel: '#optimize .opt-grid', title: 'Optimize it', text: 'Four levers — ensembling, batching, quantization, precomputation — each implemented in the Python repo, each measurable with eval.py.' },
+]));
 
 // -------------------------------------------------------- show the math --
 // Details on demand: formulas, component meters and raw vectors stay hidden
@@ -403,7 +474,7 @@ function renderLabels() {
     `${n} label${n === 1 ? '' : 's'} above ${threshold.toFixed(2)} — drag the threshold and watch ` +
     'the set resize. Multi-class always answers 5; multi-label answers what the image holds.';
 }
-$('thresh').addEventListener('input', renderLabels);
+$('thresh').addEventListener('input', () => { renderLabels(); syncURL(); });
 
 // -------------------------------------------------------------- recommend --
 // The user tower, served live: likes → mean vector → one dot product per
@@ -423,6 +494,7 @@ for (const item of DB.items) {
     b.classList.toggle('on', likes.has(item));
     b.setAttribute('aria-pressed', String(likes.has(item)));
     renderRecs();
+    syncURL();
   });
   $('likePickers').append(b);
 }
@@ -509,3 +581,5 @@ $('runAgent').addEventListener('click', async () => {
   }
   agentBusy = false;
 });
+
+restoreFromURL();
