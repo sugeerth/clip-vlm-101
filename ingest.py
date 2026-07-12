@@ -29,11 +29,17 @@ def main():
     print(f"model {fx.clip.model.name_or_path} on {fx.clip.device}")
     con = db.connect(args.db)
 
-    for path in args.paths:
-        r = fx.extract(path, caption=args.caption)
-        db.add_image(con, r["path"], r["caption"], r["tags"],
-                     r["image_emb"], r["text_emb"], r["fused_emb"])
-        print(f"  + {path}\n      tags    {r['tags']}\n      caption {r['caption']!r}")
+    # Batches keep the encoders fed: one forward pass per tower per chunk,
+    # not two round-trips per image (see features.extract_batch).
+    BATCH = 16
+    for start in range(0, len(args.paths), BATCH):
+        chunk = args.paths[start:start + BATCH]
+        records = ([fx.extract(p, caption=args.caption) for p in chunk]
+                   if args.caption else fx.extract_batch(chunk))
+        for r in records:
+            db.add_image(con, r["path"], r["caption"], r["tags"],
+                         r["image_emb"], r["text_emb"], r["fused_emb"])
+            print(f"  + {r['path']}\n      tags    {r['tags']}\n      caption {r['caption']!r}")
 
     print(f"done — {len(db.all_images(con))} images in {args.db}")
 

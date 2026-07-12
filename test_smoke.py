@@ -61,6 +61,47 @@ def test_feature_extractor():
     assert r["caption"] == templates.caption_for(r["tags"])
 
 
+def test_ensemble():
+    """ensemble.py: template-averaged tag vectors are unit-length and ordered."""
+    import ensemble
+
+    class CountingClip:
+        calls = 0
+        def embed_texts(self, texts):
+            CountingClip.calls += 1
+            rng = np.random.default_rng(7)
+            v = rng.normal(size=(len(texts), 32))
+            return (v / np.linalg.norm(v, axis=1, keepdims=True)).astype(np.float32)
+
+    vocab = ["cat", "dog", "car"]
+    embs = ensemble.ensemble_tag_embs(CountingClip(), vocab)
+    assert embs.shape == (3, 32)
+    assert np.allclose(np.linalg.norm(embs, axis=1), 1.0, atol=1e-5)
+    assert CountingClip.calls == 1   # ONE batch for all templates x tags
+
+
+def test_extract_batch():
+    """features.extract_batch: same records as extract(), one pass per tower."""
+    from features import FeatureExtractor
+
+    class StubClip:
+        def embed_texts(self, texts):
+            rng = np.random.default_rng(hash(tuple(texts)) % 2**32)
+            v = rng.normal(size=(len(texts), 512))
+            return (v / np.linalg.norm(v, axis=1, keepdims=True)).astype(np.float32)
+        def embed_images(self, paths):
+            rng = np.random.default_rng(0)
+            v = rng.normal(size=(len(paths), 512))
+            return (v / np.linalg.norm(v, axis=1, keepdims=True)).astype(np.float32)
+
+    fx = FeatureExtractor(clip=StubClip())
+    records = fx.extract_batch(["a.jpg", "b.jpg"])
+    assert [r["path"] for r in records] == ["a.jpg", "b.jpg"]
+    for r in records:
+        assert r["image_emb"].shape == (512,) and r["fused_emb"].shape == (1024,)
+        assert r["caption"] == templates.caption_for(r["tags"])
+
+
 def test_multi_label():
     """labels.py: per-tag sigmoid vs neutral prompt — the label set is dynamic."""
     import labels

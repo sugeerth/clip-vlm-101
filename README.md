@@ -113,6 +113,7 @@ Suggested reading order:
 | `embedder.py` | ~55 | CLIP → unit-length 512-d vectors for images AND text |
 | `tagger.py` | ~25 | zero-shot meta tags = dot products + argsort, no training |
 | `labels.py` | ~55 | **multi-label**: per-tag sigmoid vs a neutral prompt → dynamic label sets |
+| `ensemble.py` | ~60 | **prompt ensembling**: average many templates per tag, +3.5% for free |
 | `fusion.py` | ~30 | the concatenation: `[image ; text] / √2`, and why it works |
 | `features.py` | ~115 | **the one-call API**: image-only `embed()`, batch tags, full records |
 | `agent.py` | ~130 | **the agent**: propose ⇄ critique loop, publishes only when satisfied |
@@ -208,6 +209,34 @@ space); serving then never touches an image model — just this table and one
 matrix multiply. That's the point of two towers: the expensive half is
 finished ahead of time.
 
+## Understanding CLIP — and squeezing more out of it
+
+CLIP was trained contrastively on 400M (image, caption) pairs: pull each
+image toward its own caption, push it from everyone else's. Three facts
+fall out of that training, and every optimization here exploits one of them:
+
+1. **Both towers share one space** → similarity is a dot product, so
+   ranking a whole database is a single matrix multiply (`search.py`,
+   `item_tower.item_matrix`). No index needed until ~1M items.
+2. **The prompt is the classifier** → better phrasing = better accuracy,
+   for free. `ensemble.py` embeds each tag through many templates and
+   averages the unit vectors: phrasing noise cancels, meaning stays. The
+   CLIP paper's 80-template ensemble gains **+3.5%** ImageNet zero-shot
+   accuracy (~5% with prompt engineering); it costs one extra text batch,
+   once. Try it: `python3 features.py images/*.jpg --ensemble`
+3. **The model ships a learned temperature** (logit scale ≈ 100) → raw
+   cosines live in a narrow band (~0.2–0.35 for matches); multiply by the
+   scale before a softmax/sigmoid or every probability collapses toward
+   0.5. `labels.py` does exactly this.
+
+Speed levers, in the order worth pulling: **batch** your inputs — one
+forward pass per tower per chunk, not two round-trips per image
+(`features.extract_batch`, used by `ingest.py`); **cache** anything text —
+the vocabulary matrix never changes between runs; **quantize** for
+deployment — the browser demo runs the same checkpoint in int8 (`q8`),
+4× smaller with near-identical rankings; and **precompute the item side**
+entirely (`item_tower.py`) so serving never loads the model at all.
+
 ## Custom prompt templates
 
 The template is the interface to the model. Change it and re-ingest:
@@ -222,16 +251,25 @@ tagging means new tags need **no training**, just new words.
 
 ## The web demo
 
-`docs/` is a static GitHub Pages site. `export_web.py` dumps the SQLite gallery
-to `docs/db.json`; the page then runs the *same* CLIP model in your browser via
-[transformers.js](https://huggingface.co/docs/transformers.js) to embed your
-query (text or an uploaded image) and ranks with the same dot products as
-`search.py`. Nothing you upload leaves your machine.
+`docs/` is a static GitHub Pages site — an explorable explanation in the
+[distill.pub](https://distill.pub) tradition. `export_web.py` dumps the SQLite
+gallery to `docs/db.json`; the page then runs the *same* CLIP model in your
+browser via [transformers.js](https://huggingface.co/docs/transformers.js).
+Nothing you type or upload leaves your machine. Highlights:
 
-The page also **visualizes the embeddings**: a 2-D PCA map of every image
-embedding (coordinates computed by `export_web.py`; similar images land close
-together — click any image for its raw-value fingerprint strip), and uploads
-are projected onto the same map live with two dot products.
+- **The contrastive matrix** — all 14 images × all 14 captions as one live
+  similarity heatmap, computed from the stored vectors (no model download
+  needed). The bright diagonal *is* the training objective.
+- **The embedding map** — 2-D PCA of every image embedding; hover for each
+  image's true nearest neighbours in 512-d, upload to see yours land on it.
+- **The Lab** — pick or upload an image, then compare multi-class top-5
+  against the dynamic multi-label set with a draggable threshold, and run
+  the embedding agent round by round, critic verdicts and all.
+- **Search** — text / image / fused retrieval with the same dot products as
+  `search.py`, plus a keyword fallback when the model can't load.
+
+Light and dark themes are both hand-tuned (toggle in the header), and every
+JS module mirrors its Python twin by name.
 
 ## Tests
 
