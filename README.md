@@ -278,6 +278,13 @@ expands into the full trace of what it tried and why.
 Either way the output feeds the same pipeline: crawl → `ingest.py` →
 `export_web.py`, and the live search box now searches YOUR corpus.
 
+And **every search crawls, live**: the search box on the demo runs a web
+phase after each text query — it asks Commons for fresh matches, embeds
+the thumbnails *in your browser* with the vision tower, and ranks them
+under the gallery results with license receipts (`js/crawler.js`; toggle
+with the 🌐 chip). The Python twin: `hermes.py "red panda" --crawl 6`
+fetches, embeds and includes fresh images in that same search.
+
 ## Understanding CLIP — and squeezing more out of it
 
 CLIP was trained contrastively on 400M (image, caption) pairs: pull each

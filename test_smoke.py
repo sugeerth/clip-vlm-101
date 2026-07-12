@@ -176,6 +176,22 @@ def test_softmax():
     assert np.allclose(softmax([s + 7 for s in scores]), p)      # shift-invariant
 
 
+def test_hermes_extend():
+    """hermes.extend: crawled files join the working set for THIS search."""
+    import hermes
+
+    class StubFx:
+        def extract_batch(self, paths):
+            return [{"path": p, "tags": ["x"], "caption": "a photo of x",
+                     "image_emb": np.ones(4), "text_emb": np.ones(4),
+                     "fused_emb": np.ones(8) / np.sqrt(8)} for p in paths]
+
+    items = [{"path": "old.jpg"}]
+    grown = hermes.extend(items, [pathlib.Path("new1.jpg"), "new2.jpg"], StubFx())
+    assert [it["path"] for it in grown] == ["old.jpg", "new1.jpg", "new2.jpg"]
+    assert hermes.extend(items, [], StubFx()) == items   # no crawl, no change
+
+
 def test_spider():
     """spider.py: BFS a local fixture site — caps, robots, quality gate."""
     import http.server

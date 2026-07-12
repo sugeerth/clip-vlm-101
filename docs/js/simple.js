@@ -7,6 +7,7 @@
 import { dot } from './rank.js';
 import { hermesSearch, MIN_MARGIN } from './hermes.js';
 import { getTextEncoder, getImageEncoder } from './clip.js';
+import { discover } from './crawler.js';
 
 const $ = id => document.getElementById(id);
 const EXAMPLES = ['a fluffy animal', 'famous landmark in europe',
@@ -89,6 +90,7 @@ async function search() {
   try {
     if (imageQuery) {                         // image → image, like search.py --image
       hideTrace();
+      clearWeb();
       show(DB.items
         .map(item => ({ item, score: dot(item.image_emb, imageQuery.emb) }))
         .sort((a, b) => b.score - a.score).slice(0, TOP_K));
@@ -101,17 +103,90 @@ async function search() {
       const out = await hermesSearch(query, encodeText, DB.items, TOP_K);
       show(out.ranked);
       showTrace(out);
+      webPhase(query);               // fire-and-forget: local results never wait
     }
   } catch (err) {
     console.error(err);
     hideBar();
     hideTrace();
+    clearWeb();
     const hits = keywordResults(query);
     show(hits, hits.length ? 'model unavailable here — showing keyword matches'
                            : 'model unavailable and no keyword matches');
   }
   searching = false;
   if (rerun) { rerun = false; search(); }
+}
+
+// ----------------------------------------------------- the web phase --
+// Every text search also CRAWLS: ask Commons for fresh matches, embed the
+// thumbnails right here with the vision tower, rank, and show them under
+// the gallery results with attribution. Toggleable; never blocks local
+// results (it runs after them); scales are kept separate on purpose —
+// cross-modal cosines and fused scores don't mix.
+const webOn = () => localStorage.getItem('websearch') !== 'off';
+let webToken = 0;
+const webCache = new Map();          // thumb_url -> { emb, obj } per session
+
+function clearWeb() {
+  webToken++;
+  $('webHead').classList.add('hidden');
+  $('webResults').replaceChildren();
+}
+
+async function webPhase(query) {
+  if (!webOn()) { clearWeb(); return; }
+  const token = ++webToken;
+  const head = $('webHead'), grid = $('webResults');
+  head.classList.remove('hidden');
+  head.textContent = '🌐 searching the web (commons)…';
+  grid.replaceChildren();
+  try {
+    const [q] = await encodeText([query]);
+    const recs = await discover(query, 6);
+    if (token !== webToken) return;
+    if (!recs.length) { head.textContent = '🌐 the web had nothing for this query'; return; }
+    const encodeImage = await getImageEncoder(() => {}, progress);
+    hideBar();
+    const scored = [];
+    for (let i = 0; i < recs.length; i++) {
+      if (token !== webToken) return;
+      head.textContent = `🌐 from the web (commons) — embedding ${i + 1}/${recs.length} in your browser…`;
+      const rec = recs[i];
+      try {
+        if (!webCache.has(rec.thumb_url)) {
+          const blob = await (await fetch(rec.thumb_url)).blob();
+          webCache.set(rec.thumb_url,
+            { emb: await encodeImage(blob), obj: URL.createObjectURL(blob) });
+        }
+        const c = webCache.get(rec.thumb_url);
+        scored.push({ rec, obj: c.obj, score: dot(q, c.emb) });
+      } catch (e) { console.error('web thumb failed:', rec.thumb_url, e); }
+    }
+    if (token !== webToken) return;
+    scored.sort((a, b) => b.score - a.score);
+    head.textContent = scored.length
+      ? `🌐 from the web — ${scored.length} Commons images, discovered, embedded and ranked just now, locally`
+      : '🌐 the web had nothing usable for this query';
+    grid.replaceChildren(...scored.map(({ rec, obj }, i) => {
+      const fig = document.createElement('figure');
+      fig.className = 'linked';
+      fig.style.animationDelay = `${i * 45}ms`;
+      fig.tabIndex = 0;
+      fig.title = 'open the source page — attribution and license';
+      fig.append(
+        Object.assign(document.createElement('img'), { src: obj, alt: rec.name }),
+        Object.assign(document.createElement('figcaption'),
+          { textContent: `${rec.license || 'license: see source'} · commons ↗` }));
+      const open = () => window.open(rec.source, '_blank', 'noopener');
+      fig.addEventListener('click', open);
+      fig.addEventListener('keydown', e => { if (e.key === 'Enter') open(); });
+      return fig;
+    }));
+  } catch (err) {
+    console.error(err);              // offline / API down: vanish quietly
+    if (token === webToken) clearWeb();
+  }
 }
 
 // live search: instant once the model is warm, Enter always works
@@ -127,6 +202,24 @@ for (const ex of EXAMPLES) {
   b.addEventListener('click', () => { clearImageQuery(); $('q').value = ex; search(); });
   $('chips').append(b);
 }
+
+// the web toggle rides with the example chips; the preference persists
+const webBtn = Object.assign(document.createElement('button'),
+  { type: 'button', className: 'toggle' });
+const paintWebBtn = () => {
+  webBtn.textContent = webOn() ? '🌐 web results: on' : '🌐 web results: off';
+  webBtn.classList.toggle('on', webOn());
+  webBtn.setAttribute('aria-pressed', String(webOn()));
+};
+paintWebBtn();
+webBtn.addEventListener('click', () => {
+  localStorage.setItem('websearch', webOn() ? 'off' : 'on');
+  paintWebBtn();
+  const q = $('q').value.trim();
+  if (!webOn()) clearWeb();
+  else if (q && encodeText && !imageQuery) webPhase(q);
+});
+$('chips').append(webBtn);
 
 // ---------------------------------------------------- search by image --
 // Camera button, drop anywhere, or paste a copied image — same result:
