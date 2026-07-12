@@ -116,6 +116,12 @@ def search_image(query_item, items, k: int = 5, passes: int = 4) -> dict:
             "satisfied": ledger[-1]["verdict"] != "initial" or passes == 1}
 
 
+def extend(items, paths, fx):
+    """The crawl-then-search bridge: embed freshly crawled files and add
+    them to the working set, so THIS query already searches them."""
+    return items + fx.extract_batch([str(p) for p in paths]) if paths else items
+
+
 def search(query, encode_texts, items, k: int = 5, passes: int = 1) -> dict:
     """The loop. encode_texts: list[str] -> (n, 512) unit vectors."""
     phrasings = [templates.fill(t, q=query) for t in QUERY_TEMPLATES]
@@ -157,6 +163,9 @@ if __name__ == "__main__":
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--passes", type=int, default=4,
                     help="max evaluator-guarded feedback passes")
+    ap.add_argument("--crawl", type=int, metavar="N",
+                    help="every search crawls: fetch N fresh Commons images "
+                         "matching the query and include them in this search")
     args = ap.parse_args()
     if bool(args.query) == bool(args.image):
         ap.error("give a text query OR --image")
@@ -183,6 +192,12 @@ if __name__ == "__main__":
     from embedder import ClipEmbedder  # deferred: image queries never need it
 
     clip = ClipEmbedder()
+    if args.crawl:
+        import crawler
+        from features import FeatureExtractor
+        print(f"crawling the web for {args.query!r} (commons, n={args.crawl})…")
+        items = extend(items, crawler.crawl(args.query, args.crawl),
+                       FeatureExtractor(clip=clip))
     out = search(args.query, clip.embed_texts, items, args.k, passes=args.passes)
 
     print("hermes trace:")
