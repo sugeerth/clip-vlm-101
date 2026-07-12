@@ -153,6 +153,7 @@
         </div>
         <span class="mode-note" id="modeNote">average of visual + semantic similarity — one vector, both signals</span>
       </div>
+      <p class="formula">score(item) = query_emb · item vector&ensp;·&ensp;under each result: <b>looks</b> = q·image_emb, <b>means</b> = q·text_emb — fused is exactly their average</p>
       <p class="status" id="searchStatus">The CLIP text encoder loads on your first search (~65&nbsp;MB, cached after that).</p>
       <div class="bar-track hidden" id="loadTrack"><div class="bar-fill" id="loadFill" style="width:0%"></div></div>
       <div id="results" aria-live="polite"></div>
@@ -228,6 +229,8 @@
     (<code>user_tower.py</code>). No model runs here — this is exactly what serving looks like.</p>
     <div class="card">
       <div class="lab-pickers" id="likePickers" aria-label="Tap images to like them"></div>
+      <p class="formula">user_vec = unit( mean( [image ; text]/√2 of your likes ) )&ensp;·&ensp;score(item) = item_emb · user_vec = <b>looks + means</b></p>
+      <div id="userVec"></div>
       <p class="status" id="recStatus">Tap two or three images you like — recommendations appear instantly.</p>
       <div id="recResults" aria-live="polite"></div>
       <p class="hint" id="recExplain"></p>

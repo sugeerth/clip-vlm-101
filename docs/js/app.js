@@ -3,10 +3,11 @@
 //   labels.js (multi-label) · agent.js (propose ⇄ critique) · viz.js (pictures)
 // Sections below match the page: theme, matrix, gallery, map, search, lab.
 import { VOCAB, tagPrompts, NEUTRAL_PROMPT } from './templates.js';
-import { dot, rank, topTags } from './rank.js';
+import { dot, rank, topTags, fuse } from './rank.js';
 import { labelProbs } from './labels.js';
 import { runAgent, MIN_ALIGNED, MIN_CONFIDENT } from './agent.js';
-import { recommend } from './recsys.js';
+import { recommend, userVector } from './recsys.js';
+import { flip, tweenNumber, motionOK } from './motion.js';
 import { getTextEncoder, getImageEncoder } from './clip.js';
 import { drawMatrix, drawMap, markUpload, project, stripRow, redrawStrips } from './viz.js';
 
@@ -32,20 +33,19 @@ $('themeToggle').addEventListener('click', () => {
 });
 
 // --------------------------------------------------- contrastive matrix --
+// The readout keeps its elements so the value COUNTS toward each new cell
+// as you sweep the grid, instead of flickering.
+const mxVal = Object.assign(document.createElement('div'), { className: 'val', textContent: '0.000' });
+const mxPair = Object.assign(document.createElement('div'), { className: 'pair' });
+const mxNote = Object.assign(document.createElement('div'), { className: 'pair' });
 recolorMatrix = drawMatrix($('matrix'), DB.items, (imgItem, capItem, score, isDiag) => {
   const readout = $('matrixReadout');
-  readout.replaceChildren();
-  const val = document.createElement('div');
-  val.className = 'val'; val.textContent = score.toFixed(3);
-  const pair = document.createElement('div');
-  pair.className = 'pair';
-  pair.textContent = `image “${imgItem.tags[0]}” × caption “${capItem.caption}”`;
-  const note = document.createElement('div');
-  note.className = 'pair';
-  note.textContent = isDiag
+  if (!mxVal.isConnected) readout.replaceChildren(mxVal, mxPair, mxNote);
+  tweenNumber(mxVal, score);
+  mxPair.textContent = `image “${imgItem.tags[0]}” × caption “${capItem.caption}”`;
+  mxNote.textContent = isDiag
     ? 'This image scored against its own caption — the diagonal the training objective brightens.'
     : 'An off-diagonal pair — contrastive training pushes these apart.';
-  readout.append(val, pair, note);
 });
 
 // ---------------------------------------------------------------- gallery --
@@ -118,24 +118,65 @@ async function ensureTextEncoder(onStatus, onProgress) {
   };
 }
 
-// Ranked rows with thumbnails; bars are relative to the best hit,
-// the exact score is printed beside each bar (never inside it).
-function renderResults(el, ranked) {
-  el.replaceChildren();
-  const top = Math.max(...ranked.map(r => r.score), 1e-6);
-  for (const { item, score } of ranked) {
-    const row = document.createElement('div'); row.className = 'result';
-    const img = Object.assign(document.createElement('img'), { src: item.file, alt: item.caption });
-    const meta = document.createElement('div'); meta.className = 'meta';
-    const name = document.createElement('div'); name.className = 'name'; name.textContent = item.caption;
-    const track = document.createElement('div'); track.className = 'bar-track';
-    const fill = document.createElement('div'); fill.className = 'bar-fill';
-    fill.style.width = Math.max(2, Math.min(100, 100 * score / top)) + '%';
-    track.append(fill); meta.append(name, track);
-    const s = document.createElement('div'); s.className = 'score'; s.textContent = score.toFixed(3);
-    row.append(img, meta, s);
-    el.append(row);
+// Ranked rows with thumbnails; bars are relative to the best hit and the
+// exact score is printed beside each bar (never inside it). Rows PERSIST
+// across renders keyed by file, so re-ranking plays as motion (FLIP), bars
+// glide to their new widths, and scores count toward their new values.
+// Entries may carry a {looks, means, active} breakdown — the two component
+// similarities every fused score is made of — rendered as mini meters.
+function makeResultRow(item) {
+  const row = document.createElement('div'); row.className = 'result';
+  row.dataset.key = item.file;
+  const img = Object.assign(document.createElement('img'), { src: item.file, alt: item.caption });
+  const meta = document.createElement('div'); meta.className = 'meta';
+  const name = document.createElement('div'); name.className = 'name'; name.textContent = item.caption;
+  const track = document.createElement('div'); track.className = 'bar-track';
+  track.append(Object.assign(document.createElement('div'), { className: 'bar-fill' }));
+  const parts = document.createElement('div'); parts.className = 'parts hidden';
+  for (const which of ['looks', 'means']) {
+    const p = document.createElement('span'); p.className = `part ${which}`;
+    p.append(
+      Object.assign(document.createElement('span'), { className: 'plbl', textContent: which }),
+      Object.assign(document.createElement('span'), { className: 'pmeter' }),
+      Object.assign(document.createElement('span'), { className: 'pval', textContent: '0.000' }));
+    p.querySelector('.pmeter').append(
+      Object.assign(document.createElement('span'), { className: 'pfill' }));
+    parts.append(p);
   }
+  meta.append(name, track, parts);
+  const s = document.createElement('div'); s.className = 'score'; s.textContent = '0.000';
+  row.append(img, meta, s);
+  return row;
+}
+
+function renderResults(el, entries) {
+  const rows = (el._rows ??= new Map());
+  flip(el, () => {
+    const keep = new Set();
+    const top = Math.max(...entries.map(e => e.score), 1e-6);
+    for (const e of entries) {
+      keep.add(e.item.file);
+      let row = rows.get(e.item.file);
+      if (!row) rows.set(e.item.file, row = makeResultRow(e.item));
+      el.append(row);                                  // appends in rank order
+      row.querySelector('.bar-fill').style.width =
+        Math.max(2, Math.min(100, 100 * e.score / top)) + '%';
+      tweenNumber(row.querySelector('.score'), e.score);
+      const parts = row.querySelector('.parts');
+      parts.classList.toggle('hidden', e.looks === undefined);
+      if (e.looks !== undefined) {
+        const span = Math.max(e.looks, e.means, 1e-6);
+        for (const [which, val] of [['looks', e.looks], ['means', e.means]]) {
+          const p = parts.querySelector(`.${which}`);
+          p.classList.toggle('dim', e.active !== 'both' && e.active !== which);
+          p.querySelector('.pfill').style.width =
+            Math.max(2, Math.min(100, 100 * Math.max(0, val) / span)) + '%';
+          tweenNumber(p.querySelector('.pval'), val);
+        }
+      }
+    }
+    for (const [key, row] of rows) if (!keep.has(key)) { rows.delete(key); row.remove(); }
+  });
 }
 
 // ----------------------------------------------------------------- search --
@@ -158,7 +199,13 @@ async function runSearch() {
     $('loadTrack').classList.add('hidden');
     searchStatus.textContent = 'Embedding your query…';
     const [q] = await encode([query]);
-    renderResults($('results'), rank(DB.items, q, mode));
+    // every score decomposes into the two similarities it is made of:
+    // looks = q · image_emb, means = q · text_emb (fused = their average)
+    const active = { fused: 'both', image: 'looks', text: 'means' }[mode];
+    renderResults($('results'), rank(DB.items, q, mode).map(({ item, score }) => ({
+      item, score, active,
+      looks: dot(item.image_emb, q), means: dot(item.text_emb, q),
+    })));
     searchStatus.textContent =
       `“${query}” — ${mode} similarity, top 5 of ${DB.items.length}. Same math as search.py.`;
   } catch (err) {
@@ -264,8 +311,27 @@ function setSubject(s) {
   $('agentPanel').classList.remove('hidden');
   $('rounds').replaceChildren(); $('verdict').textContent = ''; $('verdict').className = 'verdict';
   $('recordOut').replaceChildren();
+  if (motionOK())   // crossfade the panel to the new subject
+    for (const id of ['labSubject', 'labCols'])
+      $(id).animate([{ opacity: 0.2 }, { opacity: 1 }], { duration: 260, easing: 'ease' });
   computeTagsAndLabels();
 }
+
+// ------------------------------------------------- "you are here" in nav --
+// Purely additive polish: worst case is simply no highlight.
+const navFor = new Map([...document.querySelectorAll('.nav-links a')]
+  .map(a => [a.getAttribute('href').slice(1), a]));
+const spy = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    const a = navFor.get(e.target.id === 'gallery-sec' ? 'idea'
+      : e.target.id === 'map-sec' ? 'map' : e.target.id);
+    if (a && e.isIntersecting) {
+      document.querySelectorAll('.nav-links a.here').forEach(x => x.classList.remove('here'));
+      a.classList.add('here');
+    }
+  }
+}, { rootMargin: '-20% 0px -60% 0px' });
+document.querySelectorAll('section[id]').forEach(s => spy.observe(s));
 
 // ---- multi-class vs multi-label columns -----------------------------------
 async function computeTagsAndLabels() {
@@ -352,17 +418,29 @@ for (const item of DB.items) {
 
 function renderRecs() {
   if (!likes.size) {
+    ($('recResults')._rows ??= new Map()).clear();
     $('recResults').replaceChildren();
+    $('userVec').replaceChildren();
     $('recStatus').textContent = 'Tap two or three images you like — recommendations appear instantly.';
     $('recExplain').textContent = '';
     return;
   }
-  renderResults($('recResults'), recommend(DB.items, [...likes], 5));
+  // THE user: one 1024-d vector, shown as it changes with every tap.
+  const u = userVector([...likes].map(it => fuse(it.image_emb, it.text_emb)));
+  $('userVec').replaceChildren(stripRow('user_vec', u));
+  // each recommendation's score splits into the two halves of the fused
+  // vector: looks (image side) + means (text side) — they literally add up.
+  const uImg = u.slice(0, 512), uTxt = u.slice(512);
+  renderResults($('recResults'), recommend(DB.items, [...likes], 5).map(({ item, score }) => ({
+    item, score, active: 'both',
+    looks: dot(item.image_emb, uImg) / Math.SQRT2,
+    means: dot(item.text_emb, uTxt) / Math.SQRT2,
+  })));
   $('recStatus').textContent =
     `user_vec = unit(mean of ${likes.size} liked item embedding${likes.size === 1 ? '' : 's'}) — ` +
-    'every score is one dot product, exactly like user_tower.py.';
+    'every score is one dot product, and looks + means sum to it exactly.';
   $('recExplain').textContent =
-    'Add or remove likes and watch the ranking shift. Liked items are never recommended back. ' +
+    'Add or remove likes and watch the ranking reshuffle. Liked items are never recommended back. ' +
     'Replace the mean with a trained user model later — nothing else changes.';
 }
 
