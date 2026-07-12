@@ -74,6 +74,7 @@ input[type="search"] {
   width: 56px; text-align: right; flex: 0 0 auto;
 }
 .result .bar-track { max-width: 420px; margin-top: 4px; }
+.result .parts { font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 3px; }
 
 /* upload */
 .drop {

@@ -58,7 +58,7 @@ const hideProgress = () => $('loadTrack').classList.add('hidden');
 function renderResults(el, ranked) {
   el.replaceChildren();
   const top = Math.max(...ranked.map(r => r.score), 1e-6);
-  for (const { item, score } of ranked) {
+  for (const { item, score, parts } of ranked) {
     const row = document.createElement('div'); row.className = 'result';
     const img = Object.assign(document.createElement('img'), { src: item.file, alt: item.caption });
     const meta = document.createElement('div'); meta.className = 'meta';
@@ -67,6 +67,12 @@ function renderResults(el, ranked) {
     const fill = document.createElement('div'); fill.className = 'bar-fill';
     fill.style.width = Math.max(2, Math.min(100, 100 * score / top)) + '%';
     track.append(fill); meta.append(name, track);
+    if (parts) { // fused mode: show which signal carried this hit
+      const p = document.createElement('div');
+      p.className = 'parts';
+      p.textContent = `= (image ${parts.image.toFixed(3)} + text ${parts.text.toFixed(3)}) / 2`;
+      meta.append(p);
+    }
     const s = document.createElement('div'); s.className = 'score'; s.textContent = score.toFixed(3);
     row.append(img, meta, s);
     el.append(row);
@@ -87,7 +93,10 @@ async function runSearch() {
     hideProgress();
     searchStatus.textContent = 'Embedding your query…';
     const [q] = await encode([query]);
-    renderResults($('results'), rank(DB.items, q, mode));
+    const ranked = rank(DB.items, q, mode);
+    if (mode === 'fused') for (const r of ranked) // same decomposition search.py prints
+      r.parts = { image: dot(r.item.image_emb, q), text: dot(r.item.text_emb, q) };
+    renderResults($('results'), ranked);
     searchStatus.textContent =
       `“${query}” — ${mode} similarity, top 5 of ${DB.items.length}. Same math as search.py.`;
   } catch (err) {

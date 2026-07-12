@@ -71,6 +71,9 @@ def main():
         s = score(item, query, mode)
         bar = "#" * max(1, round(s * 40))
         print(f"  {s:+.3f} {bar:<14} {item['path']}")
+        if mode == "fused":  # decompose: which signal carried this hit?
+            si, st = score(item, query, "image"), score(item, query, "text")
+            print(f"          = (image {si:+.3f} + text {st:+.3f}) / 2")
         print(f"          tags: {', '.join(item['tags'])}")
 
 
