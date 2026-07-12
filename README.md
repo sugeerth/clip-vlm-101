@@ -4,7 +4,7 @@
 
 A deliberately tiny, readable pipeline that shows how a CLIP-style
 vision-language model turns **images + prompt templates** into **embeddings**,
-stores them in a **database**, and answers **searches**. Nine tiny pipeline
+stores them in a **database**, and answers **searches**. Ten tiny pipeline
 files — one concept each — plus a sample downloader and a smoke test.
 Standard-library SQLite, no frameworks. Read it top to bottom in 15 minutes,
 then swap in your own images.
@@ -98,7 +98,8 @@ Suggested reading order:
 | `features.py` | ~160 | **the one-call API**: `embed()`, ensembled tags, batched records |
 | `db.py` | ~75 | vectors as float32 BLOBs in plain SQLite |
 | `ingest.py` | ~60 | *composition*: batch `features.extract_batch` over files → store |
-| `search.py` | ~80 | text / image / fused retrieval with dot products |
+| `search.py` | ~85 | text / image / fused retrieval with dot products |
+| `temperature.py` | ~50 | softmax + CLIP's learned logit scale: scores → probabilities |
 | `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 The browser demo mirrors the same pipeline in `docs/js/` with **matching

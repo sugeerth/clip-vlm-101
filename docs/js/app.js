@@ -2,7 +2,7 @@
 //   templates.js (prompts) + clip.js (encoders) + rank.js (dot products)
 // Sections below match the page: gallery, map, search, upload.
 import { VOCAB, tagPrompts, captionFor } from './templates.js';
-import { dot, rank, topTags, fuse } from './rank.js';
+import { dot, rank, topTags, fuse, softmax } from './rank.js';
 import { getTextEncoder, getImageEncoder } from './clip.js';
 import { drawMap, markUpload, project, stripRow } from './viz.js';
 
@@ -181,10 +181,15 @@ async function handleUpload(file) {
     const fusedEmb = fuse(imgEmb, txtEmb);
     // this is the complete database-ready record — the mirror of features.extract()
 
+    // softmax over ALL vocabulary scores (temperature.py's lesson): the raw
+    // cosines huddle together; probabilities show the real confidence gap
+    const tagProbs = softmax(tagEmbs.map(e => dot(e, imgEmb)));
     const tagLine = document.createElement('p');
     tagLine.append('meta tags: ', ...scored.map(s =>
-      Object.assign(document.createElement('span'),
-        { className: 'pill', textContent: `${s.tag} ${s.score.toFixed(3)}` })));
+      Object.assign(document.createElement('span'), {
+        className: 'pill',
+        textContent: `${s.tag} ${s.score.toFixed(3)} → ${(100 * tagProbs[VOCAB.indexOf(s.tag)]).toFixed(0)}%`,
+      })));
     const capLine = document.createElement('p');
     capLine.className = 'sub'; capLine.textContent = `templated caption: “${caption}”`;
     const dims = document.createElement('pre');

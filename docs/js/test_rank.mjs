@@ -1,6 +1,6 @@
 // Model-free checks that the JS math mirrors the Python — test_smoke.py's twin.
 // Run: node docs/js/test_rank.mjs   (CI runs it next to the Python smoke tests)
-import { dot, unit, scoreItem, rank, topTags, fuse } from './rank.js';
+import { dot, unit, scoreItem, rank, topTags, fuse, softmax } from './rank.js';
 
 let failed = false;
 const check = (cond, msg) => {
@@ -39,6 +39,13 @@ const items = tagEmbs.map((e, i) => ({ image_emb: e, text_emb: e, name: vocab[i]
 const ranked = rank(items, [0.1, 0.9, 0, 0], 'image', 2);
 check(ranked.length === 2 && ranked[0].item.name === 'dog' && ranked[0].score >= ranked[1].score,
   'rank sorts descending and keeps top k');
+
+// softmax — temperature.py's twin
+const p = softmax([0.3, 0.2, 0.1]);
+check(close(p.reduce((s, x) => s + x, 0), 1, 1e-12) && p[0] > p[1] && p[1] > p[2],
+  'softmax sums to 1 and keeps order');
+check(softmax([0.3, 0.2, 0.1], 0).every(x => close(x, 1 / 3, 1e-12)), 'scale 0 → uniform');
+check(softmax([0.3, 0.2, 0.1], 1000)[0] > 0.999, 'huge scale → one-hot');
 
 if (failed) { console.error('some rank.js checks FAILED'); process.exit(1); }
 console.log('all rank.js checks passed');

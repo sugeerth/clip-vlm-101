@@ -109,6 +109,31 @@ def test_feature_extractor():
     assert r["caption"] == templates.caption_for(r["tags"])
 
 
+def test_softmax():
+    from temperature import softmax
+    scores = [0.3, 0.2, 0.1]
+    p = softmax(scores)
+    assert abs(p.sum() - 1) < 1e-9 and p[0] > p[1] > p[2]        # order preserved
+    assert np.allclose(softmax(scores, scale=0), 1 / 3)          # scale 0: uniform
+    assert softmax(scores, scale=1000)[0] > 0.999                # huge scale: one-hot
+    assert np.allclose(softmax([s + 7 for s in scores]), p)      # shift-invariant
+
+
+def test_load_json_gallery():
+    items = db.load_json_gallery()
+    assert len(items) == 14
+    for it in items:
+        assert it["image_emb"].shape == (512,) and it["fused_emb"].shape == (1024,)
+        assert abs(np.linalg.norm(it["image_emb"]) - 1) < 0.01   # 5-dp rounded units
+    # the MODALITY GAP (Liang et al. 2022), visible right in the committed
+    # data: an image is far more similar to OTHER IMAGES than to the text
+    # embedding of its OWN caption — cross-modal scores live on their own scale
+    own_caption = np.mean([it["image_emb"] @ it["text_emb"] for it in items])
+    other_images = np.mean([a["image_emb"] @ b["image_emb"]
+                            for a in items for b in items if a is not b])
+    assert own_caption + 0.1 < other_images
+
+
 def test_pca_2d():
     from export_web import pca_2d
     rng = np.random.default_rng(3)
