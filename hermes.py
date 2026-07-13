@@ -194,6 +194,15 @@ if __name__ == "__main__":
     from embedder import ClipEmbedder  # deferred: image queries never need it
 
     clip = ClipEmbedder(model_id=args.model) if args.model else ClipEmbedder()
+    # embeddings never mix: a query embedded by one model must not be ranked
+    # against a gallery embedded by another (same-dim would be silent garbage;
+    # different-dim would crash mid-matmul — refuse loudly instead)
+    stored_dim = len(items[0]["image_emb"])
+    if clip.dim and clip.dim != stored_dim:
+        raise SystemExit(
+            f"model mismatch: this gallery holds {stored_dim}-d vectors but "
+            f"{args.model!r} produces {clip.dim}-d. One db = one model — "
+            f"re-ingest first: python3 ingest.py images/*.jpg --model {args.model}")
     if args.crawl:
         import crawler
         from features import FeatureExtractor

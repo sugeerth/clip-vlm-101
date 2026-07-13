@@ -17,7 +17,8 @@ const TOP_K = 8;
 
 const DB = await (await fetch('db.json')).json();
 
-let encodeText = null;      // resolves once, then queries are ~instant
+let encodeText = null;      // resolves once per brain, then ~instant
+let encodeTextModel = null; // WHICH brain the cached encoder belongs to
 let imageQuery = null;      // { emb } — set by camera / drop / paste
 let searching = false, rerun = false, debounce = 0;
 
@@ -116,17 +117,25 @@ async function switchBrain(key) {
   const prev = getActiveModel();
   if (key === prev) return;
   setActiveModel(key);
-  localStorage.setItem('brain', key);
-  encodeText = null;        // the new brain's encoder resolves on next use
+  encodeText = null; encodeTextModel = null;
   clearImageQuery();        // an old-space image query cannot carry over
   clearWeb();               // web embeddings are per-model too
   try {
-    if ($('q').value.trim()) { await search(); }   // search re-embeds as needed
-    else status(`brain set to ${brainName(key)} — loads on your first search (${MODELS[key].size}, once)`);
+    // load the new brain HERE, where a failure is catchable — search()
+    // swallows its own errors into the keyword fallback and never throws
+    encodeText = await getTextEncoder(status, progress);
+    encodeTextModel = key;
+    hideBar();
+    await ensureBrainReady();
+    localStorage.setItem('brain', key);       // persist only what worked
+    status(`brain: ${MODELS[key].label}`);
+    if ($('q').value.trim()) await search();
   } catch (err) {
     console.error(err);
+    hideBar();
     setActiveModel(prev);
-    localStorage.setItem('brain', prev);
+    encodeText = null; encodeTextModel = null;
+    if (galleryCache[prev]) DB.items.forEach((it, i) => Object.assign(it, galleryCache[prev][i]));
     $('brainSel').value = prev;
     status(`could not load ${brainName(key)} — staying on ${brainName(prev)}`);
   }
@@ -139,15 +148,25 @@ async function search() {
   if (searching) { rerun = true; return; }
   searching = true;
   try {
+    if (imageQuery && imageQuery.model !== getActiveModel()) {
+      clearImageQuery();                      // an old-space photo can't be reused
+    }
     if (imageQuery) {                         // image → image, like search.py --image
       hideTrace();
       clearWeb();
+      await ensureBrainReady();
       show(DB.items
         .map(item => ({ item, score: dot(item.image_emb, imageQuery.emb) }))
         .sort((a, b) => b.score - a.score).slice(0, TOP_K));
     } else {
-      if (!encodeText) status('loading the model — one time, cached after…');
-      encodeText ??= await getTextEncoder(status, progress);
+      // the encoder must belong to the ACTIVE brain — if the user switches
+      // mid-download, the loop re-resolves instead of caching a stale one
+      while (!encodeText || encodeTextModel !== getActiveModel()) {
+        status('loading the model — one time, cached after…');
+        const key = getActiveModel();
+        encodeText = await getTextEncoder(status, progress);
+        encodeTextModel = key;
+      }
       hideBar();
       await ensureBrainReady();
       // Hermes works the query: propose phrasings, critique each by its
@@ -318,12 +337,17 @@ async function imageSearch(file) {
   if (!file || !file.type.startsWith('image/')) return;
   try {
     status('loading the vision model — one time, cached after…');
+    const key = getActiveModel();
     const encodeImage = await getImageEncoder(status, progress);
     hideBar();
     await ensureBrainReady();
     status('');
     const emb = await encodeImage(file);
-    imageQuery = { emb };
+    if (getActiveModel() !== key) {           // brain changed mid-embed
+      status('brain changed while embedding — drop the photo again');
+      return;
+    }
+    imageQuery = { emb, model: key };
     $('imgChipThumb').src = URL.createObjectURL(file);
     $('imgChip').classList.remove('hidden');
     $('q').value = '';
