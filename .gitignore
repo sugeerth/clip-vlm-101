@@ -2,3 +2,5 @@
 __pycache__/
 gallery.sqlite
 .DS_Store
+data/
+scale.sqlite

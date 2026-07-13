@@ -425,3 +425,9 @@ img { max-width: 100%; }
 #evalTable th, #evalTable td { font-variant-numeric: tabular-nums; }
 .lsn-check { display: block; font-size: 0.85rem; color: var(--ink-2); margin: 4px 0 10px; cursor: pointer; }
 .lsn-check input { accent-color: var(--accent); margin-right: 6px; }
+
+/* ------------------------------------------------- scale.html showcase --- */
+.showcase { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; }
+.showcase figure { margin: 0; }
+.showcase img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; background: var(--hairline); }
+.showcase figcaption { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }

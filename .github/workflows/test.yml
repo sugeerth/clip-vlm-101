@@ -26,4 +26,5 @@ jobs:
       - run: python quantize.py --json docs/db.json
       - run: python similarity.py --json docs/db.json --centered
       - run: python ann.py
+      - run: python scale.py selftest       # the million-row machinery, synthetic + model-free
       - run: python hermes.py --image pizza --json docs/db.json

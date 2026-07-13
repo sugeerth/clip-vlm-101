@@ -137,6 +137,7 @@ Suggested reading order:
 | `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
 | `spider.py` | ~170 | **the web crawler**: BFS any site for images — robots.txt, pacing, caps |
+| `scale.py` | ~340 | **one million rows**: records in SQLite, scans in packed f16 memmaps — ivf + int8 at industrial size |
 | `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 Five standalone lessons build on the stored vectors — every one runs
@@ -319,6 +320,62 @@ On the live demo, the 🧠 dropdown swaps brains (MobileCLIP S0/B-LT and
 SigLIP 2 via transformers.js) — the gallery re-embeds right in your
 browser, because embeddings from different models never mix.
 
+## One million rows — where the database's shape starts to matter
+
+Everything above runs on a 14-image gallery. `scale.py` grows the SAME
+design to **1,000,000 real dishes** — [Qdrant's public Wolt food
+dataset](https://huggingface.co/datasets/Qdrant/wolt-food-clip-ViT-B-32-embeddings),
+whose image embeddings were precomputed with the *same* clip-ViT-B-32
+checkpoint this repo uses — and computes a million text embeddings itself,
+one dish name at a time through `embedder.py` (~1,900 names/s on MPS).
+Same 512-d space; the demo's text tower queries it directly.
+
+What changes at a million is the *layout*, not the math. `db.py`'s
+vector-BLOBs-in-SQLite is perfect at 14 rows and wrong at 1M (a scan would
+decode a million BLOBs per query), so `scale.py` splits the two jobs the
+way real vector stores do:
+
+```
+data/scale.sqlite      the RECORDS - name, caption, cafe, url; row id i = matrix row i
+data/img_emb_f16.npy   the SCAN    - packed (1M x 512) float16 per tower, memory-
+data/txt_emb_f16.npy                mapped: chunked matrix @ vector, no BLOB decodes
+```
+
+Three searches, all concepts the repo already taught: **brute** (`search.py`'s
+scan, chunked), **ivf** (`ann.py`'s index trained on a 100k sample), **int8**
+(`quantize.py` applied to the whole matrix). Fused search uses `fusion.py`'s
+identity — *(image·q + text·q) / 2* — so no 1024-d matrix ever exists.
+
+```bash
+python3 scale.py ingest                                  # data/part-*.parquet -> the DB
+python3 scale.py search "quattro formaggi pizza" --mode fused
+python3 scale.py search "ramen" --ann --probes 8         # scan ~1%, keep ~all of it
+python3 scale.py bench --queries "sushi,burger,ramen"    # the honest table
+```
+
+Measured on the full 1,000,000 rows (Apple silicon, warm cache, median over
+8 real text queries — records 288 MB, each f16 tower 1.02 GB, int8 512 MB,
+ivf index 10 MB):
+
+| search | ms / query | recall@10 | rows scanned |
+| --- | --- | --- | --- |
+| brute force, f16 → f32 | 868 | 1.00 — the truth | 100% |
+| brute force, int8 | 235 | 0.68 | 100% |
+| int8 top-100 → exact re-rank | 235 | **0.91** | 100% |
+| ivf, 8 probes | **11.0** | 0.90 | **1.0%** |
+| ivf, 16 probes | 19.7 | 0.95 | 1.9% |
+
+Two lessons the 14-image gallery could never teach: one shared int8 scale is
+too coarse for CLIP's outlier dimensions on a *packed* top-10 (0.68!), but the
+truth rarely leaves the top-100 — fetch cheap, score exactly, 0.91 at the same
+speed. And ivf recall *plateaus*: past 16 probes you pay ~2× the latency per
++0.00 recall, because a few true neighbours live in cells no nearby probe visits.
+
+The 4 GB of parquet and the built database stay out of git; CI runs
+`scale.py selftest` — the same scan/ivf/int8 machinery on synthetic
+clustered vectors, no model, no downloads. The full story with the measured
+numbers: **[the scale report](https://sugeerth.github.io/clip-vlm-101/scale.html)**.
+
 ## Understanding CLIP — and squeezing more out of it
 
 CLIP was trained contrastively on 400M (image, caption) pairs: pull each
@@ -396,6 +453,7 @@ lesson runs on committed data — and CI re-runs all of them on every push:
 | `python3 similarity.py --json docs/db.json --centered` | own-caption margin **+0.120 → +0.388** after centering |
 | `python3 ann.py` | probes 1: recall **0.75** scanning **1.8%**; probes 8: **0.94** at 12.8% |
 | `python3 hermes.py --image pizza --json docs/db.json` | the evaluator **rejects** the drifting pass and keeps the honest ranking |
+| `python3 scale.py selftest` | chunked scan == naive argsort; ivf probes=8 keeps ≥7/10 of the truth scanning <½ the rows |
 
 (The numbers are pinned to the committed sample gallery; re-exporting your
 own gallery changes them — that's the point.)
