@@ -163,6 +163,8 @@ if __name__ == "__main__":
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--passes", type=int, default=4,
                     help="max evaluator-guarded feedback passes")
+    ap.add_argument("--model", default=None,
+                    help="a models.py registry key (clip-b32, siglip2-base, …)")
     ap.add_argument("--crawl", type=int, metavar="N",
                     help="every search crawls: fetch N fresh Commons images "
                          "matching the query and include them in this search")
@@ -191,7 +193,7 @@ if __name__ == "__main__":
 
     from embedder import ClipEmbedder  # deferred: image queries never need it
 
-    clip = ClipEmbedder()
+    clip = ClipEmbedder(model_id=args.model) if args.model else ClipEmbedder()
     if args.crawl:
         import crawler
         from features import FeatureExtractor

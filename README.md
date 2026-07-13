@@ -120,7 +120,8 @@ Suggested reading order:
 | file | lines | the one concept it teaches |
 |---|---|---|
 | `templates.py` | ~60 | prompt templates: sentences with holes, filled per tag |
-| `embedder.py` | ~55 | CLIP → unit-length 512-d vectors for images AND text |
+| `embedder.py` | ~70 | any registered model → unit vectors for images AND text |
+| `models.py` | ~60 | **the registry**: newer brains + the per-family padding/scoring rules |
 | `tagger.py` | ~25 | zero-shot meta tags = dot products + argsort, no training |
 | `labels.py` | ~55 | **multi-label**: per-tag sigmoid vs a neutral prompt → dynamic label sets |
 | `ensemble.py` | ~60 | **prompt ensembling**: average many templates per tag, +3.5% for free |
@@ -290,6 +291,33 @@ ranks them under the gallery results with a license receipt on every card
 its own results, and the section header reports the per-provider ledger —
 a silent web search is indistinguishable from a broken one. The Python
 twin: `hermes.py "red panda" --crawl 6`.
+
+## Pick your brain: newer models, one key away
+
+CLIP ViT-B/32 is the 2021 baseline. `models.py` (and its browser mirror
+`js/models.js`) registers stronger drop-ins — and handles the two silent
+traps that break naive swaps: SigLIP-family text encoders REQUIRE
+`padding="max_length"` (pad-to-longest quietly wrecks their embeddings),
+and SigLIP's sigmoid training means its per-tag probabilities are
+calibrated directly (`sigmoid(scale·cos + bias)`, constants read from the
+checkpoint — `labels.siglip_label_probs`), no neutral prompt needed.
+
+| key | model | IN-1k 0-shot | notes |
+|---|---|---|---|
+| `clip-b32` | CLIP ViT-B/32 ('21) | ~63% | the default; matches the committed gallery |
+| `clip-l14` | CLIP ViT-L/14 ('21) | ~75% | big and slow |
+| `siglip2-base` | SigLIP 2 B/16 ('25) | ~78% | sigmoid-trained, multilingual |
+| `siglip2-384` | SigLIP 2 B/16-384 | ~79% | same brain, higher-res eyes |
+
+```bash
+python3 eval.py images/*.jpg --model clip-b32      # benchmark the baseline…
+python3 eval.py images/*.jpg --model siglip2-base  # …then prove the upgrade
+python3 ingest.py images/*.jpg  # (one db = one model — re-ingest after switching)
+```
+
+On the live demo, the 🧠 dropdown swaps brains (MobileCLIP S0/B-LT and
+SigLIP 2 via transformers.js) — the gallery re-embeds right in your
+browser, because embeddings from different models never mix.
 
 ## Understanding CLIP — and squeezing more out of it
 

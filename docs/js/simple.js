@@ -4,9 +4,10 @@
 // the model loads once on first use (with a quiet progress bar), queries
 // are embedded live as you type, and ranking is the same fused dot
 // product as search.py. The explorable at explore.html shows the insides.
-import { dot } from './rank.js';
+import { dot, fuse } from './rank.js';
 import { hermesSearch, MIN_MARGIN } from './hermes.js';
-import { getTextEncoder, getImageEncoder } from './clip.js';
+import { getTextEncoder, getImageEncoder, getActiveModel, setActiveModel } from './clip.js';
+import { MODELS, DEFAULT_MODEL } from './models.js';
 import { discover } from './crawler.js';
 
 const $ = id => document.getElementById(id);
@@ -81,6 +82,56 @@ function keywordResults(query) {
     .sort((a, b) => b.score - a.score).slice(0, TOP_K);
 }
 
+// ------------------------------------------------------------- the brain --
+// Different models live in different vector spaces — they never mix (the
+// repo's own lesson). The shipped gallery vectors are CLIP B/32; choosing
+// another brain re-embeds all 14 gallery images + captions right here in
+// the browser, once per session, before any ranking happens.
+const galleryCache = { [DEFAULT_MODEL]: DB.items.map(it =>
+  ({ image_emb: it.image_emb, text_emb: it.text_emb, fused_emb: it.fused_emb })) };
+
+const brainName = key => MODELS[key].label.split(' · ')[0];
+
+async function ensureBrainReady() {
+  const key = getActiveModel();
+  if (!galleryCache[key]) {
+    const encT = await getTextEncoder(status, progress);
+    const encI = await getImageEncoder(status, progress);
+    hideBar();
+    const snap = [];
+    for (let i = 0; i < DB.items.length; i++) {
+      status(`re-embedding the gallery with ${brainName(key)} — ${i + 1}/${DB.items.length}…`);
+      const blob = await (await fetch(DB.items[i].file)).blob();
+      const image_emb = await encI(blob);
+      const [text_emb] = await encT([DB.items[i].caption]);
+      snap.push({ image_emb, text_emb, fused_emb: fuse(image_emb, text_emb) });
+    }
+    galleryCache[key] = snap;
+    status('');
+  }
+  DB.items.forEach((it, i) => Object.assign(it, galleryCache[key][i]));
+}
+
+async function switchBrain(key) {
+  const prev = getActiveModel();
+  if (key === prev) return;
+  setActiveModel(key);
+  localStorage.setItem('brain', key);
+  encodeText = null;        // the new brain's encoder resolves on next use
+  clearImageQuery();        // an old-space image query cannot carry over
+  clearWeb();               // web embeddings are per-model too
+  try {
+    if ($('q').value.trim()) { await search(); }   // search re-embeds as needed
+    else status(`brain set to ${brainName(key)} — loads on your first search (${MODELS[key].size}, once)`);
+  } catch (err) {
+    console.error(err);
+    setActiveModel(prev);
+    localStorage.setItem('brain', prev);
+    $('brainSel').value = prev;
+    status(`could not load ${brainName(key)} — staying on ${brainName(prev)}`);
+  }
+}
+
 // ----------------------------------------------------------------- search --
 async function search() {
   const query = $('q').value.trim();
@@ -98,6 +149,7 @@ async function search() {
       if (!encodeText) status('loading the model — one time, cached after…');
       encodeText ??= await getTextEncoder(status, progress);
       hideBar();
+      await ensureBrainReady();
       // Hermes works the query: propose phrasings, critique each by its
       // retrieval margin, ensemble if none is decisive — then answer.
       const out = await hermesSearch(query, encodeText, DB.items, TOP_K);
@@ -175,12 +227,13 @@ async function webPhase(query) {
       head.textContent = `🌐 from the web — embedding ${i + 1}/${recs.length} in your browser… (${ledgerLine})`;
       const rec = recs[i];
       try {
-        if (!webCache.has(rec.thumb_url)) {
+        const cacheKey = `${getActiveModel()}|${rec.thumb_url}`;
+        if (!webCache.has(cacheKey)) {
           const blob = await (await fetch(rec.thumb_url)).blob();
-          webCache.set(rec.thumb_url,
+          webCache.set(cacheKey,
             { emb: await encodeImage(blob), obj: URL.createObjectURL(blob) });
         }
-        const c = webCache.get(rec.thumb_url);
+        const c = webCache.get(cacheKey);
         scored.push({ rec, obj: c.obj, score: dot(q, c.emb) });
       } catch (e) { console.error('web thumb failed:', rec.thumb_url, e); }
     }
@@ -243,6 +296,21 @@ webBtn.addEventListener('click', () => {
 });
 $('chips').append(webBtn);
 
+// the brain picker: newer models are one dropdown away. The saved choice
+// restores on load but nothing downloads until the first search.
+const brainSel = Object.assign(document.createElement('select'),
+  { className: 'brain', id: 'brainSel' });
+brainSel.setAttribute('aria-label', 'Model');
+for (const [key, m] of Object.entries(MODELS)) {
+  brainSel.append(Object.assign(document.createElement('option'),
+    { value: key, textContent: `🧠 ${m.label} · ${m.accuracy} · ${m.size}` }));
+}
+const savedBrain = localStorage.getItem('brain');
+if (savedBrain && MODELS[savedBrain]) setActiveModel(savedBrain);
+brainSel.value = getActiveModel();
+brainSel.addEventListener('change', () => switchBrain(brainSel.value));
+$('chips').append(brainSel);
+
 // ---------------------------------------------------- search by image --
 // Camera button, drop anywhere, or paste a copied image — same result:
 // the photo is embedded locally and ranked image-to-image.
@@ -252,6 +320,7 @@ async function imageSearch(file) {
     status('loading the vision model — one time, cached after…');
     const encodeImage = await getImageEncoder(status, progress);
     hideBar();
+    await ensureBrainReady();
     status('');
     const emb = await encodeImage(file);
     imageQuery = { emb };

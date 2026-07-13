@@ -51,3 +51,15 @@ def multi_label(image_emb, tag_embs, neutral_emb, vocabulary,
     order = np.argsort(probs)[::-1]
     return {vocabulary[i]: round(float(probs[i]), 4)
             for i in order if probs[i] >= threshold}
+
+
+def siglip_label_probs(image_emb, tag_embs, scale, bias):
+    """SigLIP's NATIVE calibrated per-tag probability — no neutral prompt.
+
+    SigLIP was trained with a per-pair sigmoid loss, so unlike CLIP its
+    probabilities are absolute:  sigmoid(scale * cosine + bias),  with
+    scale/bias read from the checkpoint (embedder exposes .logit_scale /
+    .logit_bias — typically ~118 and ~-12.9). Correct labels commonly
+    score 0.1-0.4, so threshold around 0.1-0.3, not 0.5.
+    """
+    return 1.0 / (1.0 + np.exp(-(scale * (tag_embs @ image_emb) + bias)))
