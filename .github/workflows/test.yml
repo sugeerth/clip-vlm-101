@@ -27,4 +27,6 @@ jobs:
       - run: python similarity.py --json docs/db.json --centered
       - run: python ann.py
       - run: python scale.py selftest       # the million-row machinery, synthetic + model-free
+      - run: python pq.py selftest          # product quantization: the browser index's math
+      - run: node docs/js/test_pq.mjs       # …and its JS twin agrees, lookup for lookup
       - run: python hermes.py --image pizza --json docs/db.json

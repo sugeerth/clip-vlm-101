@@ -24,6 +24,7 @@
   <nav class="nav" aria-label="Sections">
     <a class="wordmark" href="#top">CLIP&nbsp;VLM&nbsp;<span class="dim">101</span></a>
     <div class="nav-links">
+      <a href="#live">Try it</a>
       <a href="#shape">The shape</a>
       <a href="#numbers">The numbers</a>
       <a href="#queries">Real queries</a>
@@ -51,6 +52,98 @@
     by <code>scale.py bench</code> on an Apple-silicon laptop, and the machinery
     is CI-tested synthetically on every push.</p>
 </div>
+
+<section id="live">
+  <h2>Search it — right here, right now</h2>
+  <p>
+    A 100,000-dish slice of the million (every 10th row), <b>product-quantized to
+    64 bytes per dish</b> (<code>pq.py</code> → <code>js/pq.js</code>): the whole index is a
+    ~7&nbsp;MB download, your query is embedded by the same CLIP text tower the demo uses,
+    and the scan is pure table lookups in this tab — no server anywhere.
+    First search downloads the model (~65&nbsp;MB) + the pack, then it's milliseconds.
+  </p>
+  <div class="live-pill">
+    <input id="liveq" type="search" placeholder="ramen with a soft-boiled egg…"
+           aria-label="Search 100,000 dishes">
+  </div>
+  <p class="fine" id="liveStatus" style="margin-top:10px"></p>
+  <div class="showcase" id="liveGrid" style="margin-top:6px"></div>
+  <p class="fine" id="liveNote" style="margin-top:12px"></p>
+</section>
+
+<style>
+  .live-pill input {
+    width: 100%; font: inherit; font-size: 1.02rem; color: var(--ink);
+    background: var(--surface); border: 1px solid var(--hairline);
+    border-radius: 999px; padding: 11px 20px; outline: none;
+  }
+  .live-pill input:focus { border-color: var(--accent); }
+</style>
+<script type="module">
+  import { getTextEncoder } from './js/clip.js';
+  import { loadPack, adcTables, pqSearch } from './js/pq.js';
+
+  const $ = id => document.getElementById(id);
+  let pack = null, encode = null, loading = null, seq = 0, deb = 0;
+
+  const ensureReady = () => loading ??= (async () => {
+    $('liveStatus').textContent = 'downloading the pack + the text tower — one time, cached after…';
+    const [p, e] = await Promise.all([
+      loadPack('million', f => { $('liveStatus').textContent = `loaded ${f}…`; }),
+      getTextEncoder(t => { $('liveStatus').textContent = t; }, () => {}),
+    ]);
+    pack = p; encode = e;
+    $('liveNote').textContent = `honesty note: pure PQ reshuffles a tightly-packed top-10 — `
+      + `measured on this pack, the exact scan's top-10 stays ${pack.manifest.recall10_in50}`
+      + ` inside PQ's top-50 (self-queries, the hardest case). 64 bytes a dish buys a lot, not everything.`;
+  })();
+
+  async function liveSearch() {
+    const q = $('liveq').value.trim();
+    if (!q) return;
+    const my = ++seq;
+    try {
+      await ensureReady();
+    } catch (err) {
+      $('liveStatus').textContent = `could not load the pack here: ${err?.message ?? err}`;
+      return;
+    }
+    if (my !== seq) return;
+    const t0 = performance.now();
+    // ensemble.py's lesson on the query: two phrasings, one batch, renormalised
+    const [a, b] = await encode([q, `a photo of ${q}`]);
+    const qv = new Float32Array(a.length);
+    let norm = 0;
+    for (let i = 0; i < qv.length; i++) { qv[i] = a[i] + b[i]; norm += qv[i] * qv[i]; }
+    norm = Math.sqrt(norm) || 1;
+    for (let i = 0; i < qv.length; i++) qv[i] /= norm;
+    const tEmbed = performance.now();
+    const hits = pqSearch(pack, adcTables(qv, pack), 18);
+    const ms = performance.now() - tEmbed;
+    if (my !== seq) return;
+    $('liveStatus').innerHTML = `<b>${ms.toFixed(1)} ms</b> across `
+      + `${pack.manifest.n.toLocaleString()} dishes in your browser · `
+      + `query embedded in ${(tEmbed - t0).toFixed(0)} ms · 64 bytes per dish`;
+    $('liveGrid').replaceChildren(...hits.map(h => {
+      const [name, cafe, urlSuffix] = pack.items[h.id];
+      const fig = document.createElement('figure');
+      const img = document.createElement('img');
+      img.src = pack.manifest.url_prefix + urlSuffix;
+      img.alt = name; img.loading = 'lazy';
+      img.onerror = () => fig.classList.add('hidden');
+      const cap = document.createElement('figcaption');
+      cap.textContent = `${h.score >= 0 ? '+' : ''}${h.score.toFixed(3)} · ${name}`
+        + (cafe ? ` — ${cafe}` : '');
+      fig.append(img, cap);
+      return fig;
+    }));
+  }
+  $('liveq').addEventListener('input', () => {
+    if (!pack) return;                    // never auto-download on a keystroke
+    clearTimeout(deb); deb = setTimeout(liveSearch, 250);
+  });
+  $('liveq').addEventListener('keydown', e => { if (e.key === 'Enter') liveSearch(); });
+</script>
 
 <section id="shape">
   <h2>What changes at a million is the <i>shape</i>, not the math</h2>

@@ -138,6 +138,7 @@ Suggested reading order:
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
 | `spider.py` | ~170 | **the web crawler**: BFS any site for images — robots.txt, pacing, caps |
 | `scale.py` | ~620 | **one million rows**: records in SQLite, scans in packed f16 memmaps — ivf + int8 + RAM serving at industrial size |
+| `pq.py` | ~200 | **product quantization**: 64 bytes/vector + table-lookup search — small enough that a 100k slice ships to the BROWSER (`js/pq.js` is its twin) |
 | `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 Five standalone lessons build on the stored vectors — every one runs
@@ -380,9 +381,18 @@ truth rarely leaves the top-100 — fetch cheap, score exactly, 0.91 at the same
 speed. And ivf recall *plateaus*: past 16 probes you pay ~2× the latency per
 +0.00 recall, because a few true neighbours live in cells no nearby probe visits.
 
+And the part you can touch: **[the scale page](https://sugeerth.github.io/clip-vlm-101/scale.html)
+searches a 100,000-dish slice live in your browser** — `pq.py` product-quantizes
+every vector to **64 bytes** (32× smaller than float32), so the whole index is a
+~7 MB pack on GitHub Pages, and `js/pq.js` scores it with pure table lookups
+(ADC) in a few milliseconds per keystroke, against a query embedded by the same
+in-browser text tower as the demo. Recall is measured and printed on the page,
+not promised.
+
 The 4 GB of parquet and the built database stay out of git; CI runs
-`scale.py selftest` — the same scan/ivf/int8 machinery on synthetic
-clustered vectors, no model, no downloads. The full story with the measured
+`scale.py selftest` and `pq.py selftest` — the same scan/ivf/int8/PQ machinery
+on synthetic clustered vectors, no model, no downloads — plus `test_pq.mjs`,
+which pins the JS twin to the Python math. The full story with the measured
 numbers: **[the scale report](https://sugeerth.github.io/clip-vlm-101/scale.html)**.
 
 ## Understanding CLIP — and squeezing more out of it
