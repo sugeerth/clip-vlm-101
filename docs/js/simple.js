@@ -134,6 +134,14 @@ function clearWeb() {
   $('webResults').replaceChildren();
 }
 
+// failures get a way back — a dead web phase should cost one tap, not a reload
+const retryBtn = query => {
+  const b = Object.assign(document.createElement('button'),
+    { type: 'button', className: 'retry', textContent: '↻ try again' });
+  b.addEventListener('click', () => webPhase(query));
+  return b;
+};
+
 async function webPhase(query) {
   if (!webOn()) { clearWeb(); return; }
   const token = ++webToken;
@@ -150,8 +158,13 @@ async function webPhase(query) {
     const ledgerLine = oks.map(t => `${t.provider} ${t.count}`).join(' · ')
       + (fails.length ? `  (down: ${fails.map(t => `${t.provider}: ${t.error}`).join(' · ')})` : '');
     if (!recs.length) {          // say exactly what happened — never vanish
-      head.textContent = '🌐 web search unavailable — ' + tried.map(t =>
+      const detail = tried.map(t =>
         t.ok ? `${t.provider}: 0 results` : `${t.provider}: ${t.error}`).join(' · ');
+      head.replaceChildren(
+        fails.length === tried.length
+          ? `🌐 no web source answered — likely a network hiccup (${detail}) `
+          : `🌐 web search came back empty — ${detail} `,
+        retryBtn(query));
       return;
     }
     const encodeImage = await getImageEncoder(() => {}, progress);
@@ -194,7 +207,7 @@ async function webPhase(query) {
   } catch (err) {
     console.error(err);
     if (token === webToken)          // even unexpected failures stay visible
-      head.textContent = `🌐 web search failed: ${err?.message ?? err}`;
+      head.replaceChildren(`🌐 web search failed: ${err?.message ?? err} `, retryBtn(query));
   }
 }
 

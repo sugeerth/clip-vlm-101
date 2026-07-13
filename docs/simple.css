@@ -130,6 +130,12 @@ body.searched .chips { margin: 12px 0 0; }
 
 /* the web phase: live-crawled results, clearly separated from the gallery */
 .webhead { width: 100%; margin: 26px 0 -12px; font-size: 0.8rem; color: var(--muted); text-align: center; }
+.webhead button.retry {
+  font: inherit; font-size: 0.78rem; color: var(--ink-2); cursor: pointer;
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: 999px;
+  padding: 2px 10px; margin-left: 6px;
+}
+.webhead button.retry:hover { border-color: var(--accent); color: var(--accent-ink); }
 .chips button.toggle { border-style: dashed; }
 .chips button.toggle.on { border-style: solid; border-color: var(--accent); color: var(--accent-ink); }
 

@@ -16,12 +16,37 @@
 //
 // All returned records are normalized: { name, thumb_url, source, license,
 // provider } — thumb_url fetchable cross-origin for local embedding.
-const TIMEOUT_MS = 8000;
+const TIMEOUT_MS = 10000;   // per attempt — public keyless APIs can be slow
+const RETRIES = 1;          // transient stalls (wi-fi wake, TLS reset) heal on a second try
 
+// One request, retried once on anything that might heal: timeouts, network
+// resets, 5xx. HTTP 4xx means the request itself is wrong — retrying can't fix it.
 async function jfetch(url, fetchFn) {
-  const resp = await fetchFn(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return resp.json();
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const resp = await fetchFn(url, { signal: AbortSignal.timeout?.(TIMEOUT_MS) });
+      if (!resp.ok) {
+        const err = new Error(`HTTP ${resp.status}`);
+        err.noRetry = resp.status < 500;
+        throw err;
+      }
+      return resp.json();
+    } catch (err) {
+      if (err.noRetry || attempt >= RETRIES) throw err;
+      await new Promise(r => setTimeout(r, 300));
+    }
+  }
+}
+
+// Browsers word failures cryptically (Safari: "Fetch is aborted", Chrome:
+// "signal timed out" / "Failed to fetch") — translate for the ledger.
+export function describeError(err) {
+  const s = String(err?.message ?? err);
+  if (err?.name === 'TimeoutError' || err?.name === 'AbortError' || /abort|timed? ?out/i.test(s))
+    return `no answer in ${TIMEOUT_MS / 1000}s`;
+  if (err?.name === 'TypeError' || /load failed|failed to fetch|network/i.test(s))
+    return 'unreachable — blocked or offline';
+  return s;
 }
 const norm = r => (r.thumb_url ? r : null);
 
@@ -126,7 +151,7 @@ export async function discover(term, nPer = 4, fetchFn = fetch, providers = PROV
         if (!seen.has(r.thumb_url)) { seen.add(r.thumb_url); records.push(r); }
       }
     } else {
-      tried.push({ provider, ok: false, error: String(s.reason?.message ?? s.reason) });
+      tried.push({ provider, ok: false, error: describeError(s.reason) });
     }
   });
   return { records: records.slice(0, MAX_WEB_RESULTS), tried };
