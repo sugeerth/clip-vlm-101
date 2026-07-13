@@ -96,7 +96,16 @@ data/txt_emb_f16.npy    per tower, memory-mapped: a query is a chunked
     <tr><td>brute force, int8</td><td>235</td><td>0.68</td><td>100%</td></tr>
     <tr><td>int8 top-100 → exact re-rank</td><td>235</td><td>0.91</td><td>100%</td></tr>
     <tr><td>ivf, 8 probes</td><td>11.0</td><td>0.90</td><td>1.0%</td></tr>
+    <tr><td>brute force, f32 in RAM (<code>serve</code>)</td><td><b>27.7</b></td><td>1.00 — the truth</td><td>100%</td></tr>
+    <tr><td>ivf-RAM, 8 probes (<code>serve</code>)</td><td><b>4.0</b></td><td>0.90</td><td>1.0%</td></tr>
   </table>
+  <p class="fine" style="margin-top:14px">
+    The last two rows are the punchline: the 868 ms scan was never really about math —
+    it was paging a memory-mapped gigabyte off disk and casting it, query after query.
+    <code>python3 scale.py serve</code> promotes both towers to f32 RAM once (~4 GB, under a
+    second from a warm file cache) and the <i>same exact scan</i> becomes one matmul:
+    <b>32× faster, identical answers</b>. That is the storage-hierarchy lesson at 1M —
+    change where the bytes live, not the algorithm.</p>
   <p style="margin-top:26px">And the whole point of <code>ann.py</code>, now a thousandfold louder —
     recall is a <b>dial</b>, priced in rows scanned:</p>
   <table>
@@ -214,7 +223,9 @@ done
 python3 scale.py ingest        # 1M rows: parse, normalise, embed a million
                                # dish names through the text tower (~35 min)
 python3 scale.py search "quattro formaggi pizza" --mode fused
-python3 scale.py bench --queries "sushi,burger,ramen,pad thai"</pre>
+python3 scale.py bench --ram --queries "sushi,burger,ramen,pad thai"
+python3 scale.py serve         # the million live at localhost:8071 —
+                               # fused + query-ensembled, cost on every answer</pre>
   </div>
   <p class="fine">
     Dataset: <a href="https://huggingface.co/datasets/Qdrant/wolt-food-clip-ViT-B-32-embeddings">

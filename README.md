@@ -137,7 +137,7 @@ Suggested reading order:
 | `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
 | `spider.py` | ~170 | **the web crawler**: BFS any site for images — robots.txt, pacing, caps |
-| `scale.py` | ~340 | **one million rows**: records in SQLite, scans in packed f16 memmaps — ivf + int8 at industrial size |
+| `scale.py` | ~620 | **one million rows**: records in SQLite, scans in packed f16 memmaps — ivf + int8 + RAM serving at industrial size |
 | `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 Five standalone lessons build on the stored vectors — every one runs
@@ -350,8 +350,15 @@ identity — *(image·q + text·q) / 2* — so no 1024-d matrix ever exists.
 python3 scale.py ingest                                  # data/part-*.parquet -> the DB
 python3 scale.py search "quattro formaggi pizza" --mode fused
 python3 scale.py search "ramen" --ann --probes 8         # scan ~1%, keep ~all of it
-python3 scale.py bench --queries "sushi,burger,ramen"    # the honest table
+python3 scale.py bench --ram --queries "sushi,burger,ramen"   # the honest table
+python3 scale.py serve                                   # live at localhost:8071
 ```
+
+`serve` is the storage-hierarchy lesson: the 868 ms scan was paging + casting a
+memory-mapped gigabyte, not math. Promote both towers to f32 RAM once and the
+same exact scan is one matmul — **27.7 ms for the truth, 4 ms with ivf** — behind
+a one-file UI (fused ranking, queries ensembled over two phrasings à la
+`ensemble.py`, and every answer prints what it cost and what it scanned).
 
 Measured on the full 1,000,000 rows (Apple silicon, warm cache, median over
 8 real text queries — records 288 MB, each f16 tower 1.02 GB, int8 512 MB,
@@ -362,8 +369,10 @@ ivf index 10 MB):
 | brute force, f16 → f32 | 868 | 1.00 — the truth | 100% |
 | brute force, int8 | 235 | 0.68 | 100% |
 | int8 top-100 → exact re-rank | 235 | **0.91** | 100% |
-| ivf, 8 probes | **11.0** | 0.90 | **1.0%** |
+| ivf, 8 probes | 11.0 | 0.90 | **1.0%** |
 | ivf, 16 probes | 19.7 | 0.95 | 1.9% |
+| brute force, f32 in RAM (`serve`) | **27.7** | 1.00 — the truth | 100% |
+| ivf-RAM, 8 probes (`serve`) | **4.0** | 0.90 | 1.0% |
 
 Two lessons the 14-image gallery could never teach: one shared int8 scale is
 too coarse for CLIP's outlier dimensions on a *packed* top-10 (0.68!), but the

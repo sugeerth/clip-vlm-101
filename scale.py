@@ -40,6 +40,13 @@ Run me:  python3 scale.py selftest                (synthetic, no model, CI-safe)
          python3 scale.py ingest                  (data/part-*.parquet -> the DB)
          python3 scale.py search "quattro formaggi pizza" --mode fused
          python3 scale.py bench --queries "sushi,burger,ramen"
+         python3 scale.py serve                   (the million, live at localhost)
+
+serve is the punchline: both towers promoted from memmap to RAM (the scan
+was I/O-bound — paging + f16→f32 casting was ~90% of the 868 ms; in RAM the
+same exact scan is a single matmul), IVF on top when you want milliseconds,
+queries ensembled over two phrasings (ensemble.py's lesson), fused ranking
+by default, and a one-file UI with the latency printed on every answer.
 """
 import argparse
 import json
@@ -105,6 +112,25 @@ def scan(mats, q, k=10, rows=None, chunk=CHUNK):
             s += w * (np.asarray(M[lo:hi], dtype=np.float32) @ q)
         ids, scores = topk_merge(ids, scores, np.arange(lo, hi), s, k)
     return ids, scores
+
+
+def scan_ram(mats, q, k=10):
+    """The same exact top-k as scan(), for matrices already promoted to f32
+    RAM: one matmul per tower, one argpartition. No chunks — RAM needs none."""
+    s = mats[0][1] * (mats[0][0] @ q)
+    for M, w in mats[1:]:
+        s += w * (M @ q)
+    keep = np.argpartition(s, -min(k, len(s)))[-k:]
+    order = keep[np.argsort(s[keep])[::-1]]
+    return order.astype(np.int64), s[order]
+
+
+def ensemble_query(embed, text):
+    """ensemble.py's lesson on the QUERY side: average two phrasings of the
+    same intent, renormalise. Worth a few recall points for free."""
+    E = embed([text, f"a photo of {text}"])
+    v = E.mean(axis=0)
+    return (v / (np.linalg.norm(v) or 1.0)).astype(np.float32)
 
 
 # ------------------------------------------------------------------- ivf --
@@ -337,7 +363,167 @@ def cmd_bench(args):
         frac = np.mean([ivf_search(q, [(img, 1.0)], C, order, starts,
                                    probes=probes)[2] for q in Q]) / rows
         print(f"  {probes:>6}   {t:>8.1f}   {rec:>9.2f}   {frac:>6.1%}")
+    if args.ram:
+        # the memmap scan is I/O-bound: paging + f16→f32 casting, not math.
+        # Promote the tower to f32 RAM once and the SAME exact scan is a
+        # single matmul — this is what `serve` does.
+        t0 = time.time()
+        R = np.asarray(img[:rows], dtype=np.float32)
+        print(f"\n  tower → f32 RAM ({R.nbytes / 1e9:.1f} GB) in {time.time() - t0:,.1f}s")
+        t_ram = med(lambda q: scan_ram([(R, 1.0)], q))
+        print(f"  brute f32 RAM   {t_ram:>8,.1f} ms/query   recall 1.00 "
+              f"({t_brute / t_ram:,.0f}× the memmap scan)")
+        t_ivfr = med(lambda q: ivf_search(q, [(R, 1.0)], C, order, starts, probes=8))
+        print(f"  ivf-RAM p=8     {t_ivfr:>8,.1f} ms/query   recall as above")
+
     print("\nsame story as ann.py, a thousandfold louder: scan ~1%, keep ~all of it.")
+
+
+# ----------------------------------------------------------------- serve --
+PAGE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>one in a million — live</title><style>
+:root{--page:#0d0d0d;--surface:#1a1a19;--ink:#fff;--ink2:#c3c2b7;--muted:#898781;
+--hair:#2c2c2a;--accent:#3987e5;--accent2:#86b6ef}
+@media(prefers-color-scheme:light){:root{--page:#f9f9f7;--surface:#fcfcfb;--ink:#0b0b0b;
+--ink2:#52514e;--muted:#898781;--hair:#e1e0d9;--accent:#2a78d6;--accent2:#1c5cab}}
+*{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);
+font:16px/1.5 system-ui,-apple-system,sans-serif}
+main{max-width:900px;margin:0 auto;padding:48px 20px}
+h1{font-size:1.7rem;letter-spacing:-.02em;margin:0 0 2px}h1 em{font-style:normal;color:var(--accent2)}
+.sub{color:var(--muted);font-size:.85rem;margin:0 0 22px}
+.pill{display:flex;gap:8px;background:var(--surface);border:1px solid var(--hair);
+border-radius:999px;padding:8px 8px 8px 18px}
+.pill input{flex:1;min-width:0;border:none;background:none;color:var(--ink);font:inherit;
+font-size:1.05rem;outline:none}
+.ctl{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:12px 2px 0;
+font-size:.8rem;color:var(--ink2)}
+.ctl label{display:flex;gap:5px;align-items:center;cursor:pointer}
+.ctl input[type=range]{accent-color:var(--accent);width:110px}
+.ctl select{font:inherit;font-size:.8rem;color:var(--ink2);background:var(--surface);
+border:1px solid var(--hair);border-radius:8px;padding:2px 6px}
+.lat{margin:18px 2px 0;font-size:.85rem;color:var(--muted);min-height:1.4em}
+.lat b{color:var(--accent2)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-top:14px}
+figure{margin:0;background:var(--surface);border:1px solid var(--hair);border-radius:12px;
+overflow:hidden;opacity:0;animation:rise .3s ease forwards}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
+figure img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:var(--hair)}
+figcaption{padding:6px 9px 8px;font-size:.72rem;color:var(--ink2)}
+figcaption .s{color:var(--accent2);font-variant-numeric:tabular-nums}
+.hidden{display:none!important}</style></head><body><main>
+<h1>one in a <em>million</em>, live</h1>
+<p class="sub">__ROWS__ real dishes · both CLIP towers in RAM · every answer prints its own cost</p>
+<div class="pill"><input id="q" type="search" autofocus
+  placeholder="ramen with a soft-boiled egg…"></div>
+<div class="ctl">
+  <label><input type="checkbox" id="ann" checked> ivf (milliseconds)</label>
+  <label>probes <input type="range" id="probes" min="1" max="32" value="8">
+    <b id="pv">8</b></label>
+  <label>mode <select id="mode"><option value="fused" selected>fused</option>
+    <option value="image">image</option><option value="text">text</option></select></label>
+</div>
+<div class="lat" id="lat"></div><div class="grid" id="grid"></div></main><script>
+const $=id=>document.getElementById(id);let deb=0,seq=0;
+async function go(){const q=$('q').value.trim();if(!q)return;const my=++seq;
+$('lat').textContent='searching…';
+const p=new URLSearchParams({q,mode:$('mode').value,ann:$('ann').checked?1:0,
+probes:$('probes').value,k:24});
+const r=await(await fetch('/api/search?'+p)).json();if(my!==seq)return;
+$('lat').innerHTML=`<b>${r.ms} ms</b> across ${r.rows.toLocaleString()} rows`+
+(r.scanned<r.rows?` — ivf scanned ${(100*r.scanned/r.rows).toFixed(1)}%`:' — exact, every row')+
+` · query embedded in ${r.embed_ms} ms`;
+$('grid').replaceChildren(...r.results.map(x=>{const f=document.createElement('figure');
+const i=document.createElement('img');i.src=x.url;i.alt=x.name;i.loading='lazy';
+i.onerror=()=>f.classList.add('hidden');
+const c=document.createElement('figcaption');
+c.innerHTML=`<span class="s">${x.score>=0?'+':''}${x.score}</span> · `;
+c.append(x.name+(x.cafe?' — '+x.cafe:''));f.append(i,c);return f}))}
+$('q').addEventListener('input',()=>{clearTimeout(deb);deb=setTimeout(go,250)});
+$('q').addEventListener('keydown',e=>{if(e.key==='Enter')go()});
+$('probes').addEventListener('input',()=>{$('pv').textContent=$('probes').value;go()});
+$('ann').addEventListener('change',go);$('mode').addEventListener('change',go);
+</script></body></html>"""
+
+
+def cmd_serve(args):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlparse
+    from embedder import ClipEmbedder
+
+    rows = n_rows(connect())
+    print(f"promoting both towers to f32 RAM (~4 GB) for {rows:,} rows …")
+    t0 = time.time()
+    img = np.asarray(np.load(IMG, mmap_mode="r")[:rows], dtype=np.float32)
+    txt = np.asarray(np.load(TXT, mmap_mode="r")[:rows], dtype=np.float32)
+    print(f"  towers in RAM in {time.time() - t0:,.0f}s")
+    ivf = load_ivf() if os.path.exists(IVF) else None
+    mats = {"image": [(img, 1.0)], "text": [(txt, 1.0)],
+            "fused": [(img, 0.5), (txt, 0.5)]}
+    emb = ClipEmbedder()
+    emb.embed_texts(["warm-up"])            # first MPS call pays compile cost
+    mps = threading.Lock()                  # one query through the model at a time
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):          # quiet: the UI shows every cost
+            pass
+
+        def send(self, code, body, ctype):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            u = urlparse(self.path)
+            if u.path == "/":
+                page = PAGE.replace("__ROWS__", f"{rows:,}").encode()
+                return self.send(200, page, "text/html; charset=utf-8")
+            if u.path != "/api/search":
+                return self.send(404, b"{}", "application/json")
+            p = parse_qs(u.query)
+            query = p.get("q", [""])[0].strip()
+            if not query:
+                return self.send(400, b'{"error":"empty query"}', "application/json")
+            mode = p.get("mode", ["fused"])[0]
+            if mode not in mats:
+                return self.send(400, b'{"error":"bad mode"}', "application/json")
+            probes = max(1, min(64, int(p.get("probes", ["8"])[0])))
+            k = max(1, min(50, int(p.get("k", ["24"])[0])))
+            t0 = time.time()
+            with mps:
+                qv = ensemble_query(emb.embed_texts, query)
+            embed_ms = (time.time() - t0) * 1e3
+            t0 = time.time()
+            if p.get("ann", ["0"])[0] == "1" and ivf:
+                ids, scores, scanned = ivf_search(qv, mats[mode], *ivf, k=k, probes=probes)
+            else:
+                ids, scores = scan_ram(mats[mode], qv, k=k)
+                scanned = rows
+            ms = (time.time() - t0) * 1e3
+            con = connect()                 # sqlite connections are per-thread
+            recs = fetch(con, ids)
+            con.close()
+            body = json.dumps({
+                "ms": round(ms, 1), "embed_ms": round(embed_ms, 1),
+                "scanned": int(scanned), "rows": rows,
+                "results": [{"id": int(i), "name": n, "cafe": c, "url": url,
+                             "score": round(float(s), 3)}
+                            for (i, n, cap, c, url), s in zip(recs, scores)],
+            }).encode()
+            return self.send(200, body, "application/json")
+
+    port = args.port
+    while True:                             # never fight another process for a port
+        try:
+            srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            break
+        except OSError:
+            port += 1
+    print(f"the million is live: http://localhost:{port}")
+    srv.serve_forever()
 
 
 # -------------------------------------------------------------- selftest --
@@ -383,6 +569,15 @@ def cmd_selftest(args):
         cand = np.argsort((i8.astype(np.float32) * s8) @ q)[::-1][:100]
         rr = cand[np.argsort(X[cand] @ q)[::-1][:10]]
         check(set(rr) == set(truth), "int8 top-100 → exact re-rank recovers 10/10")
+        rids, rscores = scan_ram([(X.astype(np.float32), 1.0)], q, k=10)
+        check(set(rids) == set(truth) and np.allclose(rscores, scores, atol=1e-3),
+              "scan_ram == chunked scan == the truth")
+        fake = lambda texts: np.stack([X[0], X[1]])   # two phrasings, canned
+        e = ensemble_query(fake, "anything")
+        mid = (X[0] + X[1]) / 2
+        check(abs(np.linalg.norm(e) - 1) < 1e-6
+              and np.allclose(e, mid / np.linalg.norm(mid), atol=1e-6),
+              "ensemble_query = renormalised mean of the phrasings")
     print("all scale.py checks passed" if ok else "some scale.py checks FAILED")
     raise SystemExit(0 if ok else 1)
 
@@ -402,6 +597,9 @@ def main():
     p.add_argument("-k", type=int, default=10)
     p = sub.add_parser("bench", help="sizes, latency, recall — the honest table")
     p.add_argument("--queries", help="comma-separated real queries (else random vectors)")
+    p.add_argument("--ram", action="store_true", help="also time the towers promoted to f32 RAM")
+    p = sub.add_parser("serve", help="the million live at localhost — towers in RAM")
+    p.add_argument("--port", type=int, default=8071)
     sub.add_parser("selftest", help="synthetic end-to-end check, CI-safe")
     args = ap.parse_args()
     if args.cmd == "ingest":
@@ -412,6 +610,8 @@ def main():
         cmd_search(args)
     elif args.cmd == "bench":
         cmd_bench(args)
+    elif args.cmd == "serve":
+        cmd_serve(args)
     else:
         cmd_selftest(args)
 
