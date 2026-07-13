@@ -125,6 +125,33 @@ def scan_ram(mats, q, k=10):
     return order.astype(np.int64), s[order]
 
 
+def gpu_promote(mats):
+    """One more rung of the storage hierarchy: RAM -> the GPU. On Apple
+    silicon this is nearly free (unified memory), and the exact scan becomes
+    a device matmul + topk. Returns None when there's no usable device."""
+    import torch
+    if torch.backends.mps.is_available():
+        dev = "mps"
+    elif torch.cuda.is_available():
+        dev = "cuda"
+    else:
+        return None
+    return dev, [(torch.from_numpy(np.ascontiguousarray(M)).to(dev), w)
+                 for M, w in mats]
+
+
+def scan_gpu(gpu, q, k=10):
+    """scan_ram's device twin — identical answers, another order of magnitude."""
+    import torch
+    dev, gmats = gpu
+    qt = torch.from_numpy(np.ascontiguousarray(q)).to(dev)
+    s = gmats[0][1] * (gmats[0][0] @ qt)
+    for M, w in gmats[1:]:
+        s = s + w * (M @ qt)
+    scores, ids = torch.topk(s, min(k, s.shape[0]))
+    return ids.cpu().numpy().astype(np.int64), scores.cpu().numpy()
+
+
 def ensemble_query(embed, text):
     """ensemble.py's lesson on the QUERY side: average two phrasings of the
     same intent, renormalise. Worth a few recall points for free."""
@@ -314,21 +341,25 @@ def cmd_bench(args):
     truth = [scan([(img, 1.0)], q, k=10, rows=rows)[0] for q in Q]
     print(f"\n  brute f16→f32   {t_brute:>8,.0f} ms/query   recall 1.00 (the truth)")
 
-    if not (os.path.exists(I8) and os.path.exists(I8S)):
+    stale8 = True                            # rebuild whenever the corpus grew
+    if os.path.exists(I8) and os.path.exists(I8S):
+        meta8 = np.atleast_1d(np.load(I8S))
+        stale8 = meta8.size < 2 or int(meta8[1]) != rows
+    if stale8:
         # quantize.py's scheme, chunked: ONE shared scale so the largest
         # value maps to ±127 — naive 127·x wastes the byte on unit vectors,
         # whose 512-d components rarely leave ±0.1
         amax = max(float(np.abs(np.asarray(img[lo:lo + CHUNK], np.float32)).max())
                    for lo in range(0, rows, CHUNK))
-        np.save(I8S, np.float32(amax / 127.0))
         i8 = np.lib.format.open_memmap(I8, mode="w+", dtype=np.int8, shape=(rows, 512))
         for lo in range(0, rows, CHUNK):
             hi = min(lo + CHUNK, rows)
             i8[lo:hi] = np.round(np.asarray(img[lo:hi], np.float32)
                                  / (amax / 127.0)).astype(np.int8)
         i8.flush()
+        np.save(I8S, np.array([amax / 127.0, rows], dtype=np.float64))
     i8 = np.load(I8, mmap_mode="r")
-    i8_scale = float(np.load(I8S))
+    i8_scale = float(np.atleast_1d(np.load(I8S))[0])
     def scan8(q, k=10):
         return scan([(i8, i8_scale)], q, k=k, rows=rows)
     t8 = med(scan8)
@@ -347,11 +378,15 @@ def cmd_bench(args):
     r8r = np.mean([len(set(scan8_rerank(q)[0]) & set(t)) / 10 for q, t in zip(Q, truth)])
     print(f"  int8 → re-rank  {t8r:>8,.0f} ms/query   recall {r8r:.2f}   (fetch cheap, score exactly)")
 
-    if not os.path.exists(IVF):
+    staleivf = True
+    if os.path.exists(IVF):
+        with np.load(IVF) as z:
+            staleivf = "rows" not in z or int(z["rows"]) != rows
+    if staleivf:
         print("\n  building the ivf index (k-means on a 100k sample) …")
         t0 = time.time()
         C, order, starts = ivf_train(img, rows, log=lambda s: print(s, flush=True))
-        np.savez(IVF, C=C, order=order, starts=starts)
+        np.savez(IVF, C=C, order=order, starts=starts, rows=rows)
         print(f"  built in {time.time() - t0:,.0f}s")
     C, order, starts = load_ivf()
     print("\n  probes   ms/query   recall@10   scanned")
@@ -375,6 +410,15 @@ def cmd_bench(args):
               f"({t_brute / t_ram:,.0f}× the memmap scan)")
         t_ivfr = med(lambda q: ivf_search(q, [(R, 1.0)], C, order, starts, probes=8))
         print(f"  ivf-RAM p=8     {t_ivfr:>8,.1f} ms/query   recall as above")
+        try:
+            gpu = gpu_promote([(R, 1.0)])
+        except Exception:
+            gpu = None
+        if gpu:
+            scan_gpu(gpu, Q[0])            # first call pays the device warm-up
+            t_gpu = med(lambda q: scan_gpu(gpu, q))
+            print(f"  brute {gpu[0]:>4}      {t_gpu:>8,.1f} ms/query   recall 1.00 "
+                  f"({t_brute / t_gpu:,.0f}× the memmap scan)")
 
     print("\nsame story as ann.py, a thousandfold louder: scan ~1%, keep ~all of it.")
 
@@ -392,10 +436,14 @@ font:16px/1.5 system-ui,-apple-system,sans-serif}
 main{max-width:900px;margin:0 auto;padding:48px 20px}
 h1{font-size:1.7rem;letter-spacing:-.02em;margin:0 0 2px}h1 em{font-style:normal;color:var(--accent2)}
 .sub{color:var(--muted);font-size:.85rem;margin:0 0 22px}
-.pill{display:flex;gap:8px;background:var(--surface);border:1px solid var(--hair);
-border-radius:999px;padding:8px 8px 8px 18px}
-.pill input{flex:1;min-width:0;border:none;background:none;color:var(--ink);font:inherit;
-font-size:1.05rem;outline:none}
+.pill{display:flex;gap:8px;align-items:center;background:var(--surface);
+border:1px solid var(--hair);border-radius:999px;padding:8px 8px 8px 18px}
+.pill input[type=search]{flex:1;min-width:0;border:none;background:none;color:var(--ink);
+font:inherit;font-size:1.05rem;outline:none}
+.pill button{border:none;background:none;font-size:1.15rem;cursor:pointer;
+padding:4px 10px;border-radius:999px}
+.pill button:hover{background:var(--page)}
+body.dragging .pill{border-color:var(--accent)}
 .ctl{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:12px 2px 0;
 font-size:.8rem;color:var(--ink2)}
 .ctl label{display:flex;gap:5px;align-items:center;cursor:pointer}
@@ -415,7 +463,9 @@ figcaption .s{color:var(--accent2);font-variant-numeric:tabular-nums}
 <h1>one in a <em>million</em>, live</h1>
 <p class="sub">__ROWS__ real dishes · both CLIP towers in RAM · every answer prints its own cost</p>
 <div class="pill"><input id="q" type="search" autofocus
-  placeholder="ramen with a soft-boiled egg…"></div>
+  placeholder="ramen with a soft-boiled egg… — or drop a photo anywhere">
+<button id="cam" title="reverse image search: pick a photo">📷</button>
+<input id="file" type="file" accept="image/*" class="hidden"></div>
 <div class="ctl">
   <label><input type="checkbox" id="ann" checked> ivf (milliseconds)</label>
   <label>probes <input type="range" id="probes" min="1" max="32" value="8">
@@ -425,24 +475,39 @@ figcaption .s{color:var(--accent2);font-variant-numeric:tabular-nums}
 </div>
 <div class="lat" id="lat"></div><div class="grid" id="grid"></div></main><script>
 const $=id=>document.getElementById(id);let deb=0,seq=0;
-async function go(){const q=$('q').value.trim();if(!q)return;const my=++seq;
-$('lat').textContent='searching…';
-const p=new URLSearchParams({q,mode:$('mode').value,ann:$('ann').checked?1:0,
-probes:$('probes').value,k:24});
-const r=await(await fetch('/api/search?'+p)).json();if(my!==seq)return;
-$('lat').innerHTML=`<b>${r.ms} ms</b> across ${r.rows.toLocaleString()} rows`+
-(r.scanned<r.rows?` — ivf scanned ${(100*r.scanned/r.rows).toFixed(1)}%`:' — exact, every row')+
-` · query embedded in ${r.embed_ms} ms`;
+function render(r,label){
+$('lat').innerHTML=`<b>${r.ms} ms</b> across ${r.rows.toLocaleString()} rows (${r.engine})`+
+(r.scanned<r.rows?` — scanned ${(100*r.scanned/r.rows).toFixed(1)}%`:'')+
+` · ${label} embedded in ${r.embed_ms} ms`;
 $('grid').replaceChildren(...r.results.map(x=>{const f=document.createElement('figure');
 const i=document.createElement('img');i.src=x.url;i.alt=x.name;i.loading='lazy';
 i.onerror=()=>f.classList.add('hidden');
 const c=document.createElement('figcaption');
 c.innerHTML=`<span class="s">${x.score>=0?'+':''}${x.score}</span> · `;
 c.append(x.name+(x.cafe?' — '+x.cafe:''));f.append(i,c);return f}))}
+async function go(){const q=$('q').value.trim();if(!q)return;const my=++seq;
+$('lat').textContent='searching…';
+const p=new URLSearchParams({q,mode:$('mode').value,ann:$('ann').checked?1:0,
+probes:$('probes').value,k:24});
+const r=await(await fetch('/api/search?'+p)).json();if(my!==seq)return;
+render(r,'query')}
+async function goImage(file){if(!file||!file.type.startsWith('image/'))return;
+const my=++seq;$('lat').textContent='embedding your photo…';
+const p=new URLSearchParams({ann:$('ann').checked?1:0,probes:$('probes').value,k:24});
+const r=await(await fetch('/api/search-image?'+p,{method:'POST',body:file})).json();
+if(my!==seq)return;render(r,'photo')}
 $('q').addEventListener('input',()=>{clearTimeout(deb);deb=setTimeout(go,250)});
 $('q').addEventListener('keydown',e=>{if(e.key==='Enter')go()});
 $('probes').addEventListener('input',()=>{$('pv').textContent=$('probes').value;go()});
 $('ann').addEventListener('change',go);$('mode').addEventListener('change',go);
+$('cam').addEventListener('click',()=>$('file').click());
+$('file').addEventListener('change',()=>goImage($('file').files[0]));
+addEventListener('dragover',e=>{e.preventDefault();document.body.classList.add('dragging')});
+addEventListener('dragleave',e=>{if(!e.relatedTarget)document.body.classList.remove('dragging')});
+addEventListener('drop',e=>{e.preventDefault();document.body.classList.remove('dragging');
+goImage(e.dataTransfer.files[0])});
+addEventListener('paste',e=>{const f=[...(e.clipboardData?.items||[])]
+.find(i=>i.type.startsWith('image/'));if(f)goImage(f.getAsFile())});
 </script></body></html>"""
 
 
@@ -461,9 +526,49 @@ def cmd_serve(args):
     ivf = load_ivf() if os.path.exists(IVF) else None
     mats = {"image": [(img, 1.0)], "text": [(txt, 1.0)],
             "fused": [(img, 0.5), (txt, 0.5)]}
+    gpu = {}
+    try:                                    # one more rung: both towers on device
+        g = gpu_promote([(img, 1.0), (txt, 1.0)])
+        if g:
+            dev, ((gi, _), (gt, _)) = g
+            gpu = {"image": (dev, [(gi, 1.0)]), "text": (dev, [(gt, 1.0)]),
+                   "fused": (dev, [(gi, 0.5), (gt, 0.5)])}
+            scan_gpu(gpu["fused"], np.zeros(512, np.float32))   # warm the device
+            print(f"  towers on {dev} — exact scans run on the GPU")
+    except Exception as e:
+        print(f"  (no GPU path: {e} — exact scans stay in RAM)")
     emb = ClipEmbedder()
     emb.embed_texts(["warm-up"])            # first MPS call pays compile cost
     mps = threading.Lock()                  # one query through the model at a time
+
+    def run_query(qv, mode, ann, probes, k, embed_ms):
+        t0 = time.time()
+        if ann and ivf:
+            ids, scores, scanned = ivf_search(qv, mats[mode], *ivf, k=k, probes=probes)
+            engine = "ivf"
+        elif gpu:
+            ids, scores = scan_gpu(gpu[mode], qv, k=k)
+            scanned, engine = rows, f"exact on {gpu[mode][0]}"
+        else:
+            ids, scores = scan_ram(mats[mode], qv, k=k)
+            scanned, engine = rows, "exact in RAM"
+        ms = (time.time() - t0) * 1e3
+        con = connect()                     # sqlite connections are per-thread
+        recs = fetch(con, ids)
+        con.close()
+        return json.dumps({
+            "ms": round(ms, 1), "embed_ms": round(embed_ms, 1),
+            "scanned": int(scanned), "rows": rows, "engine": engine,
+            "results": [{"id": int(i), "name": n, "cafe": c, "url": url,
+                         "score": round(float(s), 3)}
+                        for (i, n, cap, c, url), s in zip(recs, scores)],
+        }).encode()
+
+    def knobs(p):
+        return (p.get("mode", ["fused"])[0],
+                p.get("ann", ["0"])[0] == "1",
+                max(1, min(64, int(p.get("probes", ["8"])[0]))),
+                max(1, min(50, int(p.get("k", ["24"])[0]))))
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):          # quiet: the UI shows every cost
@@ -487,33 +592,44 @@ def cmd_serve(args):
             query = p.get("q", [""])[0].strip()
             if not query:
                 return self.send(400, b'{"error":"empty query"}', "application/json")
-            mode = p.get("mode", ["fused"])[0]
+            mode, ann, probes, k = knobs(p)
             if mode not in mats:
                 return self.send(400, b'{"error":"bad mode"}', "application/json")
-            probes = max(1, min(64, int(p.get("probes", ["8"])[0])))
-            k = max(1, min(50, int(p.get("k", ["24"])[0])))
             t0 = time.time()
             with mps:
                 qv = ensemble_query(emb.embed_texts, query)
             embed_ms = (time.time() - t0) * 1e3
+            return self.send(200, run_query(qv, mode, ann, probes, k, embed_ms),
+                             "application/json")
+
+        def do_POST(self):
+            # reverse image search: the request body IS the photo. The vision
+            # tower embeds it here; from then on it's the same scan as text.
+            import io
+            from PIL import Image
+            u = urlparse(self.path)
+            if u.path != "/api/search-image":
+                return self.send(404, b"{}", "application/json")
+            size = int(self.headers.get("Content-Length", 0))
+            if not 0 < size <= 20_000_000:
+                return self.send(400, b'{"error":"bad image size"}', "application/json")
+            _, ann, probes, k = knobs(parse_qs(u.query))
+            try:
+                pil = Image.open(io.BytesIO(self.rfile.read(size))).convert("RGB")
+            except Exception:
+                return self.send(400, b'{"error":"not an image"}', "application/json")
             t0 = time.time()
-            if p.get("ann", ["0"])[0] == "1" and ivf:
-                ids, scores, scanned = ivf_search(qv, mats[mode], *ivf, k=k, probes=probes)
-            else:
-                ids, scores = scan_ram(mats[mode], qv, k=k)
-                scanned = rows
-            ms = (time.time() - t0) * 1e3
-            con = connect()                 # sqlite connections are per-thread
-            recs = fetch(con, ids)
-            con.close()
-            body = json.dumps({
-                "ms": round(ms, 1), "embed_ms": round(embed_ms, 1),
-                "scanned": int(scanned), "rows": rows,
-                "results": [{"id": int(i), "name": n, "cafe": c, "url": url,
-                             "score": round(float(s), 3)}
-                            for (i, n, cap, c, url), s in zip(recs, scores)],
-            }).encode()
-            return self.send(200, body, "application/json")
+            with mps:
+                inputs = emb.processor(images=[pil], return_tensors="pt").to(emb.device)
+                import torch
+                with torch.no_grad():
+                    feats = emb.model.get_image_features(**inputs)
+                qv = (feats.pooler_output if hasattr(feats, "pooler_output") else feats)
+                qv = qv[0].float().cpu().numpy()
+                qv /= np.linalg.norm(qv) or 1.0
+            embed_ms = (time.time() - t0) * 1e3
+            return self.send(200, run_query(qv.astype(np.float32), "image", ann,
+                                            probes, k, embed_ms), "application/json")
 
     port = args.port
     while True:                             # never fight another process for a port
