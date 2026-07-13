@@ -176,6 +176,30 @@ def test_softmax():
     assert np.allclose(softmax([s + 7 for s in scores]), p)      # shift-invariant
 
 
+def test_model_registry():
+    """models.py: keys, ids and unknown ids all resolve; padding rules hold."""
+    import models
+    from labels import siglip_label_probs
+
+    by_key = models.resolve("siglip2-base")
+    assert by_key["kind"] == "siglip" and by_key["dim"] == 768
+    assert by_key["text_kwargs"]["padding"] == "max_length"    # the big trap
+    assert by_key["text_kwargs"]["max_length"] == 64
+    by_id = models.resolve("openai/clip-vit-base-patch32")
+    assert by_id["kind"] == "clip" and by_id["dim"] == 512
+    assert by_id["text_kwargs"]["padding"] is True
+    unknown = models.resolve("someone/some-clip")
+    assert unknown["kind"] == "clip" and unknown["hf_id"] == "someone/some-clip"
+    assert models.resolve("clip-b32")["hf_id"] == models.MODELS[models.DEFAULT]["hf_id"]
+
+    # SigLIP native calibration: sigmoid(scale * cos + bias), checkpoint values
+    tag_embs = np.array([[1, 0, 0], [0, 1, 0.0]])
+    img = np.array([1, 0, 0.0])
+    p = siglip_label_probs(img, tag_embs, scale=118.0, bias=-12.9)
+    assert 0.9 < p[0] <= 1.0          # perfect match: confident
+    assert p[1] < 1e-4                # unrelated: bias drives it to ~0
+
+
 def test_hermes_extend():
     """hermes.extend: crawled files join the working set for THIS search."""
     import hermes

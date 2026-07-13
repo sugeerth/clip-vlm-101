@@ -10,9 +10,11 @@ vectors — and since they are unit-length, cosine similarity is a dot product.
 import numpy as np
 import torch
 from PIL import Image
-from transformers import CLIPModel, CLIPProcessor
+from transformers import AutoModel, AutoProcessor
 
-MODEL_ID = "openai/clip-vit-base-patch32"  # 512-d embeddings, ~600 MB
+import models
+
+MODEL_ID = "openai/clip-vit-base-patch32"  # the default; see models.MODELS
 
 
 def best_device() -> str:
@@ -26,22 +28,34 @@ def best_device() -> str:
 
 class ClipEmbedder:
     def __init__(self, model_id: str = MODEL_ID, device: str | None = None):
+        spec = models.resolve(model_id)   # registry key or any HF id
         self.device = device or best_device()
-        self.model = CLIPModel.from_pretrained(model_id).to(self.device).eval()
-        self.processor = CLIPProcessor.from_pretrained(model_id)
+        self.model = AutoModel.from_pretrained(spec["hf_id"]).to(self.device).eval()
+        self.processor = AutoProcessor.from_pretrained(spec["hf_id"])
+        self.kind, self.dim = spec["kind"], spec["dim"]
+        self._text_kwargs = spec["text_kwargs"]
+        # scoring constants belong to the CHECKPOINT — read, never hardcode.
+        # CLIP: exp(logit_scale) ~ 100, no bias. SigLIP: scale AND bias, and
+        # sigmoid(scale * cosine + bias) is a calibrated per-tag probability.
+        self.logit_scale = float(self.model.logit_scale.exp())
+        self.logit_bias = float(getattr(self.model, "logit_bias", torch.zeros(1)))
 
     @torch.no_grad()
     def embed_images(self, paths) -> np.ndarray:
-        """List of image paths -> (n, 512) array of unit vectors."""
+        """List of image paths -> (n, dim) array of unit vectors."""
         images = [Image.open(p).convert("RGB") for p in paths]
         inputs = self.processor(images=images, return_tensors="pt").to(self.device)
         return _unit(self.model.get_image_features(**inputs))
 
     @torch.no_grad()
     def embed_texts(self, texts) -> np.ndarray:
-        """List of sentences -> (n, 512) array of unit vectors."""
+        """List of sentences -> (n, dim) array of unit vectors.
+
+        Padding rule comes from the registry: SigLIP-family models were
+        trained with padding="max_length" and silently degrade without it.
+        """
         inputs = self.processor(
-            text=list(texts), return_tensors="pt", padding=True, truncation=True
+            text=list(texts), return_tensors="pt", **self._text_kwargs
         ).to(self.device)
         return _unit(self.model.get_text_features(**inputs))
 

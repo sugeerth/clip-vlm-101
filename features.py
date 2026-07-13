@@ -126,9 +126,16 @@ if __name__ == "__main__":
                     help="average many templates per tag (see ensemble.py)")
     ap.add_argument("--json", action="store_true",
                     help="dump record(s) with embeddings as lists")
+    ap.add_argument("--model", default=None,
+                    help="a models.py registry key (clip-b32, siglip2-base, …)")
     args = ap.parse_args()
 
-    fx = FeatureExtractor(tag_template=args.tag_template, ensemble=args.ensemble)
+    clip = None
+    if args.model:
+        from embedder import ClipEmbedder
+        clip = ClipEmbedder(model_id=args.model)
+    fx = FeatureExtractor(tag_template=args.tag_template, ensemble=args.ensemble,
+                          clip=clip)
     records = []
     for path in args.images:
         if args.image_only:

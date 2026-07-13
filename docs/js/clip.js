@@ -1,13 +1,33 @@
-// Mirror of embedder.py — the SAME CLIP checkpoint, running in your browser
+// Mirror of embedder.py — CLIP-family checkpoints running in your browser
 // via transformers.js. Models load lazily on first use; the browser caches
 // them after that. No DOM here: callers pass onStatus/onProgress callbacks.
+//
+// Multiple "brains" are supported through the registry in models.js —
+// setActiveModel() switches which checkpoint the getters resolve to, and
+// encoders are cached PER MODEL so switching back is instant. The two
+// model families differ in exactly two ways, both handled here:
+//   clip   (CLIP, MobileCLIP)  *WithProjection classes, .text_embeds /
+//                              .image_embeds, per-checkpoint padding rule
+//   siglip (SigLIP, SigLIP 2)  SiglipTextModel / SiglipVisionModel, both
+//                              towers emit .pooler_output, 64-token pads
 import { unit } from './rank.js';
+import { MODELS, DEFAULT_MODEL } from './models.js';
 
-export const MODEL_ID = 'Xenova/clip-vit-base-patch32';
+export const MODEL_ID = MODELS[DEFAULT_MODEL].id;   // kept for back-compat
 const CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.2';
 
-let hf = null, textP = null, imageP = null;
+let hf = null;
 const lib = async () => (hf ??= await import(CDN));
+
+let active = DEFAULT_MODEL;
+const textCache = new Map();    // model key -> in-flight/resolved encoder
+const imageCache = new Map();
+
+export const getActiveModel = () => active;
+export function setActiveModel(key) {
+  if (!MODELS[key]) throw new Error(`unknown model: ${key}`);
+  active = key;
+}
 
 // (n, d) tensor -> array of n unit-length plain arrays (embedder._unit).
 function sliceRows(tensor) {
@@ -16,38 +36,46 @@ function sliceRows(tensor) {
   return rows;
 }
 
-// Both getters memoize the IN-FLIGHT PROMISE so two concurrent first uses
-// share one download, and clear it on failure so a retry can succeed.
+// Both getters memoize the IN-FLIGHT PROMISE per model, so two concurrent
+// first uses share one download, and clear it on failure for clean retries.
 
-// resolves to: async (texts) => array of 512-d unit vectors
+// resolves to: async (texts) => array of unit vectors (dim per model)
 export function getTextEncoder(onStatus, onProgress) {
-  textP ??= (async () => {
-    onStatus('Loading CLIP text encoder…');
-    const { AutoTokenizer, CLIPTextModelWithProjection } = await lib();
-    const tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID, { progress_callback: onProgress });
-    const model = await CLIPTextModelWithProjection.from_pretrained(MODEL_ID, { dtype: 'q8', progress_callback: onProgress });
-    return async texts => {
-      const inputs = tokenizer(texts, { padding: true, truncation: true });
-      const { text_embeds } = await model(inputs);
-      return sliceRows(text_embeds);
-    };
-  })().catch(err => { textP = null; throw err; });
-  return textP;
+  const key = active, m = MODELS[key];
+  if (!textCache.has(key)) {
+    textCache.set(key, (async () => {
+      onStatus(`Loading ${m.label.split(' · ')[0]} text encoder…`);
+      const T = await lib();
+      const tokenizer = await T.AutoTokenizer.from_pretrained(m.id, { progress_callback: onProgress });
+      const tokOpts = { padding: m.padding, truncation: true };
+      if (m.maxLength) tokOpts.max_length = m.maxLength;
+      if (m.kind === 'siglip') {
+        const model = await T.SiglipTextModel.from_pretrained(m.id, { dtype: 'q8', progress_callback: onProgress });
+        return async texts => sliceRows((await model(tokenizer(texts, tokOpts))).pooler_output);
+      }
+      const model = await T.CLIPTextModelWithProjection.from_pretrained(m.id, { dtype: 'q8', progress_callback: onProgress });
+      return async texts => sliceRows((await model(tokenizer(texts, tokOpts))).text_embeds);
+    })().catch(err => { textCache.delete(key); throw err; }));
+  }
+  return textCache.get(key);
 }
 
-// resolves to: async (blob) => one 512-d unit vector
+// resolves to: async (blob) => one unit vector (dim per model)
 export function getImageEncoder(onStatus, onProgress) {
-  imageP ??= (async () => {
-    onStatus('Loading CLIP vision encoder…');
-    const { AutoProcessor, CLIPVisionModelWithProjection, RawImage } = await lib();
-    const processor = await AutoProcessor.from_pretrained(MODEL_ID, { progress_callback: onProgress });
-    const model = await CLIPVisionModelWithProjection.from_pretrained(MODEL_ID, { dtype: 'q8', progress_callback: onProgress });
-    return async blob => {
-      const image = await RawImage.fromBlob(blob);
-      const inputs = await processor(image);
-      const { image_embeds } = await model(inputs);
-      return sliceRows(image_embeds)[0];
-    };
-  })().catch(err => { imageP = null; throw err; });
-  return imageP;
+  const key = active, m = MODELS[key];
+  if (!imageCache.has(key)) {
+    imageCache.set(key, (async () => {
+      onStatus(`Loading ${m.label.split(' · ')[0]} vision encoder…`);
+      const T = await lib();
+      const processor = await T.AutoProcessor.from_pretrained(m.id, { progress_callback: onProgress });
+      const Vision = m.kind === 'siglip' ? T.SiglipVisionModel : T.CLIPVisionModelWithProjection;
+      const model = await Vision.from_pretrained(m.id, { dtype: 'q8', progress_callback: onProgress });
+      return async blob => {
+        const image = await T.RawImage.fromBlob(blob);
+        const out = await model(await processor(image));
+        return sliceRows(m.kind === 'siglip' ? out.pooler_output : out.image_embeds)[0];
+      };
+    })().catch(err => { imageCache.delete(key); throw err; }));
+  }
+  return imageCache.get(key);
 }

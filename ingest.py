@@ -30,6 +30,9 @@ def main():
     ap.add_argument("--caption-template", default=templates.DEFAULT_CAPTION_TEMPLATE)
     ap.add_argument("--caption", help="your own caption (skips the template)")
     ap.add_argument("--db", default=db.DB_PATH)
+    ap.add_argument("--model", default=None,
+                    help="a models.py registry key (clip-b32, siglip2-base, …) "
+                         "— one db holds ONE model's vectors, never a mix")
     args = ap.parse_args()
     if args.caption and len(args.paths) > 1:
         ap.error("--caption is one caption for one image — ingest that file by itself")
@@ -43,8 +46,12 @@ def main():
         except OSError as e:  # missing / truncated / not-an-image: skip, keep going
             print(f"  SKIP {p}: {e}")
 
+    clip = None
+    if args.model:
+        from embedder import ClipEmbedder
+        clip = ClipEmbedder(model_id=args.model)
     fx = FeatureExtractor(args.tag_template, args.caption_template,
-                          ensemble=args.ensemble)
+                          ensemble=args.ensemble, clip=clip)
     print(f"model {fx.clip.model.name_or_path} on {fx.clip.device}")
     con = db.connect(args.db)
 

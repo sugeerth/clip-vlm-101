@@ -82,9 +82,14 @@ if __name__ == "__main__":
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("images", nargs="+", help="labeled sample images")
+    ap.add_argument("--model", default=None,
+                    help="a models.py registry key — benchmark newer brains: "
+                         "compare runs of `eval.py --model clip-b32` vs "
+                         "`--model siglip2-base` on the same images")
     args = ap.parse_args()
 
-    results = evaluate(ClipEmbedder(), args.images)
+    clip = ClipEmbedder(model_id=args.model) if args.model else ClipEmbedder()
+    results = evaluate(clip, args.images)
     if results["skipped"]:
         print(f"({results['skipped']} image(s) not in GROUND_TRUTH — skipped)")
     print(f"\n{'tagger':<22} {'top-1':>7} {'top-5':>7}")
