@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install numpy
+      - run: pip install numpy pillow   # pillow: spider.py's icon-size gate runs in test_smoke
       - run: python test_smoke.py
       - run: node docs/js/test_rank.mjs     # the JS math must mirror the Python
       - run: node docs/js/test_lessons.mjs  # the live lessons must reproduce the Python-pinned numbers
