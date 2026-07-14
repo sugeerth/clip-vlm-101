@@ -67,6 +67,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python ingest.py images/*.jpg     # embed + auto-tag + store in SQLite
 .venv/bin/python search.py "a fluffy animal"
 .venv/bin/python hermes.py "a fluffy animal"  # the agentic version, with a trace
+.venv/bin/python learn2rank.py                # 👍/👎 → a ranker that learns your taste
+.venv/bin/python conformal.py --json docs/db.json  # a coverage guarantee, or abstain
 .venv/bin/python crawler.py "red panda" -n 6 # grow the gallery, with receipts
 .venv/bin/python spider.py https://example.com/gallery  # or crawl any site
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
@@ -140,6 +142,8 @@ Suggested reading order:
 | `eval.py` | ~100 | **the benchmark**: top-1/top-5 hit rates — prove an optimization helps |
 | `search.py` | ~90 | text / image / fused retrieval with dot products |
 | `dcn.py` | ~130 | **the ranking stage**: a Deep&Cross Network v2 — the query×item interaction a dot product can't express |
+| `learn2rank.py` | ~130 | **the ranker that learns YOU**: pairwise RankNet over your 👍/👎, on-device, blended-and-capped so a few clicks can't wreck retrieval |
+| `conformal.py` | ~140 | **a coverage guarantee, or an honest abstain**: split conformal prediction → the smallest result set that contains the truth ≥ 1−α of the time |
 | `explain.py` | ~150 | **explain + hallucination gate**: say why results matched, and redact any claim the results don't support |
 | `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
@@ -167,7 +171,8 @@ holds both languages to it):
 The browser demo mirrors the same pipeline in `docs/js/` with **matching
 module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
 `rank.js` ↔ `tagger.py`+`fusion.py`+`search.py`, `labels.js` ↔ `labels.py`,
-`agent.js` ↔ `agent.py`, `recsys.js` ↔ `user_tower.py`; `viz.js`, `motion.js`,
+`agent.js` ↔ `agent.py`, `recsys.js` ↔ `user_tower.py`, `learn.js` ↔
+`learn2rank.py`, `conformal.js` ↔ `conformal.py`; `viz.js`, `motion.js`,
 and `tour.js` are page-only (the matrix, map and strips, the animation
 helpers, the guided tour), and `app.js` wires everything together. Read a
 Python file, then its twin — same pipeline, two languages.
@@ -274,6 +279,58 @@ on the READ path: your query is treated as a draft, not a command.
 The live search box at https://sugeerth.github.io/clip-vlm-101/ runs Hermes
 on every text query — the muted "🪽 hermes chose …" line under the results
 expands into the full trace of what it tried and why.
+
+## A ranker that learns YOU — on your device, no server
+
+`dcn.py` shows the ranking *mechanism* with hand-set weights and admits the one
+honest caveat: it's untrained. `learn2rank.py` (`js/learn.js`) closes it — it
+*learns* the weights live from your 👍/👎, the click-relevance signal supplied
+by you and sent nowhere. A linear scorer `s = w·x` over
+`[cos_image, cos_text, tag_overlap, rank_prior]`, trained by **pairwise RankNet**
+(Burges et al., ICML 2005): for every (👍, 👎) pair, push the liked one above the
+disliked one.
+
+```
+o = w·(xᵢ − xⱼ)          # margin between a liked i and a disliked j
+λ = −σ / (1 + e^{σo})     # RankNet's per-pair gradient
+w ← w − lr·(λ·(xᵢ−xⱼ) + l2·w)
+```
+
+Three safeguards keep a handful of clicks from wrecking retrieval: `w` starts
+`[1,0,0,0]`, so an **untrained ranker is exactly the base order**; one-sided
+feedback (only 👍 or only 👎) can't form a pair, so it falls back to a Rocchio
+nudge instead of a degenerate gradient; and the learned score is *blended and
+capped at 50%* — `final = (1−β)·base + β·learned`, `β = 0.5·n/(n+3)` — so
+retrieval always keeps at least half the vote. The entire model is four floats
+in `localStorage`: your personal ranker, private by construction, wiped by a
+reset. In the demo the learned-weight bars and 👍/👎 buttons live under the
+results; `python3 learn2rank.py` runs the same math with a printed trace.
+
+## A coverage guarantee, or an honest abstain
+
+Every other file returns a top-k and hopes. `conformal.py` (`js/conformal.js`)
+makes a promise you can check: given a confidence level (say 90%), it returns the
+**smallest set of results that contains the true match at least 90% of the
+time** — or, when nothing clears the bar, it *abstains* ("no confident match")
+rather than guess. This is **split conformal prediction** (Vovk et al. 2005;
+[Angelopoulos & Bates, arXiv:2107.07511](https://arxiv.org/abs/2107.07511)), and
+for retrieval it collapses to one honestly-calibrated cosine threshold:
+
+```
+score      1 − cos(query, relevant)                 # nonconformity of a match
+calibrate  k = ⌈(n+1)(1−α)⌉;  q̂ = k-th smallest score   # rank-corrected quantile
+predict    return every item with  cos ≥ 1 − q̂       # covers the truth ≥ 1−α
+```
+
+The set is **adaptive for free**: a clear winner gives a set of one, a pile of
+near-ties a big set — so set *size* is the per-query confidence signal. The
+guarantee is distribution-free (nothing assumed about CLIP, only that queries are
+exchangeable) and finite-sample: `1−α ≤ coverage ≤ 1−α + 1/(n+1)`. On the
+14-image gallery `n` is tiny, so coverage moves in ~7% steps — 80% lands exactly,
+90% rounds up to ~93% — and we say so rather than truncate the set to look tidy
+(truncating would break the promise). `python3 conformal.py --json docs/db.json`
+prints the coverage/size table; the demo shows the 80% set or the abstain badge
+under every search.
 
 ## Two ways to grow the corpus
 
@@ -479,6 +536,8 @@ lesson runs on committed data — and CI re-runs all of them on every push:
 | `python3 similarity.py --json docs/db.json --centered` | own-caption margin **+0.120 → +0.388** after centering |
 | `python3 ann.py` | probes 1: recall **0.75** scanning **1.8%**; probes 8: **0.94** at 12.8% |
 | `python3 hermes.py --image pizza --json docs/db.json` | the evaluator **rejects** the drifting pass and keeps the honest ranking |
+| `python3 learn2rank.py` | after 👍 the tag-sharers / 👎 the rest, `tag_overlap` importance dominates and the parrot lifts above the sunflower |
+| `python3 conformal.py --json docs/db.json` | coverage sits **on or above** every target (80% → 84.6%, 90% → 92.3%); the set grows as you demand more confidence |
 | `python3 scale.py selftest` | chunked scan == naive argsort; ivf probes=8 keeps ≥7/10 of the truth scanning <½ the rows |
 
 (The numbers are pinned to the committed sample gallery; re-exporting your

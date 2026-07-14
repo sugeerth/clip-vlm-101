@@ -37,16 +37,21 @@ export async function hermesSearch(query, encodeText, items, k = 8) {
     const ranked = rank(items, embs[i], 'fused', k);
     return { phrasing, ranked, margin: margin(ranked) };
   });
-  const best = rounds.reduce((a, b) => (b.margin > a.margin ? b : a));
+  let bestI = 0;
+  for (let i = 1; i < rounds.length; i++) if (rounds[i].margin > rounds[bestI].margin) bestI = i;
+  const best = rounds[bestI];
   if (best.margin >= MIN_MARGIN) {
-    return { ranked: best.ranked, satisfied: true, chose: best.phrasing, rounds };
+    // `qvec` is the embedding that produced these results — so a downstream
+    // re-ranker scores the SAME phrasing the trace says Hermes chose.
+    return { ranked: best.ranked, satisfied: true, chose: best.phrasing, rounds, qvec: embs[bestI] };
   }
   // no phrasing is decisive → refine: ensemble all drafts and answer with that
   const d = embs[0].length;
   const mean = new Array(d).fill(0);
   for (const e of embs) for (let i = 0; i < d; i++) mean[i] += e[i] / embs.length;
+  const ens = unit(mean);
   return {
-    ranked: rank(items, unit(mean), 'fused', k),
-    satisfied: false, chose: 'an ensemble of all phrasings', rounds,
+    ranked: rank(items, ens, 'fused', k),
+    satisfied: false, chose: 'an ensemble of all phrasings', rounds, qvec: ens,
   };
 }

@@ -10,6 +10,9 @@ import { getTextEncoder, getImageEncoder, getActiveModel, setActiveModel } from 
 import { MODELS, DEFAULT_MODEL } from './models.js';
 import { discover } from './crawler.js';
 import { explain, explainWithLLM } from './explain.js';
+import { OnlineRanker } from './learn.js';
+import { looScores, calibrate } from './conformal.js';
+import { flip } from './motion.js';
 
 const $ = id => document.getElementById(id);
 const EXAMPLES = ['a fluffy animal', 'famous landmark in europe',
@@ -17,6 +20,21 @@ const EXAMPLES = ['a fluffy animal', 'famous landmark in europe',
 const TOP_K = 8;
 
 const DB = await (await fetch('db.json')).json();
+
+// the on-device personal ranker (learn.js) — restored from localStorage, a
+// model of a few floats that never leaves the machine. And a conformal
+// threshold (conformal.js) calibrated ONCE on the gallery for the 80 % set.
+const RANK_KEY = 'personalRanker.v1';
+const ranker = new OnlineRanker();
+try { const st = JSON.parse(localStorage.getItem(RANK_KEY)); if (st) ranker.loadState(st); } catch { /* ignore */ }
+const persistRanker = () => localStorage.setItem(RANK_KEY, JSON.stringify(ranker.toState()));
+// Calibrate in the SAME modality a live search queries in: text_emb (caption,
+// the stand-in query) over image_emb. Image→image cosines sit at ~0.5–1.0 but
+// text→image cosines at ~0.15–0.30 (CLIP's modality gap), so a threshold from
+// the image-side band would never fire on a real text query.
+const CAL = looScores(DB.items, 'image_emb', 'text_emb');
+const TAU80 = 1 - calibrate(CAL, 0.2);        // cos ≥ TAU80  → the 80%-coverage set
+let candCtx = null;                            // { query, cand:[{item,features,...}] }
 
 let encodeText = null;      // resolves once per brain, then ~instant
 let encodeTextModel = null; // WHICH brain the cached encoder belongs to
@@ -33,11 +51,13 @@ const progress = p => {
 const hideBar = () => $('barTrack').classList.add('hidden');
 
 // ---------------------------------------------------------------- results --
-function show(entries, note = '') {
+function show(entries, note = '', feedback = false) {
   document.body.classList.add('searched');
   $('results').replaceChildren(...entries.map(({ item }, i) => {
     const fig = document.createElement('figure');
+    fig.dataset.key = item.file;                 // FLIP identity for re-rank
     fig.style.animationDelay = `${i * 45}ms`;
+    if (feedback) fig.append(feedbackButtons(item));
     fig.append(
       Object.assign(document.createElement('img'),
         { src: item.file, alt: item.caption, loading: 'lazy' }),
@@ -156,6 +176,7 @@ async function search() {
       hideTrace();
       clearWeb();
       $('explain').classList.add('hidden');
+      $('learnPanel').classList.add('hidden'); candCtx = null;
       await ensureBrainReady();
       show(DB.items
         .map(item => ({ item, score: dot(item.image_emb, imageQuery.emb) }))
@@ -174,9 +195,15 @@ async function search() {
       // Hermes works the query: propose phrasings, critique each by its
       // retrieval margin, ensemble if none is decisive — then answer.
       const out = await hermesSearch(query, encodeText, DB.items, TOP_K);
-      show(out.ranked);
+      // rank on the SAME embedding Hermes chose (best phrasing or ensemble), so
+      // the results match the "🪽 hermes chose …" trace instead of the raw query.
+      personalize(query, out.qvec);               // learned re-rank + 👍/👎 + confidence
       showTrace(out);
-      renderExplain(query, out.ranked);   // why did these match? (grounded + gated)
+      // explain reads .score as a real cosine (its strength bands + the gate's
+      // number check depend on it), so pass the fused cosine in DISPLAY order —
+      // not the ranker's min-max-normalized blend score (whose top is ≈1.0).
+      renderExplain(query, ranker.rank(candCtx.cand, { k: TOP_K })
+        .map(c => ({ item: c.item, score: c.base_score })));  // why (gated)
       webPhase(query);               // fire-and-forget: local results never wait
     }
   } catch (err) {
@@ -185,12 +212,105 @@ async function search() {
     hideTrace();
     clearWeb();
     $('explain').classList.add('hidden');
+    $('learnPanel').classList.add('hidden'); candCtx = null;
     const hits = keywordResults(query);
     show(hits, hits.length ? 'model unavailable here — showing keyword matches'
                            : 'model unavailable and no keyword matches');
   }
   searching = false;
   if (rerun) { rerun = false; search(); }
+}
+
+// ------------------------------------------------------ personalization --
+// 👍/👎 on a result trains the on-device ranker (learn.js) and re-ranks live.
+function feedbackButtons(item) {
+  const wrap = document.createElement('div');
+  wrap.className = 'fb';
+  for (const [label, glyph] of [[1, '👍'], [0, '👎']]) {
+    const b = Object.assign(document.createElement('button'),
+      { type: 'button', textContent: glyph, title: label ? 'more like this' : 'less like this' });
+    b.setAttribute('aria-label', label ? 'thumbs up' : 'thumbs down');
+    b.addEventListener('click', e => { e.stopPropagation(); giveFeedback(item, label); });
+    wrap.append(b);
+  }
+  return wrap;
+}
+
+function personalize(query, qvec) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const cand = DB.items.map(item => {
+    const cos_image = dot(item.image_emb, qvec), cos_text = dot(item.text_emb, qvec);
+    const tag_overlap = item.tags.filter(t => words.some(w => t.includes(w) || w.includes(t))).length;
+    return { item, cos_image, cos_text, tag_overlap, base_score: (cos_image + cos_text) / 2 };
+  });
+  cand.sort((a, b) => b.base_score - a.base_score);
+  cand.forEach((c, i) => { c.rank_prior = 1 / (i + 1);
+    c.features = [c.cos_image, c.cos_text, c.tag_overlap, c.rank_prior]; });
+  candCtx = { query, cand };
+  renderPersonalized();
+}
+
+function renderPersonalized() {
+  if (!candCtx) return;
+  show(ranker.rank(candCtx.cand, { k: TOP_K }), '', true);
+  renderLearnPanel();
+}
+
+function giveFeedback(item, label) {
+  const c = candCtx?.cand.find(c => c.item === item);
+  if (!c) return;
+  ranker.feedback(c.features, label);
+  persistRanker();
+  flip($('results'), () => renderPersonalized());   // re-rank plays as motion
+}
+
+function renderLearnPanel() {
+  const el = $('learnPanel');
+  el.classList.remove('hidden');
+  const beta = ranker.rank(candCtx.cand)[0]?.beta ?? 0;
+  const imp = ranker.importance().slice().sort((a, b) => b.importance - a.importance);
+  const row = document.createElement('div'); row.className = 'row';
+  row.append(Object.assign(document.createElement('span'), {
+    innerHTML: ranker.n
+      ? `learning from <b>${ranker.n}</b> 👍/👎 (${ranker.nPairs()} pairs) — personal weight <b>${(beta * 100 | 0)}%</b>`
+      : 'tip: 👍/👎 a result — a tiny ranker learns your taste, on your device' }));
+  const reset = Object.assign(document.createElement('button'),
+    { type: 'button', className: 'reset', textContent: 'reset' });
+  reset.addEventListener('click', () => {
+    localStorage.removeItem(RANK_KEY);
+    ranker.buffer.length = 0; ranker._refit();   // back to the untrained w=[1,0,0,0]
+    flip($('results'), () => renderPersonalized());
+  });
+  row.append(reset);
+  el.replaceChildren(row);
+  if (ranker.n) {                                    // interpretable learned weights
+    const bars = document.createElement('div'); bars.className = 'bars';
+    const max = Math.max(...imp.map(f => f.importance), 1e-6);
+    for (const f of imp) {
+      const feat = document.createElement('span'); feat.className = 'feat';
+      const bar = document.createElement('i'); bar.style.width = `${Math.round(46 * f.importance / max)}px`;
+      feat.append(`${f.name.replace('_', ' ')}`, bar);
+      bars.append(feat);
+    }
+    el.append(bars);
+  }
+  renderConfidence(el);
+}
+
+// conformal.js: how many results clear the gallery-calibrated 80% bar.
+function renderConfidence(el) {
+  const inSet = candCtx.cand.filter(c => c.cos_image >= TAU80).length;
+  const conf = document.createElement('div');
+  conf.className = 'conf' + (inSet ? '' : ' abstain');
+  conf.title = 'Split-conformal: τ was calibrated cross-modally on the gallery '
+    + '(each caption a held-out query over the images, leave-one-out) so a same-'
+    + 'tag match lands in the set ≥80% of the time — a marginal guarantee; loose '
+    + 'natural-language queries drift from the caption calibration, so it errs '
+    + 'toward abstaining.';
+  conf.innerHTML = inSet
+    ? `🎯 <b>80%-confidence set</b>: ${inSet} result${inSet > 1 ? 's' : ''} clear the calibrated bar (cos ≥ ${TAU80.toFixed(2)})`
+    : `🎯 <b>abstain</b>: nothing clears the 80% bar (cos ≥ ${TAU80.toFixed(2)}) — no confident match`;
+  el.append(conf);
 }
 
 // ------------------------------------------------------- the explanation --

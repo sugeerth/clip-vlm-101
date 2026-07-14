@@ -25,12 +25,15 @@ images and at 1,000,000,000 — only the *layout* changes.
         │ 2 · RANK   hundreds→ordered top │  dcn.py  ← the piece a dot
         │   rich query×item interaction   │  product structurally cannot do
         │   the towers cannot express     │  (hermes.py refines the query)
+        │   + LEARN the weights from 👍/👎 │  learn2rank.py (learn.js twin) —
+        │   on-device, no server          │  closes dcn's "untrained" caveat
         └───────────────┬────────────────┘
                         │  the final ordered results
         ┌───────────────▼────────────────┐
         │ 3 · EXPLAIN + GATE   say WHY,   │  explain.py (explain.js twin)
         │   never lie. grounded template  │  agent.py (the same verify-before-
         │   or LLM → hallucination gate   │  publish idea, on the write path)
+        │   + a coverage GUARANTEE / abstain │ conformal.py (conformal.js twin)
         └─────────────────────────────────┘
 ```
 
@@ -95,6 +98,22 @@ that both *look* similar **and** *share* a tag" — which the towers cannot
 represent. (Untrained, `dcn.py` *demonstrates the mechanism*; production learns
 `W` from click/relevance labels. That's the one honest caveat.)
 
+**`learn2rank.py` closes that caveat, on your own device.** `dcn.py` shows the
+ranking *mechanism* with hand-set weights; `learn2rank.py` (twin `js/learn.js`)
+*learns* them live from your 👍/👎 — the click/relevance signal, supplied by you,
+never sent anywhere. It is a linear scorer `s = w·x` over the same features,
+trained by **pairwise RankNet** ([Burges et al., ICML 2005](https://icml.cc/Conferences/2005/proceedings/papers/012_Learning_BurgesEtAl.pdf)):
+for every (👍 i, 👎 j) pair, nudge `i` above `j` —
+`o = w·(xᵢ−xⱼ); λ = −σ/(1+e^{σo}); w ← w − lr·(λ·(xᵢ−xⱼ) + l2·w)`. Three safeguards
+keep a handful of clicks from wrecking retrieval: `w` starts `[1,0,0,0]` so an
+untrained ranker **is** the base order; one-sided feedback (only 👍, or only 👎)
+falls back to a Rocchio nudge instead of a degenerate pairwise gradient; and the
+learned score is *blended*, capped at 50% — `final = (1−β)·base + β·learned`,
+`β = 0.5·n/(n+3)` — so retrieval always keeps at least half the vote. The whole
+model is four floats in `localStorage`: your personal ranker, private by
+construction. In the live demo the learned-weight bars and the 👍/👎 buttons sit
+under the results; a reset wipes it.
+
 `hermes.py` is the agentic query-side complement: it proposes phrasings,
 critiques each by retrieval margin, and refines — improving stage 1's input
 before stage 2 ever runs.
@@ -124,12 +143,34 @@ the floor it always falls back to. It is the same discipline as `agent.py` on
 the *write* path (verify features before publishing) — this repo verifies
 before it *speaks*, too.
 
+**The gate says the words are honest; `conformal.py` says the *results* are —
+with a number.** Every other file returns a top-k and hopes; `conformal.py`
+(twin `js/conformal.js`) returns the smallest set of results that contains the
+true match **at least 1−α of the time**, or, when nothing clears the bar, it
+*abstains* — "no confident match" — instead of guessing. This is **split
+conformal prediction** ([Vovk et al. 2005](https://link.springer.com/book/10.1007/b106715);
+[Angelopoulos & Bates, arXiv:2107.07511](https://arxiv.org/abs/2107.07511)), and
+for retrieval it collapses to one honestly-calibrated cosine threshold: the
+nonconformity of a (query, relevant) pair is `1 − cos`; calibrate on `n` labeled
+pairs with the rank-corrected quantile `q̂ = ⌈(n+1)(1−α)⌉`-th smallest score; then
+return every item with `cos ≥ 1 − q̂`. The set is **adaptive for free** — a clear
+winner gives a set of one, a pile of near-ties a big set, so set *size* is the
+per-query confidence signal — and the guarantee is distribution-free (it assumes
+nothing about CLIP, only that queries are exchangeable). It is finite-sample and
+*marginal*: `1−α ≤ coverage ≤ 1−α+1/(n+1)`, so on the 14-image gallery coverage
+moves in ~7% steps and we say so rather than truncate the set to look tidy —
+truncating would break the promise. Where the gate is the trust boundary on the
+*explanation*, conformal is the trust boundary on the *retrieval itself*: both
+would rather say less than say something they can't stand behind.
+
 ## The one-sentence version
 
 **Retrieve cheap over billions (two towers + ANN + PQ), rank rich over the
-surviving hundreds (DCN's query×item cross), then explain the result and gate
-the explanation so it can't lie** — the same four stages Google/YouTube/Pinterest
-run, shrunk to 14 images you can read end to end in an afternoon.
+surviving hundreds (DCN's query×item cross, learned live from your 👍/👎 on-device),
+then explain the result, gate the explanation so it can't lie, and quote a
+coverage-guaranteed set — or abstain** — the same four stages
+Google/YouTube/Pinterest run, shrunk to 14 images you can read end to end in an
+afternoon.
 
 ## Reading order by stage
 
@@ -137,10 +178,12 @@ run, shrunk to 14 images you can read end to end in an afternoon.
 |---|---|---|
 | encode | `embedder.py` `models.py` `fusion.py` `templates.py` | `python3 features.py images/cat.jpg` |
 | retrieve | `search.py` `ann.py` `pq.py` `quantize.py` `scale.py` | `python3 ann.py` · `python3 pq.py` |
-| rank | `dcn.py` `hermes.py` | `python3 dcn.py --image images/004_cat.jpg` |
-| explain+gate | `explain.py` `agent.py` | `python3 explain.py --image images/004_cat.jpg` |
+| rank | `dcn.py` `learn2rank.py` `hermes.py` | `python3 dcn.py --image images/004_cat.jpg` · `python3 learn2rank.py` |
+| explain+gate | `explain.py` `conformal.py` `agent.py` | `python3 explain.py --image images/004_cat.jpg` · `python3 conformal.py --json docs/db.json` |
 
-Sources: DCN v2 [arXiv:2008.13535], DCN v1 [arXiv:1708.05123], YouTube two-stage
-(Covington et al., RecSys 2016), Wide&Deep [arXiv:1606.07792], FAISS
-[arXiv:2401.08281], ScaNN [arXiv:1908.10396], Matryoshka [arXiv:2205.13147],
-AIS [arXiv:2112.12870], "Why do These Match?" [arXiv:1905.10797].
+Sources: DCN v2 [arXiv:2008.13535], DCN v1 [arXiv:1708.05123], RankNet (Burges et
+al., ICML 2005), YouTube two-stage (Covington et al., RecSys 2016), Wide&Deep
+[arXiv:1606.07792], FAISS [arXiv:2401.08281], ScaNN [arXiv:1908.10396], Matryoshka
+[arXiv:2205.13147], AIS [arXiv:2112.12870], "Why do These Match?"
+[arXiv:1905.10797], conformal prediction (Vovk et al. 2005; Angelopoulos & Bates
+[arXiv:2107.07511]).
