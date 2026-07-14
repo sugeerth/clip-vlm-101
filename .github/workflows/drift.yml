@@ -1,0 +1,39 @@
+# Periodic drift monitor — the "is the live world still the world we calibrated
+# for?" check, run on a schedule the way production monitoring does. It builds
+# the reference from the committed gallery, runs drift.py over a simulated
+# stream, uploads an HTML dashboard, and FAILS the run if any window drifts — so
+# a real corpus swap (re-export docs/db.json) that breaks the guarantees trips a
+# red X instead of silently shipping. Model-free: only numpy, no downloads.
+name: drift
+
+on:
+  schedule:
+    - cron: "17 6 * * *"        # every day at 06:17 UTC
+  workflow_dispatch: {}          # …and on demand from the Actions tab
+  push:
+    paths:
+      - "drift.py"
+      - "docs/db.json"           # a new corpus is exactly when to re-check
+      - ".github/workflows/drift.yml"
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy
+      - name: run the drift monitor and render the dashboard
+        run: |
+          python drift.py --json docs/db.json                       # the table, in the log
+          python drift.py --json docs/db.json --html drift-report.html
+      - name: upload the drift dashboard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report
+          path: drift-report.html
+      - name: fail if the live stream has drifted
+        run: python drift.py --json docs/db.json --gate   # exits non-zero on drift
