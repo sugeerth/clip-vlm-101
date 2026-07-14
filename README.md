@@ -71,6 +71,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python conformal.py --json docs/db.json  # a coverage guarantee, or abstain
 .venv/bin/python judge.py --json docs/db.json --image images/004_cat.jpg  # a council of judges rules
 .venv/bin/python trust.py --json docs/db.json --image images/004_cat.jpg  # compose every lens → one trust verdict
+.venv/bin/python drift.py --json docs/db.json   # watch a stream drift: stable → shift → DRIFT
 .venv/bin/python crawler.py "red panda" -n 6 # grow the gallery, with receipts
 .venv/bin/python spider.py https://example.com/gallery  # or crawl any site
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
@@ -149,6 +150,7 @@ Suggested reading order:
 | `explain.py` | ~150 | **explain + hallucination gate**: say why results matched, and redact any claim the results don't support |
 | `judge.py` | ~200 | **a council of LLM judges**: several rubrics score each result, a gate parses every score, and the council rules — or abstains on a hung jury |
 | `trust.py` | ~200 | **the capstone**: composes all four honesty lenses (gate · conformal · council · margin) into ONE trust verdict — or abstains when they disagree |
+| `drift.py` | ~230 | **the monitor**: PSI + KS + conformal-coverage drift detection on a stream — stable / shift / DRIFT, with the failure cases to inspect and a scheduled CI gate |
 | `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
 | `spider.py` | ~170 | **the web crawler**: BFS any site for images — robots.txt, pacing, caps |
@@ -177,7 +179,7 @@ module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
 `rank.js` ↔ `tagger.py`+`fusion.py`+`search.py`, `labels.js` ↔ `labels.py`,
 `agent.js` ↔ `agent.py`, `recsys.js` ↔ `user_tower.py`, `learn.js` ↔
 `learn2rank.py`, `conformal.js` ↔ `conformal.py`, `judge.js` ↔ `judge.py`,
-`trust.js` ↔ `trust.py`; `viz.js`, `motion.js`,
+`trust.js` ↔ `trust.py`, `drift.js` ↔ `drift.py`; `viz.js`, `motion.js`,
 and `tour.js` are page-only (the matrix, map and strips, the animation
 helpers, the guided tour), and `app.js` wires everything together. Read a
 Python file, then its twin — same pipeline, two languages.
@@ -411,6 +413,45 @@ in the council's verdict the moment you convene it — one honest answer to *"ho
 much should I believe this?"*, with the per-lens pills shown so you can see which
 lenses agreed and which abstained.
 
+## Drift detection — is the live stream still the world we calibrated for?
+
+Every guarantee above holds only while live queries stay **exchangeable** with
+the gallery they were tuned on — conformal's coverage, the council's thresholds,
+the trust composer. Production breaks that quietly: the data shifts and the
+honest-looking numbers keep printing. `drift.py` (`js/drift.js`) is the monitor
+that watches for it, on a stream of results, with three **distribution-free**
+detectors on a quality signal (the same-tag match similarity):
+
+- **PSI** (population stability index): `Σ (l−r)·ln(l/r)` over reference-quantile
+  bins — the industry default (`<0.10` stable · `0.10–0.25` shift · `>0.25` drift).
+- **KS** (Kolmogorov–Smirnov): the largest gap between the two CDFs, assuming
+  nothing about the distribution — the same spirit as conformal.
+- **coverage**: the repo-native one — calibrate a conformal bar on the reference,
+  then measure coverage on the live window. Coverage falling below target **is**
+  exchangeability breaking; conformal detects its own drift for free.
+
+It also sorts the live window into **positive cases** (cleared the bar) and
+**failure cases** (fell short — the ones to look at), and reports the failure
+rate.
+
+```bash
+python3 drift.py --json docs/db.json
+#   window          PSI    KS   cov  fail  status
+#   t0 · baseline  0.00  0.00  83%   17%  · stable
+#   t1 · 15% off   0.13  0.13  73%   27%  ~ shift
+#   t2 · 35% off   0.57  0.30  57%   43%  ⚠ DRIFT   (PSI, KS and coverage all trip)
+#   t3 · 60% off   1.07  0.55  42%   58%  ⚠ DRIFT
+```
+
+And it runs **periodically, in CI/CD**: `.github/workflows/drift.yml` is a
+scheduled (daily cron) + on-demand job that freezes a reference at calibration
+time (`drift_reference.json`), compares the current gallery against it, uploads a
+**self-contained HTML dashboard** (`python3 drift.py --html`), and **fails the
+run if the live data has drifted** (`python3 drift.py --gate`) — so re-exporting
+`docs/db.json` to a corpus that breaks the guarantees trips a red ✗ instead of
+silently shipping. The detector math is a Python/JS twin, pinned byte-for-byte by
+CI.
+
 ## Two ways to grow the corpus
 
 - **Ask** (`crawler.py`): the Commons search API returns curated, freely
@@ -619,6 +660,7 @@ lesson runs on committed data — and CI re-runs all of them on every push:
 | `python3 conformal.py --json docs/db.json` | coverage sits **on or above** every target (80% → 84.6%, 90% → 92.3%); the set grows as you demand more confidence |
 | `python3 judge.py --json docs/db.json --image images/004_cat.jpg` | the council rules **relevant** for cat→dog, **not relevant** for cat→bicycle, and **hung jury** where a shared tag and the vision signal disagree |
 | `python3 trust.py --json docs/db.json --image images/004_cat.jpg` | cat→dog composes to **high** trust (all four lenses agree); where the lenses split, the verdict **abstains** instead of averaging |
+| `python3 drift.py --json docs/db.json --selftest` | the detectors escalate **stable → shift → drift → drift** as a growing fraction of the stream goes off-distribution; PSI is monotone in the contamination |
 | `python3 scale.py selftest` | chunked scan == naive argsort; ivf probes=8 keeps ≥7/10 of the truth scanning <½ the rows |
 
 (The numbers are pinned to the committed sample gallery; re-exporting your

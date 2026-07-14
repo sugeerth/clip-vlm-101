@@ -36,6 +36,12 @@ images and at 1,000,000,000 — only the *layout* changes.
         │   + a coverage GUARANTEE / abstain │ conformal.py (conformal.js twin)
         │   + a COUNCIL of LLM judges / abstain │ judge.py (judge.js twin)
         │   ⇒ ONE composed TRUST verdict / abstain │ trust.py (trust.js twin)
+        └───────────────┬─────────────────┘
+                        │  and, watching the whole thing over time:
+        ┌───────────────▼─────────────────┐
+        │ MONITOR   is the live stream still │ drift.py (drift.js twin)
+        │   what we calibrated for? PSI/KS/  │ — a scheduled CI/CD gate, not a
+        │   coverage → stable / shift / DRIFT │ one-time check
         └─────────────────────────────────┘
 ```
 
@@ -198,6 +204,19 @@ trust headline sits atop the explanation and folds in the council the moment it'
 convened. The honesty boundaries — gate, conformal, council — now resolve to a
 single answer to *"how much should I believe this?"*, and that answer, too, would
 rather abstain than bluff.
+
+**`drift.py` closes the loop: it watches whether any of this still holds.** Every
+guarantee here assumes live queries stay *exchangeable* with the calibration
+gallery; drift is when that quietly breaks. `drift.py` (`drift.js` twin) monitors
+a stream with three distribution-free detectors — **PSI**, **KS**, and the
+repo-native **conformal coverage** (calibrate a bar on the reference, watch it
+fail on live data — conformal detects its own drift for free) — and rules
+*stable / shift / DRIFT*, sorting each window into positive and failure cases.
+Unlike everything above, it isn't a per-query check: `.github/workflows/drift.yml`
+runs it **periodically** (a daily cron) and on every corpus change, freezes a
+reference at calibration time, uploads an HTML dashboard, and **fails the run if
+the live data drifts** — the monitoring/observability layer a real deployment
+lives or dies on, in the same distribution-free spirit as the rest.
 
 ## The one-sentence version
 

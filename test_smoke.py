@@ -349,6 +349,48 @@ def test_trust():
     assert trust.QUORUM == 2 and trust.SPLIT == 0.5 and trust.MIN_FOR_HIGH == 3
 
 
+def test_drift():
+    """drift.py: the detectors fire in order (stable → shift → drift) as a live
+    window drifts, and PSI/coverage move the right way."""
+    import drift
+
+    # PSI/KS basics
+    assert drift.psi([1, 2, 3, 4], [1, 2, 3, 4]) == 0.0     # a window vs itself
+    assert drift.psi([1, 1, 1], [2, 2, 2]) == 0.0           # constant reference → no bins
+    assert drift.ks_stat([1, 2, 3, 4], [1, 2, 3, 4]) == 0.0
+    assert abs(drift.ks_stat([0, 0, 0, 0], [1, 1, 1, 1]) - 1.0) < 1e-12
+
+    items = db.load_json_gallery()
+    ref = drift.quality_signal(items)
+    assert len(ref) == 60                                    # same-tag pair similarities
+
+    stream = [(0.00, "stable"), (0.15, "shift"), (0.35, "drift"), (0.60, "drift")]
+    levels = [drift.monitor(ref, drift.drift_window(ref, f), 0.2)["level"] for f, _ in stream]
+    assert levels == [want for _, want in stream], levels
+
+    # drift_window uses explicit half-up rounding (matches the JS twin) at an
+    # exact half: frac*n = 2.5 → k = 3
+    assert int((drift.drift_window([1, 1, 1, 1, 1], 0.5) < 1).sum()) == 3
+    assert drift.drift_window([0.5], 0.5)[0] == 0.3
+
+    # PSI monotone in the contamination fraction; coverage falls
+    psis = [drift.psi(ref, drift.drift_window(ref, f)) for f, _ in stream]
+    assert psis == sorted(psis)
+    covs = [drift.monitor(ref, drift.drift_window(ref, f), 0.2)["coverage"] for f, _ in stream]
+    assert covs == sorted(covs, reverse=True)               # coverage only degrades
+
+    # the worst window trips all three detectors
+    assert len(drift.monitor(ref, drift.drift_window(ref, 0.60), 0.2)["reasons"]) == 3
+
+    # positive vs failure cases against the calibrated bar
+    _, bar = drift.coverage(ref, drift.drift_window(ref, 0.60), 0.2)
+    pos, fail = drift.classify(items, drift.item_quality(items), bar)
+    assert len(pos) == 13 and len(fail) == 1
+    assert "bicycle" in fail[0]["item"]["tags"]
+
+    assert drift.PSI_DRIFT == 0.25 and drift.COV_SLACK == 0.10
+
+
 def test_dcn():
     """dcn.py: W=0 reproduces retrieval order; one cross lifts tag-sharers."""
     import dcn
