@@ -136,6 +136,36 @@ body.searched .chips { margin: 12px 0 0; }
   content: "best match"; float: right; color: var(--accent-ink); font-weight: 600; font-size: 0.72rem;
 }
 
+/* 👍/👎 feedback on each result — trains the on-device ranker live */
+.rgrid figure { position: relative; }
+.rgrid .fb { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; opacity: 0; transition: opacity 140ms ease; }
+.rgrid figure:hover .fb, .rgrid figure:focus-within .fb { opacity: 1; }
+.rgrid .fb button {
+  border: none; border-radius: 999px; width: 26px; height: 26px; cursor: pointer;
+  font-size: 0.82rem; line-height: 1; background: var(--surface); box-shadow: var(--shadow);
+}
+.rgrid .fb button.on { background: var(--accent); }
+.rgrid .fb button:hover { transform: scale(1.12); }
+
+/* the personalization panel: learned weights + conformal confidence */
+.learn {
+  width: 100%; max-width: 640px; margin: 18px auto 0; padding: 11px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow); font-size: 0.82rem; color: var(--ink-2);
+}
+.learn .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.learn b { color: var(--ink); font-weight: 600; }
+.learn .bars { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 7px; }
+.learn .feat { display: flex; align-items: center; gap: 5px; font-size: 0.76rem; }
+.learn .feat i { display: inline-block; height: 6px; border-radius: 3px; background: var(--accent); min-width: 2px; }
+.learn .conf { margin-top: 8px; font-size: 0.78rem; }
+.learn .conf.abstain { color: var(--bad); }
+.learn .reset {
+  font: inherit; font-size: 0.74rem; color: var(--accent-ink); cursor: pointer;
+  background: none; border: 1px solid var(--hairline); border-radius: 999px; padding: 2px 10px; margin-left: auto;
+}
+.learn .reset:hover { border-color: var(--accent); }
+
 /* the grounded explanation: why these matched, gated against hallucination */
 .explain {
   width: 100%; max-width: 640px; margin: 22px auto 0; padding: 12px 16px;

@@ -18,6 +18,8 @@ jobs:
       - run: node docs/js/test_rank.mjs     # the JS math must mirror the Python
       - run: node docs/js/test_lessons.mjs  # the live lessons must reproduce the Python-pinned numbers
       - run: node docs/js/test_crawler.mjs  # web-search fan-out: retries, error prose, dedup — all mocked
+      - run: node docs/js/test_learn.mjs    # on-device learned re-ranker: pinned to learn2rank.py
+      - run: node docs/js/test_conformal.mjs # conformal sets: JS twin agrees with conformal.py
       # the model-free CLI demos must keep running on the committed gallery
       - run: python temperature.py
       - run: python similarity.py --json docs/db.json
@@ -26,6 +28,8 @@ jobs:
       - run: python quantize.py --json docs/db.json
       - run: python similarity.py --json docs/db.json --centered
       - run: python ann.py
+      - run: python learn2rank.py           # on-device learning-to-rank, model-free demo
+      - run: python conformal.py --json docs/db.json  # conformal coverage table on the gallery
       - run: python scale.py selftest       # the million-row machinery, synthetic + model-free
       - run: python pq.py selftest          # product quantization: the browser index's math
       - run: node docs/js/test_pq.mjs       # …and its JS twin agrees, lookup for lookup

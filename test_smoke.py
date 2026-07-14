@@ -176,6 +176,84 @@ def test_softmax():
     assert np.allclose(softmax([s + 7 for s in scores]), p)      # shift-invariant
 
 
+def test_learn2rank():
+    """learn2rank.py: untrained==base; feedback learns tag preference, capped."""
+    import learn2rank as l2r
+
+    # A and B tie on base score; only B shares tags. C is a lower non-sharer.
+    cand = [
+        {"item": "A", "base_score": 0.60, "features": [0.60, 0.60, 0, 0.5]},
+        {"item": "B", "base_score": 0.60, "features": [0.60, 0.60, 4, 0.5]},
+        {"item": "C", "base_score": 0.50, "features": [0.50, 0.50, 0, 0.3]},
+    ]
+    r = l2r.OnlineRanker()
+    assert [c["item"] for c in r.rank(cand)] == ["A", "B", "C"]   # untrained == base
+    assert r.rank(cand)[0]["beta"] == 0.0
+
+    # 👍 the tag-sharer B, 👎 the tagless A and C — feedback breaks the tie
+    r.feedback([0.60, 0.60, 4, 0.5], 1)
+    r.feedback([0.60, 0.60, 0, 0.5], 0)
+    r.feedback([0.50, 0.50, 0, 0.3], 0)
+    assert r.n_pairs() == 2                       # 1 pos × 2 neg
+    ranked = r.rank(cand)
+    assert ranked[0]["item"] == "B"              # the tag-sharer wins the tie
+    assert ranked[0]["beta"] <= l2r.W_MAX + 1e-9  # blend never exceeds the cap
+    # the safety cap: feedback can't flip a LARGE base gap in a few clicks
+    big = [{"item": "X", "base_score": 0.95, "features": [0.95, 0.95, 0, 1.0]},
+           {"item": "Y", "base_score": 0.50, "features": [0.50, 0.50, 4, 0.4]}]
+    rr = l2r.OnlineRanker(); rr.feedback(big[1]["features"], 1); rr.feedback(big[0]["features"], 0)
+    assert rr.rank(big)[0]["item"] == "X"        # retrieval keeps ≥ half the vote
+    imp = r.importance()
+    assert imp["tag_overlap"]["importance"] > imp["cos_image"]["importance"]
+
+    # one-sided feedback (all 👎) uses Rocchio and does NOT blow up / NaN
+    r2 = l2r.OnlineRanker()
+    for f in ([0.9, 0.9, 0, 1.0], [0.8, 0.8, 0, 0.5]):
+        r2.feedback(f, 0)
+    assert r2.n_pairs() == 0                      # no pairs → no RankNet
+    out = r2.rank(cand)
+    assert all(np.isfinite(c["score"]) for c in out) and len(out) == 3
+
+    # state round-trips (the localStorage "personal model")
+    r3 = l2r.OnlineRanker().load_state(r.to_state())
+    assert np.allclose(r3.w, r.w) and r3.n == r.n
+
+
+def test_conformal():
+    """conformal.py: valid-or-conservative coverage, monotone size, exact quantile."""
+    import conformal
+
+    items = db.load_json_gallery()
+    scores = conformal.loo_scores(items)
+    n = len(scores)
+    assert n >= 10
+
+    # quantile identity: in-sample, at least k/n of scores are <= q̂ (>= 1-alpha)
+    for a in (0.4, 0.2, 0.1):
+        qhat = conformal.calibrate(scores, a)
+        k = int(np.ceil((n + 1) * (1 - a)))
+        if k <= n:
+            frac = float(np.mean(scores <= qhat))
+            assert frac >= k / n - 1e-9 >= (1 - a) - 1e-9
+
+    # headline guarantee at alpha=0.2 (80%): honest jackknife coverage holds
+    cov80 = conformal.jackknife_coverage(scores, 0.2)
+    assert cov80 >= 0.80 - 1 / (n + 1)
+
+    # coverage and set size are both non-decreasing as we demand more confidence
+    rows = conformal.report(items, alphas=(0.4, 0.3, 0.2, 0.1))
+    covs = [r["coverage"] for r in rows]
+    sizes = [r["avg_set"] for r in rows]
+    assert covs == sorted(covs) and sizes == sorted(sizes)
+    assert all(r["coverage"] >= r["target"] - 1 / (n + 1) for r in rows)
+
+    # the set is exactly {cos >= 1 - q̂}
+    qhat = conformal.calibrate(scores, 0.2)
+    idx, tau = conformal.predict(items[0]["image_emb"], items, qhat)
+    cos = conformal.cosines(items[0]["image_emb"], items)
+    assert all(cos[i] >= tau - 1e-9 for i in idx)
+
+
 def test_dcn():
     """dcn.py: W=0 reproduces retrieval order; one cross lifts tag-sharers."""
     import dcn
