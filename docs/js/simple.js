@@ -11,6 +11,8 @@ import { MODELS, DEFAULT_MODEL } from './models.js';
 import { discover } from './crawler.js';
 import { explain, explainWithLLM } from './explain.js';
 import { councilWithLLM } from './judge.js';
+import { compose, gateTrust, conformalTrust, councilTrust, marginTrust, WEIGHTS } from './trust.js';
+import { STRONG, MODERATE, WEAK } from './explain.js';
 import { OnlineRanker } from './learn.js';
 import { looScores, calibrate } from './conformal.js';
 import { flip } from './motion.js';
@@ -371,6 +373,7 @@ function mountCouncil(wrap, query) {
       t => { if (gen === explainGen && cbox.isConnected) cbox.textContent = t; });
     if (gen !== explainGen || !cbox.isConnected) return;   // superseded by a newer search
     renderCouncil(cbox, res, top.item);
+    renderTrust(res);                  // fold the council's verdict into the trust capstone
   });
   wrap.replaceChildren(cbtn, cbox);
 }
@@ -428,19 +431,68 @@ function renderCouncil(box, res, item) {
   box.append(v);
 }
 
-let lastRanked = [], explainGen = 0;
+let lastRanked = [], explainGen = 0, trustLine = null;
 function renderExplain(query, ranked) {
   explainGen++;                        // invalidate any in-flight LLM explanation / council
   lastRanked = ranked;
   const el = $('explain');
   el.classList.remove('hidden');
-  // two independent sub-panels: the explanation body and the council. Each
-  // re-paints on its OWN button without touching the other.
+  // the CAPSTONE first: one trust verdict composed from every honesty lens,
+  // then two independent sub-panels (the explanation body, the council) that
+  // each re-paint on their OWN button without touching the other.
+  trustLine = document.createElement('div'); trustLine.className = 'trust';
   const body = document.createElement('div'); body.className = 'ebody';
   const cwrap = document.createElement('div'); cwrap.className = 'cwrap';
-  el.replaceChildren(body, cwrap);
+  el.replaceChildren(trustLine, body, cwrap);
+  renderTrust(null);                   // gate + conformal + margin now; council abstains until convened
   paintExplain(body, explain(query, ranked), query);
   mountCouncil(cwrap, query);
+}
+
+// trust.js: compose the four honesty lenses on the top result into ONE verdict.
+// gate (match strength) + conformal (clears the calibrated bar?) + margin
+// (decisively ahead?) are known immediately; council stays null until convened,
+// then folds in. A council of gates — high only when the lenses agree, abstain
+// when they split.
+function liveTrust(councilVerdict) {
+  const top = lastRanked[0];
+  if (!top || !candCtx) return null;
+  const c = candCtx.cand.find(x => x.item === top.item);
+  const scores = lastRanked.map(r => r.score);
+  const signals = [
+    { name: 'gate', trust: gateTrust(top.score, STRONG, MODERATE, WEAK), weight: WEIGHTS.gate },
+    { name: 'conformal', trust: conformalTrust(c ? c.cos_image : -1, TAU80), weight: WEIGHTS.conformal },
+    { name: 'council', trust: councilTrust(councilVerdict), weight: WEIGHTS.council },
+    { name: 'margin', trust: marginTrust(scores, 0.05), weight: WEIGHTS.margin },  // text→image margins are small
+  ];
+  return { v: compose(signals), signals };
+}
+
+const TRUST_GLYPH = { high: '🔒', medium: '🔓', low: '⚠️', abstain: '🤔' };
+function renderTrust(councilVerdict) {
+  if (!trustLine) return;
+  const t = liveTrust(councilVerdict);
+  if (!t) { trustLine.classList.add('hidden'); return; }
+  trustLine.classList.remove('hidden');
+  const { v, signals } = t;
+  const head = document.createElement('div'); head.className = 'thead';
+  const label = v.level === 'abstain'
+    ? `trust: <b>can't say</b> — ${v.reason === 'split decision' ? 'the lenses split' : 'too few lenses'}`
+    : `trust: <b>${v.level}</b>${v.reason.startsWith('capped') ? ' <span class="cap">(capped — lenses abstained)</span>' : ''}`;
+  head.innerHTML = `${TRUST_GLYPH[v.level]} ${label} `
+    + `<span class="tsub">· composed from ${v.nValid}/${v.nTotal} honesty lenses`
+    + `${v.score != null ? ` · score ${v.score.toFixed(2)}` : ''}</span>`;
+  trustLine.replaceChildren(head);
+  const lenses = document.createElement('div'); lenses.className = 'lenses';
+  for (const s of signals) {
+    const abst = s.trust === null || s.trust === undefined;
+    const pill = document.createElement('span');
+    pill.className = 'lens' + (abst ? ' out' : '');
+    pill.innerHTML = `${abst ? '—' : '✓'} ${s.name}${abst ? '' : ` <b>${s.trust.toFixed(2)}</b>`}`;
+    pill.title = abst ? `${s.name}: this lens abstained` : `${s.name}: ${s.trust.toFixed(2)}`;
+    lenses.append(pill);
+  }
+  trustLine.append(lenses);
 }
 
 // ----------------------------------------------------- the web phase --

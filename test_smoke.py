@@ -308,6 +308,47 @@ def test_judge():
     assert judge.QUORUM == 2 and judge.ACCEPT == 0.5 and judge.HUNG_SPREAD == 0.5
 
 
+def test_trust():
+    """trust.py: compose the honesty lenses — agreement, split-decision abstain,
+    and the participation cap."""
+    import trust
+
+    # four agreeing lenses → high; weighted mean, consensus
+    hi = trust.compose([{"name": "gate", "trust": 1.0, "weight": 1.0},
+                        {"name": "conformal", "trust": 0.71, "weight": 1.0},
+                        {"name": "council", "trust": 0.73, "weight": 1.2},
+                        {"name": "margin", "trust": 1.0, "weight": 0.7}])
+    assert hi["level"] == "high" and abs(hi["score"] - 0.8426) < 1e-3
+
+    # two lenses abstain → "high" is CAPPED to medium (you can't claim high trust
+    # while half the evidence declined to vote)
+    cap = trust.compose([{"name": "gate", "trust": 0.7, "weight": 1.0},
+                         {"name": "conformal", "trust": None, "weight": 1.0},
+                         {"name": "council", "trust": None, "weight": 1.2},
+                         {"name": "margin", "trust": 0.9, "weight": 0.7}])
+    assert cap["level"] == "medium" and cap["reason"].startswith("capped")
+
+    # the lenses split → abstain, not an average over a contradiction
+    assert trust.compose([{"name": "a", "trust": 0.2, "weight": 1},
+                          {"name": "b", "trust": 0.9, "weight": 1}])["level"] == "abstain"
+    # spread exactly at SPLIT is NOT a split (strict >)
+    assert trust.compose([{"name": "a", "trust": 0.4, "weight": 1},
+                          {"name": "b", "trust": 0.9, "weight": 1}])["reason"] == "composed"
+    # too few voting → abstain
+    assert trust.compose([{"name": "a", "trust": 0.9, "weight": 1},
+                          {"name": "b", "trust": None, "weight": 1}])["level"] == "abstain"
+
+    # the four lenses
+    assert trust.gate_trust(0.85, 0.8, 0.72, 0.66) == 1.0
+    assert trust.gate_trust(0.68, 0.8, 0.72, 0.66) == 0.4
+    assert trust.conformal_trust(0.5, 0.6) is None          # below the bar → abstain
+    assert trust.conformal_trust(0.63, 0.63) == 0.5         # boundary is included
+    assert trust.council_trust({"decision": "abstain"}) is None
+    assert trust.margin_trust([0.8]) is None                # a lone result has no margin
+
+    assert trust.QUORUM == 2 and trust.SPLIT == 0.5 and trust.MIN_FOR_HIGH == 3
+
+
 def test_dcn():
     """dcn.py: W=0 reproduces retrieval order; one cross lifts tag-sharers."""
     import dcn

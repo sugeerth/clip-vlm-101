@@ -35,6 +35,7 @@ images and at 1,000,000,000 — only the *layout* changes.
         │   or LLM → hallucination gate   │  publish idea, on the write path)
         │   + a coverage GUARANTEE / abstain │ conformal.py (conformal.js twin)
         │   + a COUNCIL of LLM judges / abstain │ judge.py (judge.js twin)
+        │   ⇒ ONE composed TRUST verdict / abstain │ trust.py (trust.js twin)
         └─────────────────────────────────┘
 ```
 
@@ -178,17 +179,33 @@ or a panel too split (a *hung jury*), yields no ruling instead of a confident
 average over a coin flip. `judge.py` ships a model-free heuristic judge (the CLI
 runs the mechanism on the committed gallery, like `dcn.py`'s untrained demo);
 the live page's **⚖️ council** button runs three real in-browser `SmolLM2`
-judges through the identical gate and aggregation. Four honesty boundaries now
-stand between a query and an answer — gate, conformal, council — and each one
-would rather abstain than bluff.
+judges through the identical gate and aggregation.
+
+**`trust.py` is the capstone: it composes those boundaries into ONE verdict.**
+Reading four panels to decide whether to believe a result is the user's job, so
+`trust.py` (`trust.js` twin) does it — composing the signals the SAME way the
+council composes its judges, one level up: *a council of gates.* Four different
+lenses on the top result — **gate** (match strength), **conformal** (clears the
+coverage bar?), **council** (judges concur?), **margin** (decisively ahead? —
+Hermes' separation signal) — each contributing a trust in `[0,1]` or abstaining.
+`compose()` takes a confidence-weighted mean and a consensus, and — like every
+stage it aggregates — **abstains rather than average over a contradiction**: a
+split panel (spread too wide) or too few voting lenses yields no ruling, and it
+can't claim *high* trust while half the evidence abstained. When strength,
+calibration, consensus and separation all agree, trust is high; when a strong
+cosine meets a hung council, it lands at medium or abstains. On the live page a
+trust headline sits atop the explanation and folds in the council the moment it's
+convened. The honesty boundaries — gate, conformal, council — now resolve to a
+single answer to *"how much should I believe this?"*, and that answer, too, would
+rather abstain than bluff.
 
 ## The one-sentence version
 
 **Retrieve cheap over billions (two towers + ANN + PQ), rank rich over the
 surviving hundreds (DCN's query×item cross, learned live from your 👍/👎 on-device),
 then explain the result, gate the explanation so it can't lie, quote a
-coverage-guaranteed set, and let a council of LLM judges rule — or abstain** —
-the same four stages
+coverage-guaranteed set, let a council of LLM judges rule, and compose it all
+into one trust verdict — or abstain** — the same four stages
 Google/YouTube/Pinterest run, shrunk to 14 images you can read end to end in an
 afternoon.
 
@@ -199,7 +216,7 @@ afternoon.
 | encode | `embedder.py` `models.py` `fusion.py` `templates.py` | `python3 features.py images/cat.jpg` |
 | retrieve | `search.py` `ann.py` `pq.py` `quantize.py` `scale.py` | `python3 ann.py` · `python3 pq.py` |
 | rank | `dcn.py` `learn2rank.py` `hermes.py` | `python3 dcn.py --image images/004_cat.jpg` · `python3 learn2rank.py` |
-| explain+gate | `explain.py` `conformal.py` `judge.py` `agent.py` | `python3 explain.py --image images/004_cat.jpg` · `python3 conformal.py --json docs/db.json` · `python3 judge.py --json docs/db.json --image images/004_cat.jpg` |
+| explain+gate | `explain.py` `conformal.py` `judge.py` `trust.py` `agent.py` | `python3 explain.py --image images/004_cat.jpg` · `python3 conformal.py --json docs/db.json` · `python3 judge.py … --image images/004_cat.jpg` · `python3 trust.py … --image images/004_cat.jpg` |
 
 Sources: DCN v2 [arXiv:2008.13535], DCN v1 [arXiv:1708.05123], RankNet (Burges et
 al., ICML 2005), YouTube two-stage (Covington et al., RecSys 2016), Wide&Deep

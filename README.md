@@ -70,6 +70,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python learn2rank.py                # 👍/👎 → a ranker that learns your taste
 .venv/bin/python conformal.py --json docs/db.json  # a coverage guarantee, or abstain
 .venv/bin/python judge.py --json docs/db.json --image images/004_cat.jpg  # a council of judges rules
+.venv/bin/python trust.py --json docs/db.json --image images/004_cat.jpg  # compose every lens → one trust verdict
 .venv/bin/python crawler.py "red panda" -n 6 # grow the gallery, with receipts
 .venv/bin/python spider.py https://example.com/gallery  # or crawl any site
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
@@ -147,6 +148,7 @@ Suggested reading order:
 | `conformal.py` | ~140 | **a coverage guarantee, or an honest abstain**: split conformal prediction → the smallest result set that contains the truth ≥ 1−α of the time |
 | `explain.py` | ~150 | **explain + hallucination gate**: say why results matched, and redact any claim the results don't support |
 | `judge.py` | ~200 | **a council of LLM judges**: several rubrics score each result, a gate parses every score, and the council rules — or abstains on a hung jury |
+| `trust.py` | ~200 | **the capstone**: composes all four honesty lenses (gate · conformal · council · margin) into ONE trust verdict — or abstains when they disagree |
 | `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
 | `spider.py` | ~170 | **the web crawler**: BFS any site for images — robots.txt, pacing, caps |
@@ -174,8 +176,8 @@ The browser demo mirrors the same pipeline in `docs/js/` with **matching
 module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
 `rank.js` ↔ `tagger.py`+`fusion.py`+`search.py`, `labels.js` ↔ `labels.py`,
 `agent.js` ↔ `agent.py`, `recsys.js` ↔ `user_tower.py`, `learn.js` ↔
-`learn2rank.py`, `conformal.js` ↔ `conformal.py`, `judge.js` ↔ `judge.py`;
-`viz.js`, `motion.js`,
+`learn2rank.py`, `conformal.js` ↔ `conformal.py`, `judge.js` ↔ `judge.py`,
+`trust.js` ↔ `trust.py`; `viz.js`, `motion.js`,
 and `tour.js` are page-only (the matrix, map and strips, the animation
 helpers, the guided tour), and `app.js` wires everything together. Read a
 Python file, then its twin — same pipeline, two languages.
@@ -370,6 +372,44 @@ LLM judges** button under the explanation runs three *real* in-browser
 each reply through the identical gate, and shows every judge's score, the
 weighted verdict, and the consensus — or an honest abstain. The aggregation math
 is a Python/JS twin, pinned byte-for-byte by CI.
+
+## One trust verdict — composed from every honesty lens, or an abstain
+
+The gate, conformal, the council — each already knows how to say *"I'm not
+sure."* Reading four panels to decide whether to believe a result is the user's
+job, so `trust.py` (`js/trust.js`) does it: it composes the signals the **same
+way the council composes its judges** — a weighted agreement, with an **abstain
+when they disagree**. A council of gates.
+
+Four *different* lenses on the top result, each a trust contribution in `[0,1]`,
+or **None** if that layer itself abstained:
+
+| lens | question | abstains when |
+|---|---|---|
+| **gate** | how *strong* is the top match? (calibrated magnitude) | — |
+| **conformal** | does it *clear* the distribution-free coverage bar τ? | below the bar |
+| **council** | do independent rubric-judges *concur*? | hung / no quorum |
+| **margin** | is #1 decisively *ahead* of the pack? (Hermes' separation) | a lone result |
+
+`compose()` takes a confidence-weighted mean, measures `consensus = 1 − (max −
+min)`, and refuses to rule when the lenses **split** (spread too wide) or too few
+weigh in — and it **can't call "high" while half the evidence abstained** (a
+participation cap). When strength, calibration, consensus and separation all
+agree, trust is *high*; when a strong cosine meets a hung council, it lands at
+*medium* or abstains — honestly.
+
+```bash
+python3 trust.py --json docs/db.json --image images/004_cat.jpg
+#   005_dog.jpg  gate 1.00  confm 0.71  counc 0.73  marg 1.00  →  high     (all four agree)
+#   …bicycle     gate 0.13  confm  —    counc 0.05  marg 0.07  →  low
+#   apple→…      gate 0.40  confm 0.53  counc 0.03  marg 0.13  →  abstain  (split decision)
+```
+
+On the live demo a **trust headline** sits atop the explanation, composing the
+three always-available lenses (gate + conformal + margin) immediately and folding
+in the council's verdict the moment you convene it — one honest answer to *"how
+much should I believe this?"*, with the per-lens pills shown so you can see which
+lenses agreed and which abstained.
 
 ## Two ways to grow the corpus
 
@@ -578,6 +618,7 @@ lesson runs on committed data — and CI re-runs all of them on every push:
 | `python3 learn2rank.py` | after 👍 the tag-sharers / 👎 the rest, `tag_overlap` importance dominates and the parrot lifts above the sunflower |
 | `python3 conformal.py --json docs/db.json` | coverage sits **on or above** every target (80% → 84.6%, 90% → 92.3%); the set grows as you demand more confidence |
 | `python3 judge.py --json docs/db.json --image images/004_cat.jpg` | the council rules **relevant** for cat→dog, **not relevant** for cat→bicycle, and **hung jury** where a shared tag and the vision signal disagree |
+| `python3 trust.py --json docs/db.json --image images/004_cat.jpg` | cat→dog composes to **high** trust (all four lenses agree); where the lenses split, the verdict **abstains** instead of averaging |
 | `python3 scale.py selftest` | chunked scan == naive argsort; ivf probes=8 keeps ≥7/10 of the truth scanning <½ the rows |
 
 (The numbers are pinned to the committed sample gallery; re-exporting your
