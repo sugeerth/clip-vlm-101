@@ -132,16 +132,22 @@ def search(query, encode_texts, items, k: int = 5, passes: int = 1) -> dict:
         rounds.append({"phrasing": phrasing, "ranked": ranked, "margin": m})
     best = max(rounds, key=lambda r: r["margin"])
     if best["margin"] >= MIN_MARGIN:
-        out = {"ranked": best["ranked"], "satisfied": True,
-               "chose": best["phrasing"], "rounds": rounds}
         q0 = embs[rounds.index(best)]
+        out = {"ranked": best["ranked"], "satisfied": True,
+               "chose": best["phrasing"], "rounds": rounds, "qvec": q0}
     else:
         # refine: no phrasing was decisive — ensemble all drafts
         mean = np.asarray(embs).mean(axis=0)
         q0 = mean / np.linalg.norm(mean)
         ranked, _ = _rank(items, q0, k)
         out = {"ranked": ranked, "satisfied": False,
-               "chose": "an ensemble of all phrasings", "rounds": rounds}
+               "chose": "an ensemble of all phrasings", "rounds": rounds, "qvec": q0}
+    # `qvec` is the query Hermes settled on — the decisive phrasing's embedding,
+    # or the ensemble. At passes=1 (the read-path default, and what the JS twin
+    # runs) it is exactly what produced out["ranked"], so a downstream re-ranker
+    # scores the same query the trace names. With --passes convergence below,
+    # out["ranked"] then drifts under the evaluator gate while qvec keeps the
+    # starting query.
     if passes > 1:  # evaluator-guarded convergence on top of the chosen draft
         import fusion
         out["ranked"], out["ledger"] = refine(
