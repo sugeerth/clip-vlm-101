@@ -69,7 +69,7 @@ SAFE_VOCAB = {_norm(w) for w in (
     "similar", "similarity", "score", "scores", "query", "search", "top",
     "share", "shares", "shared", "common", "tag", "tags", "show", "shows",
     "way", "ways", "different", "strongest", "confident", "loose", "treat",
-    "them", "as", "isnt", "is", "are", "that", "it", "model", "the",
+    "them", "as", "isnt", "is", "are", "that", "it", "model", "very", "explain",
 )}
 
 

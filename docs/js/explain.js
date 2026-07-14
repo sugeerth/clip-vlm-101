@@ -37,7 +37,7 @@ const SAFE_VOCAB = new Set(['the', 'a', 'an', 'these', 'this', 'they', 'all',
   'matched', 'similar', 'similarity', 'score', 'scores', 'query', 'search',
   'top', 'share', 'shares', 'shared', 'common', 'tag', 'tags', 'show', 'shows',
   'way', 'ways', 'different', 'strongest', 'confident', 'loose', 'treat',
-  'them', 'as', 'isnt', 'is', 'are', 'that', 'it', 'model'].map(norm));
+  'them', 'as', 'isnt', 'is', 'are', 'that', 'it', 'model', 'very', 'explain'].map(norm));
 const STRENGTH_WORDS = new Set(['strong', 'moderate', 'weak', 'very weak', 'perfect', 'exact']);
 const VOCAB_SET = new Set(VOCAB.map(norm));
 function numbers(text) {

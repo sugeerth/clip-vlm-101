@@ -240,6 +240,13 @@ def test_explain():
     assert "isnt confident" in wtpl                     # the weak tail is present
     assert explain.verify(wtpl, wev)["clean"], f"weak template tripped its gate: {wtpl}"
 
+    # very-weak (the lone token 'very') and empty results ('explain') must pass too
+    vwev = explain.evidence("a cat", [({"tags": ["cat"]}, 0.12)], k=1)
+    assert vwev["strength"] == "very weak"
+    assert explain.verify(explain.describe(vwev, k=1), vwev)["clean"], "very-weak template tripped its gate"
+    empty = explain.evidence("a cat", [], k=1)
+    assert explain.verify(explain.describe(empty, k=1), empty)["clean"], "empty template tripped its gate"
+
     # buckets
     assert explain.bucket(0.31) == "strong" and explain.bucket(0.26) == "moderate"
     assert explain.bucket(0.21) == "weak" and explain.bucket(0.10) == "very weak"

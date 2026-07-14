@@ -214,16 +214,20 @@ function paintExplain(el, res, query) {
     gate.textContent = res.source.startsWith('llm') ? '✓ gated — every claim checks out' : res.source;
   }
   btn.addEventListener('click', async () => {
+    const gen = explainGen;            // snapshot this render generation
     btn.disabled = true; gate.className = 'gate'; gate.textContent = '';
-    const out = await explainWithLLM(query, lastRanked, t => { gate.textContent = t; });
+    const out = await explainWithLLM(query, lastRanked,
+      t => { if (gen === explainGen) gate.textContent = t; });
+    if (gen !== explainGen) return;    // a newer search replaced this panel — don't clobber it
     paintExplain(el, out, query);
   });
   row.append(btn, gate);
   el.replaceChildren(why, row);
 }
 
-let lastRanked = [];
+let lastRanked = [], explainGen = 0;
 function renderExplain(query, ranked) {
+  explainGen++;                        // invalidate any in-flight LLM explanation
   lastRanked = ranked;
   const el = $('explain');
   el.classList.remove('hidden');
