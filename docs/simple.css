@@ -184,6 +184,55 @@ body.searched .chips { margin: 12px 0 0; }
 .explain .gate { font-size: 0.76rem; color: var(--muted); }
 .explain .gate.stripped { color: var(--bad); }
 
+.explain .cwrap { margin-top: 8px; }
+
+/* the council of LLM judges: each judge's GATE (raw → ✓/⊘), then a score bar,
+   then the aggregate verdict + a consensus meter */
+.council { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--hairline); font-size: 0.8rem; }
+.council.hidden { display: none; }
+.council .chead { color: var(--muted); margin-bottom: 10px; line-height: 1.5; }
+.council .chead i { color: var(--ink-2); font-style: italic; }
+.council .gatesum { white-space: nowrap; }
+.council .gatesum b { color: var(--bad); font-weight: 600; }
+.council .jrow { display: flex; align-items: center; gap: 9px; margin: 6px 0; }
+.council .jrow.blocked { opacity: 0.72; }
+.council .jname { width: 82px; color: var(--ink-2); text-transform: capitalize; flex: none; }
+
+/* the per-judge gate: the raw utterance flowing through a ✓ (passed) or ⊘ (blocked) */
+.council .gatechip {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  padding: 2px 8px; border-radius: 999px; font-size: 0.72rem;
+  border: 1px solid var(--hairline); background: var(--surface);
+}
+.council .gatechip .raw { color: var(--ink-2); font-variant-numeric: tabular-nums; max-width: 90px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.council .gatechip .arrow { color: var(--muted); }
+.council .gatechip .glyph { font-weight: 700; }
+.council .gatechip.pass { border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline)); }
+.council .gatechip.pass .glyph { color: var(--accent); }
+.council .gatechip.block { border-color: color-mix(in srgb, var(--bad) 55%, var(--hairline));
+  background: color-mix(in srgb, var(--bad) 8%, var(--surface)); }
+.council .gatechip.block .glyph { color: var(--bad); }
+.council .gatechip.block .raw { text-decoration: line-through; }
+
+/* the score bar — fills to the gated 0–1 score, animated */
+.council .jtrack { flex: 1; height: 8px; border-radius: 5px; background: var(--hairline); overflow: hidden; min-width: 60px; }
+.council .jtrack i { display: block; height: 100%; border-radius: 5px; background: var(--accent);
+  transition: width 0.55s cubic-bezier(.22,1,.36,1); }
+.council .jrow.blocked .jtrack i { background: var(--bad); }
+.council .jscore { width: 56px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; flex: none; }
+.council .jrow.blocked .jscore { color: var(--bad); font-size: 0.74rem; }
+
+.council .verdict { margin-top: 11px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.84rem; }
+.council .verdict.ok { color: var(--accent-ink); }
+.council .verdict.no { color: var(--ink-2); }
+.council .verdict.abstain { color: var(--bad); }
+.council .verdict b { font-weight: 600; }
+.council .verdict .meter { display: inline-block; width: 66px; height: 7px; border-radius: 4px;
+  background: var(--hairline); overflow: hidden; }
+.council .verdict .meter i { display: block; height: 100%; background: var(--accent);
+  transition: width 0.55s cubic-bezier(.22,1,.36,1); }
+
 /* the web phase: live-crawled results, clearly separated from the gallery */
 .webhead { width: 100%; margin: 26px 0 -12px; font-size: 0.8rem; color: var(--muted); text-align: center; }
 .webhead button.retry {

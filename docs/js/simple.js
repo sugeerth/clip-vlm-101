@@ -10,6 +10,7 @@ import { getTextEncoder, getImageEncoder, getActiveModel, setActiveModel } from 
 import { MODELS, DEFAULT_MODEL } from './models.js';
 import { discover } from './crawler.js';
 import { explain, explainWithLLM } from './explain.js';
+import { councilWithLLM } from './judge.js';
 import { OnlineRanker } from './learn.js';
 import { looScores, calibrate } from './conformal.js';
 import { flip } from './motion.js';
@@ -316,7 +317,10 @@ function renderConfidence(el) {
 // ------------------------------------------------------- the explanation --
 // Say WHY these matched, from verifiable facts only, and offer an optional
 // language model that must pass the SAME hallucination gate (explain.js).
-function paintExplain(el, res, query) {
+// Paints ONLY the explanation body (into its own sub-container). The LLM button
+// re-paints this body in place; the council panel is a separate sibling, so
+// upgrading the explanation never destroys a rendered verdict, and vice-versa.
+function paintExplain(body, res, query) {
   const why = document.createElement('div');
   why.className = 'why';
   why.textContent = res.explanation;
@@ -338,20 +342,105 @@ function paintExplain(el, res, query) {
     btn.disabled = true; gate.className = 'gate'; gate.textContent = '';
     const out = await explainWithLLM(query, lastRanked,
       t => { if (gen === explainGen) gate.textContent = t; });
-    if (gen !== explainGen) return;    // a newer search replaced this panel — don't clobber it
-    paintExplain(el, out, query);
+    if (gen !== explainGen || !body.isConnected) return;   // a newer search replaced the panel
+    paintExplain(body, out, query);    // repaints ONLY the body; the council stays put
   });
   row.append(btn, gate);
-  el.replaceChildren(why, row);
+  body.replaceChildren(why, row);
+}
+
+// A second, independent honesty layer: a COUNCIL of LLM judges rules on the top
+// result (judge.js). Lives in its own container so the explanation's LLM
+// upgrade can't clobber it; guarded by explainGen AND DOM-attachment so a slow
+// council call that resolves after a new search is dropped, not mis-rendered.
+function mountCouncil(wrap, query) {
+  const cbtn = Object.assign(document.createElement('button'),
+    { type: 'button', className: 'llm-btn', textContent: '⚖️ convene a council of LLM judges' });
+  const cbox = document.createElement('div'); cbox.className = 'council hidden';
+  cbtn.addEventListener('click', async () => {
+    const gen = explainGen;
+    cbtn.disabled = true; cbox.classList.remove('hidden');
+    cbox.textContent = 'convening the council…';
+    const top = lastRanked[0];
+    if (!top) { cbox.textContent = 'no result to judge.'; return; }
+    const words = (query || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const tags = top.item.tags || [];
+    const ev = { tags, topScore: top.score ?? 0,
+      shared: tags.filter(t => words.some(w => t.includes(w) || w.includes(t))) };
+    const res = await councilWithLLM(query, ev,
+      t => { if (gen === explainGen && cbox.isConnected) cbox.textContent = t; });
+    if (gen !== explainGen || !cbox.isConnected) return;   // superseded by a newer search
+    renderCouncil(cbox, res, top.item);
+  });
+  wrap.replaceChildren(cbtn, cbox);
+}
+
+// The council's ruling, with each judge's GATE made visible: its raw utterance
+// → a ✓/⊘ gate glyph → the score bar. A judge whose text carries no number in
+// [0,1] is BLOCKED by the gate (⊘) and abstains — the same "drop it, don't
+// guess" stance as the hallucination gate. Then the weighted verdict + a
+// consensus meter, or an honest abstain (no quorum / hung jury).
+function renderCouncil(box, res, item) {
+  box.replaceChildren();
+  const passed = res.perJudge.filter(j => j.score !== null && j.score !== undefined).length;
+  const blocked = res.perJudge.length - passed;
+  const head = document.createElement('div'); head.className = 'chead';
+  head.innerHTML = `⚖️ <b>council of ${res.nTotal} LLM judges</b> on the top result `
+    + `<i>“${(item.tags || []).slice(0, 3).join(' · ')}”</i> — `
+    + `<span class="gatesum">🚪 gate: ${passed} passed${blocked ? ` · <b>${blocked} blocked</b>` : ''}</span>`;
+  box.append(head);
+  for (const j of res.perJudge) {
+    const abst = j.score === null || j.score === undefined;
+    const m = /said "([^"]*)"/.exec(j.rationale || '');
+    const raw = m ? m[1] : (abst ? '—' : (j.rationale || ''));
+    const row = document.createElement('div'); row.className = 'jrow' + (abst ? ' blocked' : '');
+    row.append(Object.assign(document.createElement('span'), { className: 'jname', textContent: j.name }));
+    // the GATE: raw utterance → ✓ / ⊘
+    const chip = document.createElement('span'); chip.className = 'gatechip ' + (abst ? 'block' : 'pass');
+    chip.innerHTML = `<span class="raw">“${raw}”</span><span class="arrow">→</span>`
+      + `<span class="glyph">${abst ? '⊘' : '✓'}</span>`;
+    chip.title = abst ? 'no number in [0,1] → blocked by the gate, this judge abstains'
+      : `parsed to ${j.score.toFixed(2)} — cleared the score gate`;
+    row.append(chip);
+    // the score track + value
+    const track = document.createElement('span'); track.className = 'jtrack';
+    const fill = document.createElement('i');
+    fill.style.width = abst ? '0%' : `${Math.round(100 * j.score)}%`;
+    track.append(fill);
+    row.append(track, Object.assign(document.createElement('span'),
+      { className: 'jscore', textContent: abst ? 'abstains' : j.score.toFixed(2) }));
+    box.append(row);
+  }
+  const v = document.createElement('div');
+  v.className = 'verdict ' + (res.decision === 'relevant' ? 'ok'
+    : res.decision === 'abstain' ? 'abstain' : 'no');
+  const glyph = res.decision === 'relevant' ? '✅' : res.decision === 'abstain' ? '⚖️' : '🚫';
+  const pct = Math.round((res.consensus ?? 0) * 100);
+  if (res.decision === 'abstain') {
+    v.innerHTML = res.reason === 'hung jury'
+      ? `${glyph} <b>hung jury</b> — the judges span ${res.spread?.toFixed(2)}; the council abstains`
+      : `${glyph} <b>abstain</b> — no quorum (too few judges cleared the gate)`;
+  } else {
+    v.innerHTML = `${glyph} <b>${res.decision}</b> · weighted mean <b>${res.mean?.toFixed(2)}</b>`
+      + `<span class="meter" title="consensus ${pct}%"><i style="width:${pct}%"></i></span>`
+      + `consensus <b>${pct}%</b>`;
+  }
+  box.append(v);
 }
 
 let lastRanked = [], explainGen = 0;
 function renderExplain(query, ranked) {
-  explainGen++;                        // invalidate any in-flight LLM explanation
+  explainGen++;                        // invalidate any in-flight LLM explanation / council
   lastRanked = ranked;
   const el = $('explain');
   el.classList.remove('hidden');
-  paintExplain(el, explain(query, ranked), query);
+  // two independent sub-panels: the explanation body and the council. Each
+  // re-paints on its OWN button without touching the other.
+  const body = document.createElement('div'); body.className = 'ebody';
+  const cwrap = document.createElement('div'); cwrap.className = 'cwrap';
+  el.replaceChildren(body, cwrap);
+  paintExplain(body, explain(query, ranked), query);
+  mountCouncil(cwrap, query);
 }
 
 // ----------------------------------------------------- the web phase --
