@@ -34,6 +34,7 @@ images and at 1,000,000,000 — only the *layout* changes.
         │   never lie. grounded template  │  agent.py (the same verify-before-
         │   or LLM → hallucination gate   │  publish idea, on the write path)
         │   + a coverage GUARANTEE / abstain │ conformal.py (conformal.js twin)
+        │   + a COUNCIL of LLM judges / abstain │ judge.py (judge.js twin)
         └─────────────────────────────────┘
 ```
 
@@ -163,12 +164,31 @@ truncating would break the promise. Where the gate is the trust boundary on the
 *explanation*, conformal is the trust boundary on the *retrieval itself*: both
 would rather say less than say something they can't stand behind.
 
+**`judge.py` adds a third trust boundary — the verdict — by refusing to trust
+one model's one score.** It convenes a **council of LLM judges** (`js/judge.js`
+twin), each a different rubric (relevance, specificity, faithfulness), and
+aggregates them the way the [panel-of-LLM-evaluators](https://arxiv.org/abs/2404.18796)
+literature (Verga et al. 2024) recommends: several small judges cancel one big
+judge's bias. Every judge's raw reply passes the same *gate* discipline —
+`parse_score()` extracts a number in `[0,1]` or the judge **abstains** (a
+scoreless vote is dropped, never guessed) — and the council takes a
+confidence-weighted mean plus a **consensus** = `1 − (max − min)`. Then, exactly
+like conformal, it **abstains rather than pretend**: no quorum of valid scores,
+or a panel too split (a *hung jury*), yields no ruling instead of a confident
+average over a coin flip. `judge.py` ships a model-free heuristic judge (the CLI
+runs the mechanism on the committed gallery, like `dcn.py`'s untrained demo);
+the live page's **⚖️ council** button runs three real in-browser `SmolLM2`
+judges through the identical gate and aggregation. Four honesty boundaries now
+stand between a query and an answer — gate, conformal, council — and each one
+would rather abstain than bluff.
+
 ## The one-sentence version
 
 **Retrieve cheap over billions (two towers + ANN + PQ), rank rich over the
 surviving hundreds (DCN's query×item cross, learned live from your 👍/👎 on-device),
-then explain the result, gate the explanation so it can't lie, and quote a
-coverage-guaranteed set — or abstain** — the same four stages
+then explain the result, gate the explanation so it can't lie, quote a
+coverage-guaranteed set, and let a council of LLM judges rule — or abstain** —
+the same four stages
 Google/YouTube/Pinterest run, shrunk to 14 images you can read end to end in an
 afternoon.
 
@@ -179,11 +199,12 @@ afternoon.
 | encode | `embedder.py` `models.py` `fusion.py` `templates.py` | `python3 features.py images/cat.jpg` |
 | retrieve | `search.py` `ann.py` `pq.py` `quantize.py` `scale.py` | `python3 ann.py` · `python3 pq.py` |
 | rank | `dcn.py` `learn2rank.py` `hermes.py` | `python3 dcn.py --image images/004_cat.jpg` · `python3 learn2rank.py` |
-| explain+gate | `explain.py` `conformal.py` `agent.py` | `python3 explain.py --image images/004_cat.jpg` · `python3 conformal.py --json docs/db.json` |
+| explain+gate | `explain.py` `conformal.py` `judge.py` `agent.py` | `python3 explain.py --image images/004_cat.jpg` · `python3 conformal.py --json docs/db.json` · `python3 judge.py --json docs/db.json --image images/004_cat.jpg` |
 
 Sources: DCN v2 [arXiv:2008.13535], DCN v1 [arXiv:1708.05123], RankNet (Burges et
 al., ICML 2005), YouTube two-stage (Covington et al., RecSys 2016), Wide&Deep
 [arXiv:1606.07792], FAISS [arXiv:2401.08281], ScaNN [arXiv:1908.10396], Matryoshka
 [arXiv:2205.13147], AIS [arXiv:2112.12870], "Why do These Match?"
 [arXiv:1905.10797], conformal prediction (Vovk et al. 2005; Angelopoulos & Bates
-[arXiv:2107.07511]).
+[arXiv:2107.07511]), LLM-as-a-judge (Zheng et al. [arXiv:2306.05685]), panel of
+LLM evaluators (Verga et al. [arXiv:2404.18796]).

@@ -69,6 +69,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python hermes.py "a fluffy animal"  # the agentic version, with a trace
 .venv/bin/python learn2rank.py                # 👍/👎 → a ranker that learns your taste
 .venv/bin/python conformal.py --json docs/db.json  # a coverage guarantee, or abstain
+.venv/bin/python judge.py --json docs/db.json --image images/004_cat.jpg  # a council of judges rules
 .venv/bin/python crawler.py "red panda" -n 6 # grow the gallery, with receipts
 .venv/bin/python spider.py https://example.com/gallery  # or crawl any site
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
@@ -145,6 +146,7 @@ Suggested reading order:
 | `learn2rank.py` | ~130 | **the ranker that learns YOU**: pairwise RankNet over your 👍/👎, on-device, blended-and-capped so a few clicks can't wreck retrieval |
 | `conformal.py` | ~140 | **a coverage guarantee, or an honest abstain**: split conformal prediction → the smallest result set that contains the truth ≥ 1−α of the time |
 | `explain.py` | ~150 | **explain + hallucination gate**: say why results matched, and redact any claim the results don't support |
+| `judge.py` | ~200 | **a council of LLM judges**: several rubrics score each result, a gate parses every score, and the council rules — or abstains on a hung jury |
 | `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
 | `spider.py` | ~170 | **the web crawler**: BFS any site for images — robots.txt, pacing, caps |
@@ -172,7 +174,8 @@ The browser demo mirrors the same pipeline in `docs/js/` with **matching
 module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
 `rank.js` ↔ `tagger.py`+`fusion.py`+`search.py`, `labels.js` ↔ `labels.py`,
 `agent.js` ↔ `agent.py`, `recsys.js` ↔ `user_tower.py`, `learn.js` ↔
-`learn2rank.py`, `conformal.js` ↔ `conformal.py`; `viz.js`, `motion.js`,
+`learn2rank.py`, `conformal.js` ↔ `conformal.py`, `judge.js` ↔ `judge.py`;
+`viz.js`, `motion.js`,
 and `tour.js` are page-only (the matrix, map and strips, the animation
 helpers, the guided tour), and `app.js` wires everything together. Read a
 Python file, then its twin — same pipeline, two languages.
@@ -331,6 +334,42 @@ exchangeable) and finite-sample: `1−α ≤ coverage ≤ 1−α + 1/(n+1)`. On 
 (truncating would break the promise). `python3 conformal.py --json docs/db.json`
 prints the coverage/size table; the demo shows the 80% set or the abstain badge
 under every search.
+
+## A council of LLM judges — many verdicts, aggregated honestly
+
+One model's one score is a single point of failure. `judge.py` (`js/judge.js`)
+convenes a **panel of judges**, each a different rubric — *relevance*,
+*specificity*, *faithfulness* — and aggregates them the way a good council does
+(the panel-of-evaluators idea, [Verga et al. 2024](https://arxiv.org/abs/2404.18796):
+several small judges beat one big one and cancel each other's quirks):
+
+- **the gate** — each judge's raw text is parsed to a number in `[0,1]` by
+  `parse_score()` (it accepts `0.7`, `7/10`, `70%`, `score: 0.9`). A judge whose
+  output has **no parseable score abstains** — it doesn't get to vote garbage,
+  the same discipline as the hallucination gate.
+- **the council** — a **confidence-weighted mean** of the valid votes, plus
+  `consensus = 1 − (max − min)`. Then, like conformal, it **abstains rather than
+  pretend**: fewer than a quorum of scores → *"no quorum"*; a panel that's too
+  split → *"hung jury"*. A confident average over a coin flip is exactly the
+  failure this prevents.
+
+```bash
+python3 judge.py --json docs/db.json --image images/004_cat.jpg
+#   005_dog.jpg     relev 0.84  spec 0.80  faith 0.50  mean 0.73  → relevant (ruled)
+#   002_bicycle.jpg relev 0.13  spec 0.00  faith 0.00  mean 0.05  → not relevant (ruled)
+# and apple → pluto, which share the 'apple' tag by a fluke: faithfulness says
+#   1.00, vision says 0.22 → the judges are split → the council abstains (hung jury)
+```
+
+The CLI runs a **model-free** heuristic judge (three rubrics read three stored
+signals — cosine, tag-overlap, top-tag — which is exactly why they can disagree),
+so the whole council mechanism runs on the committed gallery with no downloads,
+like `dcn.py`'s untrained demo. On the live demo the **⚖️ convene a council of
+LLM judges** button under the explanation runs three *real* in-browser
+`SmolLM2-135M` judges (via transformers.js, nothing leaves your machine), pipes
+each reply through the identical gate, and shows every judge's score, the
+weighted verdict, and the consensus — or an honest abstain. The aggregation math
+is a Python/JS twin, pinned byte-for-byte by CI.
 
 ## Two ways to grow the corpus
 
@@ -538,6 +577,7 @@ lesson runs on committed data — and CI re-runs all of them on every push:
 | `python3 hermes.py --image pizza --json docs/db.json` | the evaluator **rejects** the drifting pass and keeps the honest ranking |
 | `python3 learn2rank.py` | after 👍 the tag-sharers / 👎 the rest, `tag_overlap` importance dominates and the parrot lifts above the sunflower |
 | `python3 conformal.py --json docs/db.json` | coverage sits **on or above** every target (80% → 84.6%, 90% → 92.3%); the set grows as you demand more confidence |
+| `python3 judge.py --json docs/db.json --image images/004_cat.jpg` | the council rules **relevant** for cat→dog, **not relevant** for cat→bicycle, and **hung jury** where a shared tag and the vision signal disagree |
 | `python3 scale.py selftest` | chunked scan == naive argsort; ivf probes=8 keeps ≥7/10 of the truth scanning <½ the rows |
 
 (The numbers are pinned to the committed sample gallery; re-exporting your

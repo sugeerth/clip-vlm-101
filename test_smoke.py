@@ -254,6 +254,60 @@ def test_conformal():
     assert all(cos[i] >= tau - 1e-9 for i in idx)
 
 
+def test_judge():
+    """judge.py: the score gate, and the council's quorum / hung-jury / ruling."""
+    import judge
+
+    # the gate: accept the forms a small model emits, reject out of range
+    assert judge.parse_score("0.7") == 0.7
+    assert judge.parse_score(".7") == 0.7
+    assert judge.parse_score("7/10") == 0.7
+    assert judge.parse_score("8 out of 10") == 0.8
+    assert judge.parse_score("70%") == 0.7
+    assert judge.parse_score("score: 0.9") == 0.9
+    assert judge.parse_score("relevant") is None      # no number → abstain
+    assert judge.parse_score("2.5") is None            # out of [0,1]
+    assert judge.parse_score("150%") is None
+
+    # a judge with no parseable score ABSTAINS — it doesn't vote garbage
+    votes = [{"name": "a", "score": 0.8, "confidence": 0.9},
+             {"name": "b", "score": None, "confidence": 0.7},
+             {"name": "c", "score": 0.7, "confidence": 0.6}]
+    v = judge.aggregate(votes)
+    assert v["n_valid"] == 2 and v["abstained"] == ["b"]
+    # confidence-weighted mean, not a plain average
+    assert abs(v["mean"] - (0.8 * 0.9 + 0.7 * 0.6) / (0.9 + 0.6)) < 1e-6
+    assert v["decision"] == "relevant"
+
+    # too few valid votes → the council can't rule
+    assert judge.aggregate([{"name": "a", "score": 0.9, "confidence": 1.0},
+                             {"name": "b", "score": None, "confidence": 1.0}]
+                           )["decision"] == "abstain"
+
+    # a split panel is a HUNG JURY (spread > HUNG_SPREAD) → abstain, not a
+    # confident average over a coin flip
+    hung = judge.aggregate([{"name": "a", "score": 0.1, "confidence": 1.0},
+                            {"name": "b", "score": 0.9, "confidence": 1.0}])
+    assert hung["decision"] == "abstain" and hung["reason"] == "hung jury"
+    assert abs(hung["consensus"] - 0.2) < 1e-9    # 1 - (0.9 - 0.1)
+
+    # majority: yes/no votes, ties abstain
+    assert judge.majority(votes)["decision"] == "relevant"           # 2 yes, 0 no
+    tie = judge.majority([{"name": "a", "score": 0.9}, {"name": "b", "score": 0.1}])
+    assert tie["decision"] == "abstain" and tie["reason"] == "tie"
+
+    # the model-free heuristic council rules on a clear same-tag match and
+    # abstains when the tag signal and the visual signal disagree
+    items = db.load_json_gallery()
+    by = lambda s: next(it for it in items if s in it["path"])
+    strong = judge.council(by("004_cat"), by("005_dog"))            # cat → dog
+    assert strong["decision"] == "relevant" and strong["n_valid"] == 3
+    split = judge.council(by("000_apple"), by("011_pluto"))         # shares 'apple' by fluke
+    assert split["decision"] == "abstain" and split["reason"] == "hung jury"
+
+    assert judge.QUORUM == 2 and judge.ACCEPT == 0.5 and judge.HUNG_SPREAD == 0.5
+
+
 def test_dcn():
     """dcn.py: W=0 reproduces retrieval order; one cross lifts tag-sharers."""
     import dcn
