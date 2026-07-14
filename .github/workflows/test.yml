@@ -22,6 +22,7 @@ jobs:
       - run: node docs/js/test_conformal.mjs # conformal sets: JS twin agrees with conformal.py
       - run: node docs/js/test_hermes.mjs   # the agentic searcher's margin gate + qvec, pinned to hermes.py
       - run: node docs/js/test_judge.mjs    # council of LLM judges: gate + quorum + hung-jury, pinned to judge.py
+      - run: node docs/js/test_trust.mjs    # the trust composer: agreement + split-decision abstain, pinned to trust.py
       # the model-free CLI demos must keep running on the committed gallery
       - run: python temperature.py
       - run: python similarity.py --json docs/db.json
@@ -33,6 +34,7 @@ jobs:
       - run: python learn2rank.py           # on-device learning-to-rank, model-free demo
       - run: python conformal.py --json docs/db.json  # conformal coverage table on the gallery
       - run: python judge.py --json docs/db.json --image images/004_cat.jpg  # council of judges, model-free
+      - run: python trust.py --json docs/db.json --image images/004_cat.jpg  # compose the honesty lenses into one verdict
       - run: python scale.py selftest       # the million-row machinery, synthetic + model-free
       - run: python pq.py selftest          # product quantization: the browser index's math
       - run: node docs/js/test_pq.mjs       # …and its JS twin agrees, lookup for lookup
