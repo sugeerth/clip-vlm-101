@@ -176,6 +176,86 @@ def test_softmax():
     assert np.allclose(softmax([s + 7 for s in scores]), p)      # shift-invariant
 
 
+def test_dcn():
+    """dcn.py: W=0 reproduces retrieval order; one cross lifts tag-sharers."""
+    import dcn
+
+    # 3 candidates: B has lower cosine than A but shares a tag with the query
+    cand = [
+        {"item": "A", "cos_image": 0.80, "cos_text": 0.80, "tag_overlap": 0, "rank_prior": 1.0},
+        {"item": "B", "cos_image": 0.70, "cos_text": 0.70, "tag_overlap": 3, "rank_prior": 0.5},
+        {"item": "C", "cos_image": 0.60, "cos_text": 0.60, "tag_overlap": 0, "rank_prior": 0.33},
+    ]
+    passthrough = dcn.CrossNetwork(dim=len(dcn.FEATURES), num_layers=1)  # W=0
+    order0 = [c["item"] for c in dcn.rerank(cand, passthrough)]
+    assert order0 == ["A", "B", "C"]                # pure fused-cosine order
+
+    crossed = dcn.CrossNetwork(dim=len(dcn.FEATURES), num_layers=1)
+    crossed.set_cross(0, dcn.FEATURES.index("cos_image"),
+                      dcn.FEATURES.index("tag_overlap"), 6.0)
+    order1 = [c["item"] for c in dcn.rerank(cand, crossed)]
+    assert order1[0] == "B"                          # tag-sharer lifted above A
+    # the cross is a real interaction: B's score now exceeds A's
+    scored = {c["item"]: c["dcn_score"] for c in dcn.rerank(cand, crossed)}
+    assert scored["B"] > scored["A"] > scored["C"]
+
+    # forward() is the exact DCN-v2 formula x0 ⊙ (W x + b) + x
+    x0 = dcn.make_features(0.5, 0.5, 2, 1.0)
+    net = dcn.CrossNetwork(dim=4, num_layers=1)
+    net.bs[0][:] = 0.1
+    assert np.allclose(net.forward(x0), x0 * (net.Ws[0] @ x0 + net.bs[0]) + x0)
+
+
+def test_explain():
+    """explain.py: the template passes its own gate; the gate strips lies."""
+    import explain
+
+    ranked = [
+        ({"tags": ["cat", "pet", "animal"]}, 0.31),
+        ({"tags": ["cat", "pet", "portrait"]}, 0.27),
+        ({"tags": ["cat", "dog", "pet"]}, 0.22),
+    ]
+    ev = explain.evidence("a fluffy cat", ranked, k=3)
+    assert ev["shared"] == ["cat", "pet"] and ev["top_score"] == 0.31
+    assert ev["strength"] == "strong"                # 0.31 ≥ 0.30
+
+    # the grounded template must ALWAYS pass its own gate (regression guard)
+    template = explain.describe(ev, k=3)
+    assert explain.verify(template, ev)["clean"], f"template tripped its gate: {template}"
+
+    # a hallucinated draft: a real tag not present ('dog' isn't in the top set),
+    # a fabricated number, and a wrong strength word — all caught
+    lie = "These all show a car. The match is weak at 0.99."
+    checked = explain.verify(lie, ev)          # 'car' is a real tag, absent here
+    assert not checked["clean"] and checked["verified"] == ""
+    joined = " ".join(r for s in checked["stripped"] for r in s["reasons"])
+    assert "car" in joined and "0.99" in joined and "weak" in joined
+
+    # THE regression that matters: the template must pass its gate for a WEAK
+    # match too, where it emits the "the model isnt confident" honesty tail
+    weak = [({"tags": ["cat", "pet"]}, 0.21), ({"tags": ["cat", "dog"]}, 0.20)]
+    wev = explain.evidence("a cat", weak, k=2)
+    assert wev["strength"] == "weak"
+    wtpl = explain.describe(wev, k=2)
+    assert "isnt confident" in wtpl                     # the weak tail is present
+    assert explain.verify(wtpl, wev)["clean"], f"weak template tripped its gate: {wtpl}"
+
+    # very-weak (the lone token 'very') and empty results ('explain') must pass too
+    vwev = explain.evidence("a cat", [({"tags": ["cat"]}, 0.12)], k=1)
+    assert vwev["strength"] == "very weak"
+    assert explain.verify(explain.describe(vwev, k=1), vwev)["clean"], "very-weak template tripped its gate"
+    empty = explain.evidence("a cat", [], k=1)
+    assert explain.verify(explain.describe(empty, k=1), empty)["clean"], "empty template tripped its gate"
+
+    # buckets
+    assert explain.bucket(0.31) == "strong" and explain.bucket(0.26) == "moderate"
+    assert explain.bucket(0.21) == "weak" and explain.bucket(0.10) == "very weak"
+
+    # explain() falls back to the template when the LLM draft is fully stripped
+    out = explain.explain("a fluffy cat", ranked, k=3, draft="Clearly a helicopter at 0.99.")
+    assert out["explanation"] == explain.describe(ev, k=3)
+
+
 def test_model_registry():
     """models.py: keys, ids and unknown ids all resolve; padding rules hold."""
     import models

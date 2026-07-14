@@ -9,6 +9,7 @@ import { hermesSearch, MIN_MARGIN } from './hermes.js';
 import { getTextEncoder, getImageEncoder, getActiveModel, setActiveModel } from './clip.js';
 import { MODELS, DEFAULT_MODEL } from './models.js';
 import { discover } from './crawler.js';
+import { explain, explainWithLLM } from './explain.js';
 
 const $ = id => document.getElementById(id);
 const EXAMPLES = ['a fluffy animal', 'famous landmark in europe',
@@ -154,6 +155,7 @@ async function search() {
     if (imageQuery) {                         // image → image, like search.py --image
       hideTrace();
       clearWeb();
+      $('explain').classList.add('hidden');
       await ensureBrainReady();
       show(DB.items
         .map(item => ({ item, score: dot(item.image_emb, imageQuery.emb) }))
@@ -174,6 +176,7 @@ async function search() {
       const out = await hermesSearch(query, encodeText, DB.items, TOP_K);
       show(out.ranked);
       showTrace(out);
+      renderExplain(query, out.ranked);   // why did these match? (grounded + gated)
       webPhase(query);               // fire-and-forget: local results never wait
     }
   } catch (err) {
@@ -181,12 +184,54 @@ async function search() {
     hideBar();
     hideTrace();
     clearWeb();
+    $('explain').classList.add('hidden');
     const hits = keywordResults(query);
     show(hits, hits.length ? 'model unavailable here — showing keyword matches'
                            : 'model unavailable and no keyword matches');
   }
   searching = false;
   if (rerun) { rerun = false; search(); }
+}
+
+// ------------------------------------------------------- the explanation --
+// Say WHY these matched, from verifiable facts only, and offer an optional
+// language model that must pass the SAME hallucination gate (explain.js).
+function paintExplain(el, res, query) {
+  const why = document.createElement('div');
+  why.className = 'why';
+  why.textContent = res.explanation;
+  const row = document.createElement('div');
+  row.className = 'row2';
+  const btn = Object.assign(document.createElement('button'),
+    { type: 'button', className: 'llm-btn', textContent: '✨ explain with a language model' });
+  const gate = document.createElement('span');
+  gate.className = 'gate';
+  if (res.stripped && res.stripped.length) {
+    gate.classList.add('stripped');
+    gate.textContent = `gate removed ${res.stripped.length} unsupported claim${res.stripped.length > 1 ? 's' : ''}`;
+    gate.title = res.stripped.map(s => s.reasons.join('; ')).join(' · ');
+  } else if (res.source) {
+    gate.textContent = res.source.startsWith('llm') ? '✓ gated — every claim checks out' : res.source;
+  }
+  btn.addEventListener('click', async () => {
+    const gen = explainGen;            // snapshot this render generation
+    btn.disabled = true; gate.className = 'gate'; gate.textContent = '';
+    const out = await explainWithLLM(query, lastRanked,
+      t => { if (gen === explainGen) gate.textContent = t; });
+    if (gen !== explainGen) return;    // a newer search replaced this panel — don't clobber it
+    paintExplain(el, out, query);
+  });
+  row.append(btn, gate);
+  el.replaceChildren(why, row);
+}
+
+let lastRanked = [], explainGen = 0;
+function renderExplain(query, ranked) {
+  explainGen++;                        // invalidate any in-flight LLM explanation
+  lastRanked = ranked;
+  const el = $('explain');
+  el.classList.remove('hidden');
+  paintExplain(el, explain(query, ranked), query);
 }
 
 // ----------------------------------------------------- the web phase --
