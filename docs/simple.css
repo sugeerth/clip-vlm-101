@@ -136,6 +136,24 @@ body.searched .chips { margin: 12px 0 0; }
   content: "best match"; float: right; color: var(--accent-ink); font-weight: 600; font-size: 0.72rem;
 }
 
+/* the grounded explanation: why these matched, gated against hallucination */
+.explain {
+  width: 100%; max-width: 640px; margin: 22px auto 0; padding: 12px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow); font-size: 0.9rem; line-height: 1.5;
+}
+.explain .why { color: var(--ink); }
+.explain .why b { font-weight: 600; }
+.explain .row2 { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+.explain .llm-btn {
+  font: inherit; font-size: 0.78rem; color: var(--accent-ink); cursor: pointer;
+  background: none; border: 1px solid var(--hairline); border-radius: 999px; padding: 3px 11px;
+}
+.explain .llm-btn:hover { border-color: var(--accent); }
+.explain .llm-btn:disabled { opacity: 0.5; cursor: default; }
+.explain .gate { font-size: 0.76rem; color: var(--muted); }
+.explain .gate.stripped { color: var(--bad); }
+
 /* the web phase: live-crawled results, clearly separated from the gallery */
 .webhead { width: 100%; margin: 26px 0 -12px; font-size: 0.8rem; color: var(--muted); text-align: center; }
 .webhead button.retry {

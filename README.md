@@ -5,6 +5,11 @@ https://sugeerth.github.io/clip-vlm-101/ — CLIP·search: one box, real
 inference, results. The full explorable walkthrough lives at
 [/explore.html](https://sugeerth.github.io/clip-vlm-101/explore.html).
 
+**The whole system in one page:** [ARCHITECTURE.md](ARCHITECTURE.md) — the
+four stages a real billion-scale visual search runs (encode → **retrieve**
+cheap → **rank** rich → **explain** + hallucination-gate), and which file
+demonstrates each.
+
 A deliberately tiny, readable pipeline that shows how a CLIP-style
 vision-language model turns **images + prompt templates** into **embeddings**,
 stores them in a **database**, and answers **searches** — then takes it one
@@ -134,6 +139,8 @@ Suggested reading order:
 | `user_tower.py` | ~65 | **the serving half**: mean-pooled likes → recommendations, one matmul |
 | `eval.py` | ~100 | **the benchmark**: top-1/top-5 hit rates — prove an optimization helps |
 | `search.py` | ~90 | text / image / fused retrieval with dot products |
+| `dcn.py` | ~130 | **the ranking stage**: a Deep&Cross Network v2 — the query×item interaction a dot product can't express |
+| `explain.py` | ~150 | **explain + hallucination gate**: say why results matched, and redact any claim the results don't support |
 | `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
 | `spider.py` | ~170 | **the web crawler**: BFS any site for images — robots.txt, pacing, caps |
