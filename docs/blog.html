@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CLIP VLM 101 — how it scales to a billion</title>
+<title>CLIP VLM 101 — how it scales to billions</title>
 <meta name="description" content="A system-design walkthrough: how a 14-image demo becomes a billion-image visual search — two towers, an O(√N) index, product quantization, sharding, an honest latency budget, and an agent layer that rides on top for free.">
 <meta property="og:type" content="article">
-<meta property="og:title" content="CLIP VLM 101 — how it scales to a billion">
+<meta property="og:title" content="CLIP VLM 101 — how it scales to billions">
 <meta property="og:description" content="Two towers, an O(√N) index, 64 bytes a vector, 1,000 shards of a measured million, and agents that don't blow the latency budget. The whole system, honestly.">
 <meta property="og:url" content="https://sugeerth.github.io/clip-vlm-101/blog.html">
 <meta property="og:image" content="https://sugeerth.github.io/clip-vlm-101/images/004_cat.jpg">
@@ -27,6 +27,7 @@
       <a href="#towers">Two towers</a>
       <a href="#funnel">The funnel</a>
       <a href="#budget">A billion</a>
+      <a href="#cascade">The cascade</a>
       <a href="#latency">Latency</a>
       <a href="#agents">The agents</a>
       <a href="#reproduce">Reproduce</a>
@@ -45,12 +46,13 @@
     <p class="lede">
       The rest of this site searches <b>14 images</b>. One page grew the same database
       design to <a href="scale.html">a real million</a> and timed it on a laptop. This
-      post finishes the arc: what it takes to serve <b>a billion</b> — and why the answer
-      is not a rewrite, but the <em>same two towers</em>, an index that costs
-      <code>O(√N)</code> instead of <code>O(N)</code>, sixty-four bytes a vector, and a
-      thousand copies of the million we already measured. Every number below is either
-      <b>measured</b> by <code>scale.py</code> or <b>arithmetic</b> by <code>scaling.py</code>,
-      which CI re-runs on every push. Nothing is a vibe.
+      post finishes the arc: what it takes to serve <b>a billion — and then two</b>. The
+      answer is not a rewrite, but the <em>same two towers</em>, an index that costs
+      <code>O(√N)</code> instead of <code>O(N)</code>, an <b>approximation cascade</b> that
+      quantizes at every level yet stays right, and a couple thousand copies of the million we
+      already measured. Every number below is either <b>measured</b> by <code>scale.py</code> /
+      <code>cascade.py</code> or <b>arithmetic</b> by <code>scaling.py</code>, which CI re-runs
+      on every push. Nothing is a vibe.
     </p>
     <p class="fine">Read time ~8 minutes. Companion to the terse
       <a href="https://github.com/sugeerth/clip-vlm-101/blob/main/ARCHITECTURE.md">ARCHITECTURE.md</a> map.</p>
@@ -186,13 +188,58 @@
         a merge and a network hop — <em>not</em> 1,000× the work. The per-shard number is real,
         measured, on a laptop. The fan-out is the oldest trick in distributed systems. That is
         the whole trick to a billion: <b>don't build a bigger index, build a thousand of the one
-        that already works.</b></p>
+        that already works.</b> Two billion? <b>Two thousand shards.</b> The arithmetic doesn't
+        bend — it just adds boxes, which is exactly the property you want.</p>
     </div>
+  </section>
+
+  <!-- ============================================================== cascade -->
+  <section id="cascade">
+    <p class="eyebrow">04 · Approximate at every level</p>
+    <h2>The cascade — quantize everywhere, and still be right</h2>
+    <p class="sub">
+      One approximation is a tradeoff you pay for in accuracy. A <b>cascade</b> of them is a free
+      lunch — if you arrange them so each level only has to keep the true answers <em>alive</em>,
+      not <em>ordered</em>. That's the trick inside every billion-scale index (FAISS IVF-PQ-rerank,
+      ScaNN, DiskANN), and <code>cascade.py</code> builds and <b>measures</b> it. Each level is a
+      coarser, cheaper distance on a shorter list; the final exact stage, on a tiny handful, does
+      the ordering.
+    </p>
+    <div class="card">
+      <table>
+        <tr><th>level</th><th>encoding</th><th>bytes/vec</th><th>distance</th><th>scores → keeps</th></tr>
+        <tr><td><b>L1</b></td><td>binary</td><td>64</td><td>Hamming (popcount)</td><td>~1.4M → 500</td></tr>
+        <tr><td><b>L2</b></td><td>PQ-64</td><td>64</td><td>table lookups (ADC)</td><td>500 → 100</td></tr>
+        <tr><td><b>L3</b></td><td>int8</td><td>512</td><td>integer dot product</td><td>100 → 50</td></tr>
+        <tr><td><b>L4</b></td><td>float32</td><td>2048</td><td>exact — the truth</td><td>50 → 10</td></tr>
+      </table>
+      <p class="hint">The one rung this repo was missing is <b>L1, binary</b>: one bit per dimension
+        (the sign), so a vector is 512 bits = 64 bytes and its distance is <code>popcount(a XOR b)</code>
+        — the cheapest instruction a CPU has. It's coarse, so it only <em>shortlists</em>; the levels
+        below refine. The headline: <b>only ~50 vectors a query ever get scored in float32</b> — out
+        of two billion, that's 2.5 × 10⁻⁸ of the corpus. Full precision is a rounding error.</p>
+    </div>
+    <h3 style="margin:24px 0 4px;font-size:1.05rem;">Does it actually work? Measured, not asserted.</h3>
+    <div class="card">
+      <p class="sub" style="margin-bottom:14px;">The claim is that every approximate level keeps the
+        <em>true</em> neighbours in its shortlist — so the exact re-rank at the end recovers them. Here
+        is the true-neighbour <b>survival</b> through the funnel on clustered vectors (the shape real
+        embeddings have), measured by <code>cascade.py</code>. Watch it stay flat:</p>
+      <div id="cascadeBars"></div>
+      <p class="hint" id="cascadeNote"></p>
+    </div>
+    <p class="sub">
+      The full cascade — binary, then PQ, then int8, then exact — keeps <b>~100% of the recall</b> an
+      exact scan of the same cells would get, while touching float32 on ~50 vectors instead of the
+      whole cell set. Approximate <em>everywhere</em>; wrong <em>nowhere that counts</em>. That is what
+      lets the resident index be the cheap encodings (binary + PQ, ~238 GB for two billion, both in
+      RAM) while the expensive float32 vectors sit in cold storage, fetched only for the final fifty.
+    </p>
   </section>
 
   <!-- ============================================================== latency -->
   <section id="latency">
-    <p class="eyebrow">04 · What a query actually costs</p>
+    <p class="eyebrow">05 · What a query actually costs</p>
     <h2>The latency budget — interactive, at a billion</h2>
     <p class="sub">
       System design is spending a millisecond budget. Here is where a single query's time goes,
@@ -217,7 +264,7 @@
 
   <!-- =============================================================== agents -->
   <section id="agents">
-    <p class="eyebrow">05 · ML systems and agents, hand in hand</p>
+    <p class="eyebrow">06 · ML systems and agents, hand in hand</p>
     <h2>The agent layer rides on top — for free</h2>
     <p class="sub">
       Every agent in this repo is placed so that it <b>does not inflate the p50</b> above. That
@@ -261,23 +308,26 @@
 
   <!-- ============================================================ reproduce -->
   <section id="reproduce">
-    <p class="eyebrow">06 · Nothing here is a vibe</p>
+    <p class="eyebrow">07 · Nothing here is a vibe</p>
     <h2>Reproduce every number</h2>
     <p class="sub">Two commands. The first is pure arithmetic (this whole post); the second is
       the laptop measurement it's anchored to. CI runs both on every push.</p>
     <div class="card">
-      <pre class="dims">$ python3 scaling.py          # the billion-row budget, printed — no model, no data
-$ python3 scale.py bench      # the million-row measurement it extrapolates from</pre>
-      <p class="hint">The billion-scale arithmetic — memory linearity, the √N index law, the
-        1,000-shard plan, the parallel latency budget — is asserted in <code>test_smoke.py</code>
-        (<code>test_scaling</code>) and re-run in CI, right next to <code>scale.py selftest</code>,
-        so the story and the code can never drift apart.</p>
+      <pre class="dims">$ python3 scaling.py          # the two-billion budget + cascade, printed — no model, no data
+$ python3 cascade.py          # the approximation cascade: recall retained at every level
+$ python3 scale.py bench      # the million-row measurement it all extrapolates from</pre>
+      <p class="hint">The two-billion arithmetic — memory linearity, the √N index law, the
+        shard plan, the parallel latency budget, and the cascade's float32 fraction — is asserted
+        in <code>test_smoke.py</code> (<code>test_scaling</code>, <code>test_cascade</code>) and
+        re-run in CI next to <code>scale.py selftest</code>, so the story and the code can never
+        drift apart. The cascade's recall retention is measured, not assumed.</p>
     </div>
     <p class="sub" style="margin-top:24px;">
       That's the system, end to end: two towers so the work is offline, an O(√N) index so
-      retrieval is sublinear, 64 bytes so a billion fits in RAM, a thousand shards so a laptop's
+      retrieval is sublinear, an <b>approximation cascade</b> so only fifty vectors a query ever
+      touch float32, 64 bytes so two billion fit in RAM, two thousand shards so a laptop's
       measurement <em>is</em> the fleet's, a millisecond budget so it stays interactive, and an
-      agent layer arranged so intelligence never costs the p50. Fourteen images taught it; a
+      agent layer arranged so intelligence never costs the p50. Fourteen images taught it; two
       billion only changes the layout.
     </p>
   </section>
@@ -336,6 +386,40 @@ $ python3 scale.py bench      # the million-row measurement it extrapolates from
   document.getElementById('latencyNote').textContent =
     `Each bar is a stage; the total — ${total.toFixed(1)} ms — is a query's p50 at a billion vectors, `
     + `interactive by any standard. The scan is counted once because shards run in parallel.`;
+
+  // The cascade survival bars — the MEASURED true-neighbour survival through
+  // each approximate level, from cascade.py (test_cascade pins recall ≥ 0.98×
+  // the exact-on-cells ceiling). Flat bars = each approximation drops nothing.
+  const SURVIVAL = [
+    ['L0 · IVF cells', 0.937, 'the ceiling: an exact scan of these cells'],
+    ['L1 · binary → 500', 0.933, 'Hamming shortlist keeps the true neighbours'],
+    ['L2 · PQ-64 → 100', 0.933, 'table-lookup ADC refines, drops nothing'],
+    ['L3 · int8 → 50', 0.933, 'integer dots — the set handed to exact re-rank'],
+  ];
+  const cwrap = document.getElementById('cascadeBars');
+  if (cwrap) {
+    for (const [name, v, why] of SURVIVAL) {
+      const row = document.createElement('div');
+      row.className = 'meter-row';
+      row.style.gridTemplateColumns = '150px 1fr 52px';
+      const label = document.createElement('span');
+      label.className = 'tag'; label.textContent = name; label.title = why;
+      const meter = document.createElement('div');
+      meter.className = 'meter';
+      const fill = document.createElement('div');
+      fill.className = 'fill'; fill.style.width = (100 * v) + '%';
+      meter.append(fill);
+      const val = document.createElement('span');
+      val.style.cssText = 'font-variant-numeric:tabular-nums;font-size:0.82rem;text-align:right;';
+      val.textContent = v.toFixed(3);
+      row.append(label, meter, val);
+      cwrap.append(row);
+    }
+    document.getElementById('cascadeNote').textContent =
+      'Recall@10 of the true neighbours surviving each level, measured on 5,000 clustered vectors. '
+      + 'The line barely moves: binary, then PQ, then int8 each shortlist hard but drop nothing the '
+      + 'exact re-rank needs — 0.933 out of a 0.937 ceiling, ~100% kept.';
+  }
 </script>
 </body>
 </html>

@@ -197,6 +197,60 @@ def test_scaling():
     _, solo = scaling.latency_budget(sharded=False)
     assert solo < total                               # no scatter/gather when not sharded
 
+    # the approximation cascade: only the final shortlist ever touches float32
+    cas = scaling.cascade_plan(int(2e9), nprobe=32)
+    assert cas["float32_per_query"] == scaling.CASCADE_KEEP[-1]   # 50, not 2 billion
+    assert cas["float32_fraction"] < 1e-7                         # a rounding error
+    # each level scores fewer than the last (a funnel), binary the widest
+    scored = cas["scored_per_level"]
+    assert scored == sorted(scored, reverse=True) and scored[0] > 1e6
+    # binary and PQ are both 64 bytes at 512-d; resident index is their sum
+    assert scaling.memory(1000, "binary") == 1000 * (512 // 8)
+    assert cas["resident_bytes"] == int(2e9) * (scaling.ENCODINGS["binary"]
+                                                + scaling.ENCODINGS["PQ-64"])
+    # two billion is 2,000 shards of the measured million
+    assert scaling.shard_plan(int(2e9), int(1e6))["shards"] == 2000
+
+
+def test_cascade():
+    """cascade.py: approximate at every level, keep ~all the recall."""
+    import numpy as np
+    import cascade
+    from ann import synthetic
+
+    X, Q = synthetic(n=3000, n_queries=60, dim=64, blobs=48, noise=0.2)
+    truth = np.argsort(Q @ X.T, axis=1)[:, ::-1][:, :10]
+    cas = cascade.Cascade(X)
+
+    # the cascade's top-k comes back the right length and from the corpus
+    top, steps = cas.search(Q[0], trace=True)
+    assert len(top) == 10 and set(top).issubset(range(len(X)))
+    # the funnel narrows monotonically: L0 ≥ L1 ≥ L2 ≥ L3 ≥ L4
+    widths = [w for _, w in steps]
+    assert widths == sorted(widths, reverse=True)   # a funnel: never widens
+    assert widths[-1] == 10 and widths[0] > widths[-1]  # and narrows overall
+
+    # the ceiling: an EXACT scan of the same IVF cells
+    def ceiling(qi):
+        near = np.argsort(Q[qi] @ cas.C.T)[::-1][:8]
+        cand = np.concatenate([cas.lists[j] for j in near])
+        return cand[np.argsort(X[cand] @ Q[qi])[::-1][:10]]
+
+    rec_cascade = np.mean([len(set(cas.search(Q[i])) & set(truth[i])) / 10
+                           for i in range(len(Q))])
+    rec_ceiling = np.mean([len(set(ceiling(i)) & set(truth[i])) / 10
+                           for i in range(len(Q))])
+    # every level is approximate, yet the cascade keeps essentially all the
+    # recall the exact scan of those cells could — that is the whole claim
+    assert rec_cascade >= 0.98 * rec_ceiling
+    assert rec_cascade > 0.85            # and it is genuinely high, not just close
+
+    # binary encoding is 1 bit/dim and Hamming ranks a vector nearest itself
+    bits = cascade.binary_encode(X)
+    assert bits.shape == X.shape and bits.dtype == bool
+    h = cascade.hamming(bits[0], bits)
+    assert h[0] == 0 and h.argmin() == 0
+
 
 def test_softmax():
     from temperature import softmax
