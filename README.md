@@ -74,6 +74,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python drift.py --json docs/db.json   # watch a stream drift: stable → shift → DRIFT
 .venv/bin/python debate.py --json docs/db.json --image images/000_apple.jpg  # watch the agents argue
 .venv/bin/python debate.py --json docs/db.json --eval   # multi-agent debate as evaluation
+.venv/bin/python reason.py --json docs/db.json --image images/004_cat.jpg  # trace the whole stack → a decision
 .venv/bin/python crawler.py "red panda" -n 6 # grow the gallery, with receipts
 .venv/bin/python spider.py https://example.com/gallery  # or crawl any site
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
@@ -154,6 +155,7 @@ Suggested reading order:
 | `trust.py` | ~200 | **the capstone**: composes all four honesty lenses (gate · conformal · council · margin) into ONE trust verdict — or abstains when they disagree |
 | `drift.py` | ~230 | **the monitor**: PSI + KS + conformal-coverage drift detection on a stream — stable / shift / DRIFT, with the failure cases to inspect and a scheduled CI gate |
 | `debate.py` | ~180 | **multiple agents that talk**: the council's judges DEBATE via bounded-confidence dynamics — converge to consensus or split into named factions (contested) |
+| `reason.py` | ~200 | **the reasoning layer**: traces the whole pipeline into one legible chain (each step premise→conclusion→status) and maps it to a CONSEQUENCE — show / caveat / withhold |
 | `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
 | `scaling.py` | ~180 | **two-billion, on an envelope**: memory · O(√N) · shards · latency · cascade |
 | `cascade.py` | ~170 | **approximate at every level**: binary → PQ → int8 → exact, recall kept |
@@ -184,11 +186,12 @@ module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
 `rank.js` ↔ `tagger.py`+`fusion.py`+`search.py`, `labels.js` ↔ `labels.py`,
 `agent.js` ↔ `agent.py`, `recsys.js` ↔ `user_tower.py`, `learn.js` ↔
 `learn2rank.py`, `conformal.js` ↔ `conformal.py`, `judge.js` ↔ `judge.py`,
-`trust.js` ↔ `trust.py`, `drift.js` ↔ `drift.py`, `debate.js` ↔ `debate.py`;
-`viz.js`, `motion.js`,
-and `tour.js` are page-only (the matrix, map and strips, the animation
-helpers, the guided tour), and `app.js` wires everything together. Read a
-Python file, then its twin — same pipeline, two languages.
+`trust.js` ↔ `trust.py`, `drift.js` ↔ `drift.py`, `debate.js` ↔ `debate.py`,
+`reason.js` ↔ `reason.py`; `viz.js`, `motion.js`,
+`tour.js`, and `trace.js` are page-only (the matrix, map and strips, the
+animation helpers, the guided tour, and the live agent trace), and `app.js`
+wires everything together. Read a Python file, then its twin — same pipeline,
+two languages.
 
 ## Why concatenate embeddings?
 
@@ -496,6 +499,48 @@ Python/JS twin pinned by CI; as evaluation (`--eval`) it converges the easy case
 and isolates the contested ones — what an independent average hides, the debate
 names.
 
+## The reasoning layer — trace every step, then map the consequence
+
+Every stage produces a signal and knows how to abstain, but a pile of signals
+isn't a decision. `reason.py` (`js/reason.js`) is the layer on top that **reasons
+over the whole pipeline**: it walks it in order, turns each stage's output into a
+**premise → conclusion** with a status (**ok · caution · stop**), and ends at a
+**consequence** — what to actually *do*, why, and what it costs.
+
+```
+python3 reason.py --json docs/db.json --image images/004_cat.jpg
+  ✓ 🔍 retrieve   embed the query, score all 13 candidates
+     │              └─ top match is dog at similarity 0.86
+  ✓ 🥇 rank       leads by margin +0.20
+  ✓ 🎯 conformal  clears the calibrated bar
+  ✓ ⚖️ council    relevant (consensus 66%)
+  ✓ 🗣️ debate     consensus after 3 rounds → relevant
+  ✓ 🧮 trust      trust: high (0.84)
+  ⇒ CONSEQUENCE: show it as the answer
+       because every lens agrees and the panel reached consensus
+```
+
+For `apple → pizza` the chain is legible about *where* it breaks: retrieve and
+conformal pass, but the **council abstains** (hung) and the **debate is
+contested**, so trust lands at *medium* and the consequence becomes **"show it
+with a caveat, because the council couldn't confirm it."** The **consequence
+map** is a small decision tree — *high → show · medium → caveat · low → flag ·
+abstain → withhold (and whether to ask the user or say "no confident match")* —
+so the same "rather say less" honesty that every stage carries resolves into one
+action you can act on. On the live demo, **🧠 trace the reasoning** draws the
+whole chain as a flow — every step's in and out, colored by status, ending at the
+consequence — and it **redraws live** as you convene the council and let it
+debate. The step assembly and the consequence map are a Python/JS twin pinned by
+CI; it composes the stored signals, so the entire reasoning runs model-free.
+
+And **▶ watch the agents work** *plays* it in real time: `js/trace.js` runs the
+pipeline top to bottom, each node **pending → running (pulsing) → resolved**, so
+you watch the agents get called — the council's three `SmolLM2` judges **stream
+in one at a time** as their LLM calls actually return (via an `onVote` callback
+on `councilWithLLM`). Page-only, like `viz.js`/`motion.js`/`tour.js` — there's no
+"live" in a batch script — it's the one place you see the whole stack *execute*,
+not just its result.
+
 ## Two ways to grow the corpus
 
 - **Ask** (`crawler.py`): the Commons search API returns curated, freely
@@ -706,6 +751,7 @@ lesson runs on committed data — and CI re-runs all of them on every push:
 | `python3 trust.py --json docs/db.json --image images/004_cat.jpg` | cat→dog composes to **high** trust (all four lenses agree); where the lenses split, the verdict **abstains** instead of averaging |
 | `python3 drift.py --json docs/db.json --selftest` | the detectors escalate **stable → shift → drift → drift** as a growing fraction of the stream goes off-distribution; PSI is monotone in the contamination |
 | `python3 debate.py --json docs/db.json --eval` | the panel reaches **consensus on 12/14** top hits and stays **contested on 2** (the tag-fluke cases); ≥1 agent changes its mind on 8/14 |
+| `python3 reason.py --json docs/db.json --image images/004_cat.jpg` | every step passes (retrieve→…→trust) → **high trust → "show it as the answer"**; `--image .../000_apple.jpg` breaks at the council → **"show with a caveat"** |
 | `python3 scale.py selftest` | chunked scan == naive argsort; ivf probes=8 keeps ≥7/10 of the truth scanning <½ the rows |
 
 (The numbers are pinned to the committed sample gallery; re-exporting your

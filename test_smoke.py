@@ -529,6 +529,44 @@ def test_debate():
     assert debate.EPS == 0.30 and debate.RELEVANT == 0.5
 
 
+def test_reason():
+    """reason.py: the end-to-end reasoning trace and the consequence map."""
+    import reason
+
+    # the consequence map — every branch
+    assert reason.consequence({"level": "high"}, {}, None)["action"] == "show it as the answer"
+    assert reason.consequence({"level": "high"}, {}, None)["status"] == "ok"
+    split = reason.consequence({"level": "abstain", "reason": "split decision"}, {}, None)
+    assert split["status"] == "stop" and "contested" in split["action"]
+    assert "not enough signal" in reason.consequence(
+        {"level": "abstain", "reason": "not enough signals"}, {}, None)["action"]
+    # a contested debate forces the contested branch regardless of trust's reason
+    assert "contested" in reason.consequence(
+        {"level": "abstain", "reason": "ruled"}, {}, {"consensus": False})["action"]
+    med = reason.consequence({"level": "medium"}, {"decision": "abstain"}, None)
+    assert med["status"] == "caution" and "council couldn't" in med["because"]
+    assert "weak" in reason.consequence({"level": "low"}, {"decision": "not relevant"}, None)["action"]
+
+    items = db.load_json_gallery()
+    by = lambda s: next(it for it in items if s in it["path"])
+
+    # cat → dog: every step passes → high trust → show it
+    cat = reason.trace(by("004_cat"), items)
+    assert "005_dog" in cat["result"]["path"]
+    assert len(cat["steps"]) == 6 and all(s["status"] == "ok" for s in cat["steps"])
+    assert cat["trust"]["level"] == "high" and cat["consequence"]["action"] == "show it as the answer"
+
+    # apple → pizza: retrieve/conformal ok, council + debate STOP → caveat
+    apple = reason.trace(by("000_apple"), items)
+    stat = {s["stage"]: s["status"] for s in apple["steps"]}
+    assert stat["retrieve"] == "ok" and stat["conformal"] == "ok"
+    assert stat["council"] == "stop" and stat["debate"] == "stop"
+    assert apple["trust"]["level"] == "medium"
+    assert apple["consequence"]["status"] == "caution"
+    assert apple["consequence"]["action"] == "show it with a caveat"
+    assert apple["debate"]["consensus"] is False
+
+
 def test_dcn():
     """dcn.py: W=0 reproduces retrieval order; one cross lifts tag-sharers."""
     import dcn
