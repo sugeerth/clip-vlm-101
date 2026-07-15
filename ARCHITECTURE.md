@@ -37,6 +37,8 @@ images and at 1,000,000,000 — only the *layout* changes.
         │   + a COUNCIL of LLM judges / abstain │ judge.py (judge.js twin)
         │     └ that DEBATE: consensus / factions │ debate.py (debate.js twin)
         │   ⇒ ONE composed TRUST verdict / abstain │ trust.py (trust.js twin)
+        │   ⇒ a REASONING chain → a CONSEQUENCE │ reason.py (reason.js twin):
+        │      show / caveat / withhold          │ every step in & out, to a decision
         └───────────────┬─────────────────┘
                         │  and, watching the whole thing over time:
         ┌───────────────▼─────────────────┐
@@ -219,6 +221,22 @@ convened. The honesty boundaries — gate, conformal, council — now resolve to
 single answer to *"how much should I believe this?"*, and that answer, too, would
 rather abstain than bluff.
 
+**`reason.py` is the layer that turns all of it into a decision.** A trust score
+still isn't an action. `reason.py` (`reason.js` twin) walks the whole pipeline in
+order, turns each stage's output into a **premise → conclusion** with a status
+(ok · caution · stop), and ends at a **consequence** — *show it · show with a
+caveat · withhold* — with the reason and the downstream effect. It is the one
+place the entire stack becomes legible end to end: for a clean query every step
+is ✓ and the consequence is "show it as the answer"; for a tag-fluke query the
+chain is explicit about *where* it breaks (council hung, debate contested) and
+resolves to "show with a caveat" or "withhold and ask." The live **🧠 trace the
+reasoning** button draws the chain as a flow and redraws it as the council and
+debate run. Model-free, deterministic, a twin pinned by CI — the reasoning on top
+of everything, ending in what to actually do. And **▶ watch the agents work**
+(`js/trace.js`, page-only) *plays* the pipeline live — each node pending → running
+→ resolved, the council's LLM judges streaming in one at a time as their calls
+return — the one place you watch the whole stack execute in real time.
+
 **`drift.py` closes the loop: it watches whether any of this still holds.** Every
 guarantee here assumes live queries stay *exchangeable* with the calibration
 gallery; drift is when that quietly breaks. `drift.py` (`drift.js` twin) monitors
@@ -237,8 +255,9 @@ lives or dies on, in the same distribution-free spirit as the rest.
 **Retrieve cheap over billions (two towers + ANN + PQ), rank rich over the
 surviving hundreds (DCN's query×item cross, learned live from your 👍/👎 on-device),
 then explain the result, gate the explanation so it can't lie, quote a
-coverage-guaranteed set, let a council of LLM judges rule, and compose it all
-into one trust verdict — or abstain** — the same four stages
+coverage-guaranteed set, let a council of LLM judges rule and debate, compose it
+all into one trust verdict, and reason from there to a decision — or abstain** —
+the same four stages
 Google/YouTube/Pinterest run, shrunk to 14 images you can read end to end in an
 afternoon.
 
