@@ -35,6 +35,7 @@ images and at 1,000,000,000 — only the *layout* changes.
         │   or LLM → hallucination gate   │  publish idea, on the write path)
         │   + a coverage GUARANTEE / abstain │ conformal.py (conformal.js twin)
         │   + a COUNCIL of LLM judges / abstain │ judge.py (judge.js twin)
+        │     └ that DEBATE: consensus / factions │ debate.py (debate.js twin)
         │   ⇒ ONE composed TRUST verdict / abstain │ trust.py (trust.js twin)
         └───────────────┬─────────────────┘
                         │  and, watching the whole thing over time:
@@ -186,6 +187,19 @@ average over a coin flip. `judge.py` ships a model-free heuristic judge (the CLI
 runs the mechanism on the committed gallery, like `dcn.py`'s untrained demo);
 the live page's **⚖️ council** button runs three real in-browser `SmolLM2`
 judges through the identical gate and aggregation.
+
+**`debate.py` makes those judges *talk*.** A council votes independently; real
+deliberation is agents arguing — each updating toward peers within its confidence
+bound (**bounded-confidence dynamics**, Hegselmann–Krause 2002; multi-agent
+debate as evaluator, Du et al. 2023). `debate.py` (`debate.js` twin) runs the
+council's judges as agents that either **converge to a consensus** or **split
+into factions that won't move each other** — a contested case surfaced with the
+dissenter *named*, not averaged away. It resolves the ambiguity a vote leaves on
+the table in both directions: a lone tag-fluke agent that can't be moved becomes
+a named faction, while a moderate agent can *bridge* two extremes the council
+would have hung on. The live **🗣️ let them debate** button animates the opinions
+converging or splitting across rounds; as evaluation it converges the easy cases
+and isolates the contested ones. Deterministic, model-free, a twin pinned by CI.
 
 **`trust.py` is the capstone: it composes those boundaries into ONE verdict.**
 Reading four panels to decide whether to believe a result is the user's job, so

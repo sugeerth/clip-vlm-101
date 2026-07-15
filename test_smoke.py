@@ -391,6 +391,58 @@ def test_drift():
     assert drift.PSI_DRIFT == 0.25 and drift.COV_SLACK == 0.10
 
 
+def test_debate():
+    """debate.py: bounded-confidence deliberation — converge to consensus, split
+    into factions, or bridge a would-be hung jury."""
+    import debate
+    import judge
+
+    # factions: single-linkage clusters on the line
+    assert debate.factions([0.1, 0.2, 0.9]) == [[0, 1], [2]]
+    assert len(debate.factions([0.5, 0.5, 0.5])) == 1
+
+    # a step only moves you toward peers within EPS
+    assert list(debate.step([0.2, 0.8], [1, 1])) == [0.2, 0.8]           # too far → frozen
+    assert [round(x, 4) for x in debate.step([0.4, 0.6], [1, 1])] == [0.5, 0.5]
+    # zero-weight fallback: unweighted neighborhood mean (matches the JS twin)
+    assert [round(x, 4) for x in debate.step([0.4, 0.5], [0, 0])] == [0.45, 0.45]
+
+    items = db.load_json_gallery()
+    by = lambda s: next(it for it in items if s in it["path"])
+    seat = lambda v: ([x["score"] for x in v if x["score"] is not None],
+                      [x["confidence"] for x in v if x["score"] is not None])
+
+    # the tag-fluke agent won't move → contested, dissenter named
+    o, w = seat(judge.heuristic_votes(by("000_apple"), by("010_pizza")))
+    d = debate.debate(o, w)
+    assert d["verdict"] == "abstain" and d["reason"] == "contested"
+    assert d["factions"] == [[0, 1], [2]] and d["flips"] == [0]
+
+    # cat → dog: they talk it out and converge
+    o, w = seat(judge.heuristic_votes(by("004_cat"), by("005_dog")))
+    d = debate.debate(o, w)
+    assert d["verdict"] == "relevant" and d["reason"] == "consensus" and d["rounds"] == 3
+    assert [round(x, 4) for x in d["final"]] == [0.75, 0.75, 0.75]
+
+    # the bridge: a would-be hung jury (spread 0.6) that a moderate agent
+    # deliberates into consensus — what a vote can't do
+    d = debate.debate([0.2, 0.5, 0.8], [1, 1, 1])
+    assert d["consensus"] and d["n_factions"] == 1
+    assert [round(x, 4) for x in d["final"]] == [0.5, 0.5, 0.5]
+
+    # hitting max_rounds reports rounds == max_rounds (twin off-by-one guard)
+    capped = debate.debate([0.0, 0.28, 0.56, 0.84], [1, 1, 1, 1], max_rounds=3)
+    assert capped["rounds"] == 3 and len(capped["trajectory"]) == 4
+
+    # abstained judges get no seat
+    names, ops, _ = debate.from_council([{"name": "a", "score": 0.8, "confidence": 0.9},
+                                         {"name": "b", "score": None, "confidence": 0.7},
+                                         {"name": "c", "score": 0.6, "confidence": 0.6}])
+    assert names == ["a", "c"] and len(ops) == 2
+
+    assert debate.EPS == 0.30 and debate.RELEVANT == 0.5
+
+
 def test_dcn():
     """dcn.py: W=0 reproduces retrieval order; one cross lifts tag-sharers."""
     import dcn

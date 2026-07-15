@@ -12,6 +12,7 @@ import { discover } from './crawler.js';
 import { explain, explainWithLLM } from './explain.js';
 import { councilWithLLM } from './judge.js';
 import { compose, gateTrust, conformalTrust, councilTrust, marginTrust, WEIGHTS } from './trust.js';
+import { debate, fromCouncil } from './debate.js';
 import { STRONG, MODERATE, WEAK } from './explain.js';
 import { OnlineRanker } from './learn.js';
 import { looScores, calibrate } from './conformal.js';
@@ -429,6 +430,48 @@ function renderCouncil(box, res, item) {
       + `consensus <b>${pct}%</b>`;
   }
   box.append(v);
+
+  // DELIBERATION: the judges voted independently — now let them TALK (debate.js).
+  // Bounded-confidence dynamics, deterministic, instant: no extra model calls.
+  const seat = fromCouncil(res.perJudge);
+  if (seat.opinions.length >= 2) {
+    const dbtn = Object.assign(document.createElement('button'),
+      { type: 'button', className: 'llm-btn', textContent: '🗣️ let them debate' });
+    const dbox = document.createElement('div'); dbox.className = 'debate hidden';
+    dbtn.addEventListener('click', () => {
+      dbtn.disabled = true; dbox.classList.remove('hidden'); renderDebate(dbox, seat);
+    });
+    box.append(dbtn, dbox);
+  }
+}
+
+// Render a multi-agent debate: each seated judge is a line; watch them converge
+// to one consensus or split into factions across the rounds (debate.js).
+const AGENT_COLORS = ['#2a78d6', '#c0392b', '#2a8a4a', '#8e44ad', '#b06a1a'];
+function renderDebate(box, seat) {
+  const d = debate(seat.opinions, seat.weights);
+  const R = d.trajectory.length - 1, W = 260, H = 96, PAD = 22;
+  const x = r => PAD + (R ? r / R : 0) * (W - 2 * PAD);
+  const y = o => H - PAD - o * (H - 2 * PAD);
+  const lines = seat.names.map((name, i) => {
+    const pts = d.trajectory.map((pos, r) => `${x(r).toFixed(1)},${y(pos[i]).toFixed(1)}`).join(' ');
+    const c = AGENT_COLORS[i % AGENT_COLORS.length];
+    return `<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="2"/>`
+      + `<circle cx="${x(R).toFixed(1)}" cy="${y(d.final[i]).toFixed(1)}" r="2.6" fill="${c}"/>`;
+  }).join('');
+  const mid = y(0.5).toFixed(1);
+  const svg = `<svg viewBox="0 0 ${W} ${H}" class="dtraj">`
+    + `<line x1="${PAD}" y1="${mid}" x2="${W - PAD}" y2="${mid}" class="half"/>${lines}</svg>`;
+  const legend = seat.names.map((n, i) =>
+    `<span class="ag"><i style="background:${AGENT_COLORS[i % AGENT_COLORS.length]}"></i>${n}</span>`).join('');
+  const camps = d.factions.map(g => '{' + g.map(i => seat.names[i]).join(', ') + '}').join(' vs ');
+  const flipped = d.flips.length ? ` · ${d.flips.map(i => seat.names[i]).join(', ')} changed their mind` : '';
+  const summary = d.consensus
+    ? `🤝 <b>consensus</b> after ${d.rounds} round${d.rounds > 1 ? 's' : ''} — they talked it out to <b>${d.score.toFixed(2)}</b> (${d.verdict})${flipped}`
+    : `⚔️ <b>contested</b> after ${d.rounds} round${d.rounds > 1 ? 's' : ''} — the panel split: ${camps}. Deliberation couldn't move them${flipped}`;
+  box.innerHTML = `<div class="dhead">🗣️ the judges debate — each moves only toward peers within reach</div>`
+    + svg + `<div class="dlegend">${legend}</div>`
+    + `<div class="dsum ${d.consensus ? 'ok' : 'no'}">${summary}</div>`;
 }
 
 let lastRanked = [], explainGen = 0, trustLine = null;

@@ -24,6 +24,7 @@ jobs:
       - run: node docs/js/test_judge.mjs    # council of LLM judges: gate + quorum + hung-jury, pinned to judge.py
       - run: node docs/js/test_trust.mjs    # the trust composer: agreement + split-decision abstain, pinned to trust.py
       - run: node docs/js/test_drift.mjs    # drift detectors: PSI/KS/coverage stream verdicts, pinned to drift.py
+      - run: node docs/js/test_debate.mjs   # multi-agent debate: bounded-confidence consensus/factions, pinned to debate.py
       # the model-free CLI demos must keep running on the committed gallery
       - run: python temperature.py
       - run: python similarity.py --json docs/db.json
@@ -37,6 +38,7 @@ jobs:
       - run: python judge.py --json docs/db.json --image images/004_cat.jpg  # council of judges, model-free
       - run: python trust.py --json docs/db.json --image images/004_cat.jpg  # compose the honesty lenses into one verdict
       - run: python drift.py --json docs/db.json --selftest  # drift detectors fire in order on a simulated stream
+      - run: python debate.py --json docs/db.json --eval      # multi-agent debate as evaluation, model-free
       - run: python scale.py selftest       # the million-row machinery, synthetic + model-free
       - run: python pq.py selftest          # product quantization: the browser index's math
       - run: node docs/js/test_pq.mjs       # …and its JS twin agrees, lookup for lookup

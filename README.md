@@ -72,6 +72,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python judge.py --json docs/db.json --image images/004_cat.jpg  # a council of judges rules
 .venv/bin/python trust.py --json docs/db.json --image images/004_cat.jpg  # compose every lens → one trust verdict
 .venv/bin/python drift.py --json docs/db.json   # watch a stream drift: stable → shift → DRIFT
+.venv/bin/python debate.py --json docs/db.json --image images/000_apple.jpg  # watch the agents argue
+.venv/bin/python debate.py --json docs/db.json --eval   # multi-agent debate as evaluation
 .venv/bin/python crawler.py "red panda" -n 6 # grow the gallery, with receipts
 .venv/bin/python spider.py https://example.com/gallery  # or crawl any site
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
@@ -151,6 +153,7 @@ Suggested reading order:
 | `judge.py` | ~200 | **a council of LLM judges**: several rubrics score each result, a gate parses every score, and the council rules — or abstains on a hung jury |
 | `trust.py` | ~200 | **the capstone**: composes all four honesty lenses (gate · conformal · council · margin) into ONE trust verdict — or abstains when they disagree |
 | `drift.py` | ~230 | **the monitor**: PSI + KS + conformal-coverage drift detection on a stream — stable / shift / DRIFT, with the failure cases to inspect and a scheduled CI gate |
+| `debate.py` | ~180 | **multiple agents that talk**: the council's judges DEBATE via bounded-confidence dynamics — converge to consensus or split into named factions (contested) |
 | `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
 | `spider.py` | ~170 | **the web crawler**: BFS any site for images — robots.txt, pacing, caps |
@@ -179,7 +182,8 @@ module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
 `rank.js` ↔ `tagger.py`+`fusion.py`+`search.py`, `labels.js` ↔ `labels.py`,
 `agent.js` ↔ `agent.py`, `recsys.js` ↔ `user_tower.py`, `learn.js` ↔
 `learn2rank.py`, `conformal.js` ↔ `conformal.py`, `judge.js` ↔ `judge.py`,
-`trust.js` ↔ `trust.py`, `drift.js` ↔ `drift.py`; `viz.js`, `motion.js`,
+`trust.js` ↔ `trust.py`, `drift.js` ↔ `drift.py`, `debate.js` ↔ `debate.py`;
+`viz.js`, `motion.js`,
 and `tour.js` are page-only (the matrix, map and strips, the animation
 helpers, the guided tour), and `app.js` wires everything together. Read a
 Python file, then its twin — same pipeline, two languages.
@@ -452,6 +456,44 @@ run if the live data has drifted** (`python3 drift.py --gate`) — so re-exporti
 silently shipping. The detector math is a Python/JS twin, pinned byte-for-byte by
 CI.
 
+## Multiple agents that talk — deliberation, not just a vote
+
+The council polls its judges **independently** and averages them. Real
+deliberation is agents **arguing**: each hears the others and updates its
+position — but only toward peers it finds credible. `debate.py` (`js/debate.js`)
+runs that as **bounded-confidence opinion dynamics**
+([Hegselmann–Krause, 2002](https://www.jasss.org/5/3/2.html); the
+multi-agent-debate-as-evaluator idea is [Du et al. 2023](https://arxiv.org/abs/2305.14325)),
+and it does something a vote can't:
+
+- **round** — each agent moves to the confidence-weighted mean of every agent
+  within `EPS` of its current opinion (itself included). Talk sways you only when
+  it's already close enough to hear.
+- **converge** — repeat until nobody moves, or `MAX_ROUNDS`.
+- **rule** — **one faction → consensus** (verdict = the shared opinion); **many
+  factions → contested** — they deliberated and still disagree, so it abstains
+  and **names who's in which camp**.
+
+```bash
+python3 debate.py --json docs/db.json --image images/004_cat.jpg
+#   round 0:  relev 0.84  speci 0.80  faith 0.50
+#   round 1:  relev 0.82  speci 0.73  faith 0.66     ← faithfulness gets talked upward
+#   round 2:  relev 0.75  speci 0.75  faith 0.75
+#   → relevant (consensus) after 3 rounds; factions: {relevance, specificity, faithfulness}
+```
+
+For `apple → pizza`, the faithfulness agent (which scored 1.0 on a shared-`apple`
+tag fluke) sits outside everyone's confidence bound — it **won't move and can't
+be moved**, so the panel splits `{relevance, specificity} | {faithfulness}` and
+the debate reports **contested**, dissenter named. And it can do the opposite of
+a hung jury: give it `[0.2, 0.5, 0.8]` — which the council would hang on (spread
+0.6) — and the moderate agent **bridges** the extremes into a single consensus.
+On the live demo, **🗣️ let them debate** under the council verdict animates the
+agents' opinions converging or splitting across rounds. Deterministic dynamics, a
+Python/JS twin pinned by CI; as evaluation (`--eval`) it converges the easy cases
+and isolates the contested ones — what an independent average hides, the debate
+names.
+
 ## Two ways to grow the corpus
 
 - **Ask** (`crawler.py`): the Commons search API returns curated, freely
@@ -661,6 +703,7 @@ lesson runs on committed data — and CI re-runs all of them on every push:
 | `python3 judge.py --json docs/db.json --image images/004_cat.jpg` | the council rules **relevant** for cat→dog, **not relevant** for cat→bicycle, and **hung jury** where a shared tag and the vision signal disagree |
 | `python3 trust.py --json docs/db.json --image images/004_cat.jpg` | cat→dog composes to **high** trust (all four lenses agree); where the lenses split, the verdict **abstains** instead of averaging |
 | `python3 drift.py --json docs/db.json --selftest` | the detectors escalate **stable → shift → drift → drift** as a growing fraction of the stream goes off-distribution; PSI is monotone in the contamination |
+| `python3 debate.py --json docs/db.json --eval` | the panel reaches **consensus on 12/14** top hits and stays **contested on 2** (the tag-fluke cases); ≥1 agent changes its mind on 8/14 |
 | `python3 scale.py selftest` | chunked scan == naive argsort; ivf probes=8 keeps ≥7/10 of the truth scanning <½ the rows |
 
 (The numbers are pinned to the committed sample gallery; re-exporting your
