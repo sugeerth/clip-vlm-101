@@ -166,6 +166,38 @@ def test_ann():
     assert r8 > 0.9 and r8 > r1 and s8 > s1  # probes: more truth, more work
 
 
+def test_scaling():
+    """scaling.py: the billion-scale arithmetic is internally consistent."""
+    import scaling
+
+    # memory scales linearly and PQ-64 is 32x smaller than float32
+    assert scaling.memory(1_000, "float32") == 1_000 * 512 * 4
+    assert scaling.memory(1_000, "float32") == 32 * scaling.memory(1_000, "PQ-64")
+    assert scaling.memory(2_000, "int8") == 2 * scaling.memory(1_000, "int8")
+    # a billion in PQ-64 is ~64 GB (fits a handful of boxes), not ~2 TB
+    assert scaling.memory(int(1e9), "PQ-64") == int(1e9) * 64
+
+    # IVF is sublinear: candidates scanned grow like sqrt(N), not N
+    small = scaling.ivf_plan(1_000_000, nprobe=32)
+    big = scaling.ivf_plan(1_000_000_000, nprobe=32)   # 1000x the corpus
+    assert big["nlist"] == round(1e9 ** 0.5)
+    # 1000x more data scans only ~sqrt(1000) ≈ 32x more candidates
+    ratio = big["candidates_scanned"] / small["candidates_scanned"]
+    assert 25 < ratio < 40
+    assert big["fraction_scanned"] < 0.005          # under half a percent of a billion
+
+    # sharding: a billion is exactly 1000 of the measured million
+    sh = scaling.shard_plan(int(1e9), int(1e6))
+    assert sh["shards"] == 1000 and sh["per_shard"] == 1_000_000
+
+    # latency budget: parallel shards, interactive total, fan-out only when sharded
+    budget, total = scaling.latency_budget(sharded=True)
+    assert total == sum(ms for _, ms in budget)
+    assert 10 < total < 60                            # tens of ms, at a billion
+    _, solo = scaling.latency_budget(sharded=False)
+    assert solo < total                               # no scatter/gather when not sharded
+
+
 def test_softmax():
     from temperature import softmax
     scores = [0.3, 0.2, 0.1]
