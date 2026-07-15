@@ -243,6 +243,20 @@ body.searched .chips { margin: 12px 0 0; }
 .council .verdict.no { color: var(--ink-2); }
 .council .verdict.abstain { color: var(--bad); }
 .council .verdict b { font-weight: 600; }
+
+/* the multi-agent debate: each judge is a line converging or splitting over rounds */
+.council .debate { margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--hairline); }
+.council .debate.hidden { display: none; }
+.council .dhead { font-size: 0.76rem; color: var(--muted); margin-bottom: 4px; }
+.council .dtraj { width: 100%; max-width: 300px; height: auto; display: block; }
+.council .dtraj .half { stroke: var(--hairline); stroke-width: 1; stroke-dasharray: 3 3; }
+.council .dlegend { display: flex; gap: 12px; flex-wrap: wrap; margin: 2px 0 6px; font-size: 0.72rem; color: var(--ink-2); }
+.council .dlegend .ag { display: inline-flex; align-items: center; gap: 4px; text-transform: capitalize; }
+.council .dlegend .ag i { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
+.council .dsum { font-size: 0.8rem; }
+.council .dsum.ok { color: var(--accent-ink); }
+.council .dsum.no { color: var(--bad); }
+.council .dsum b { font-weight: 600; }
 .council .verdict .meter { display: inline-block; width: 66px; height: 7px; border-radius: 4px;
   background: var(--hairline); overflow: hidden; }
 .council .verdict .meter i { display: block; height: 100%; background: var(--accent);
