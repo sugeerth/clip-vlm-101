@@ -157,7 +157,8 @@ Suggested reading order:
 | `debate.py` | ~180 | **multiple agents that talk**: the council's judges DEBATE via bounded-confidence dynamics — converge to consensus or split into named factions (contested) |
 | `reason.py` | ~200 | **the reasoning layer**: traces the whole pipeline into one legible chain (each step premise→conclusion→status) and maps it to a CONSEQUENCE — show / caveat / withhold |
 | `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
-| `scaling.py` | ~140 | **billion-scale, on an envelope**: memory · O(√N) · shards · latency |
+| `scaling.py` | ~180 | **two-billion, on an envelope**: memory · O(√N) · shards · latency · cascade |
+| `cascade.py` | ~170 | **approximate at every level**: binary → PQ → int8 → exact, recall kept |
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
 | `spider.py` | ~170 | **the web crawler**: BFS any site for images — robots.txt, pacing, caps |
 | `scale.py` | ~620 | **one million rows**: records in SQLite, scans in packed f16 memmaps — ivf + int8 + RAM serving at industrial size |

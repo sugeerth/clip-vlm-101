@@ -40,7 +40,8 @@ jobs:
       - run: python trust.py --json docs/db.json --image images/004_cat.jpg  # compose the honesty lenses into one verdict
       - run: python drift.py --json docs/db.json --selftest  # drift detectors fire in order on a simulated stream
       - run: python debate.py --json docs/db.json --eval      # multi-agent debate as evaluation, model-free
-      - run: python scaling.py             # the billion-row back-of-envelope, pure arithmetic
+      - run: python scaling.py             # the two-billion back-of-envelope, pure arithmetic
+      - run: python cascade.py             # the approximation cascade: recall retained at every level
       - run: python reason.py --json docs/db.json --image images/004_cat.jpg  # end-to-end reasoning trace → consequence
       - run: python scale.py selftest       # the million-row machinery, synthetic + model-free
       - run: python pq.py selftest          # product quantization: the browser index's math
