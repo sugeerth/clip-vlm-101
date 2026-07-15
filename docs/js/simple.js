@@ -13,6 +13,8 @@ import { explain, explainWithLLM } from './explain.js';
 import { councilWithLLM } from './judge.js';
 import { compose, gateTrust, conformalTrust, councilTrust, marginTrust, WEIGHTS } from './trust.js';
 import { debate, fromCouncil } from './debate.js';
+import { consequence } from './reason.js';
+import { runAgentTrace, judgeRows } from './trace.js';
 import { STRONG, MODERATE, WEAK } from './explain.js';
 import { OnlineRanker } from './learn.js';
 import { looScores, calibrate } from './conformal.js';
@@ -375,6 +377,7 @@ function mountCouncil(wrap, query) {
     if (gen !== explainGen || !cbox.isConnected) return;   // superseded by a newer search
     renderCouncil(cbox, res, top.item);
     renderTrust(res);                  // fold the council's verdict into the trust capstone
+    lastCouncil = res; renderReason();  // and into the reasoning chain, if it's open
   });
   wrap.replaceChildren(cbtn, cbox);
 }
@@ -450,6 +453,7 @@ function renderCouncil(box, res, item) {
 const AGENT_COLORS = ['#2a78d6', '#c0392b', '#2a8a4a', '#8e44ad', '#b06a1a'];
 function renderDebate(box, seat) {
   const d = debate(seat.opinions, seat.weights);
+  lastDebate = { d, names: seat.names }; renderReason();   // feed the reasoning chain, if it's open
   const R = d.trajectory.length - 1, W = 260, H = 96, PAD = 22;
   const x = r => PAD + (R ? r / R : 0) * (W - 2 * PAD);
   const y = o => H - PAD - o * (H - 2 * PAD);
@@ -475,21 +479,151 @@ function renderDebate(box, seat) {
 }
 
 let lastRanked = [], explainGen = 0, trustLine = null;
+let lastCouncil = null, lastDebate = null, reasonBox = null;
 function renderExplain(query, ranked) {
   explainGen++;                        // invalidate any in-flight LLM explanation / council
   lastRanked = ranked;
+  lastCouncil = null; lastDebate = null; reasonBox = null;
   const el = $('explain');
   el.classList.remove('hidden');
   // the CAPSTONE first: one trust verdict composed from every honesty lens,
-  // then two independent sub-panels (the explanation body, the council) that
-  // each re-paint on their OWN button without touching the other.
+  // then independent sub-panels (explanation body, council, and the reasoning
+  // chain) that each re-paint on their OWN button without touching the others.
   trustLine = document.createElement('div'); trustLine.className = 'trust';
   const body = document.createElement('div'); body.className = 'ebody';
   const cwrap = document.createElement('div'); cwrap.className = 'cwrap';
-  el.replaceChildren(trustLine, body, cwrap);
+  const rwrap = document.createElement('div'); rwrap.className = 'rwrap';
+  el.replaceChildren(trustLine, body, cwrap, rwrap);
   renderTrust(null);                   // gate + conformal + margin now; council abstains until convened
   paintExplain(body, explain(query, ranked), query);
   mountCouncil(cwrap, query);
+  mountReason(rwrap);
+}
+
+// The REASONING LAYER (reason.js): trace the whole pipeline for the top result
+// into one chain — every step's premise → conclusion → status — and end at the
+// CONSEQUENCE (show / caveat / withhold). Wraps everything; re-draws live as the
+// council and debate run. It reads module state, so it always reflects "now".
+function mountReason(wrap) {
+  const rbtn = Object.assign(document.createElement('button'),
+    { type: 'button', className: 'llm-btn', textContent: '🧠 trace the reasoning' });
+  reasonBox = document.createElement('div'); reasonBox.className = 'reason hidden';
+  rbtn.addEventListener('click', () => { reasonBox.classList.remove('hidden'); renderReason(); });
+  // …and the LIVE version: watch each agent get called, in real time (trace.js).
+  const tbtn = Object.assign(document.createElement('button'),
+    { type: 'button', className: 'llm-btn', textContent: '▶ watch the agents work' });
+  const tbox = document.createElement('div'); tbox.className = 'atrace hidden';
+  tbtn.addEventListener('click', () => {
+    tbtn.disabled = true; tbox.classList.remove('hidden'); runLiveTrace(tbox).finally(() => { tbtn.disabled = false; });
+  });
+  wrap.replaceChildren(rbtn, tbtn, reasonBox, tbox);
+}
+
+// Play the whole pipeline live: each stage runs in turn and its node resolves;
+// the council's LLM judges stream in one at a time as their calls return. Feeds
+// the same module state (lastCouncil/lastDebate) so the static panels agree.
+async function runLiveTrace(box) {
+  const top = lastRanked[0];
+  if (!top || !candCtx) { box.textContent = 'run a text search first.'; return; }
+  const gen = explainGen;
+  const c = candCtx.cand.find(x => x.item === top.item);
+  const cos = top.score, cosImg = c ? c.cos_image : -1;
+  const scores = lastRanked.map(r => r.score);
+  const margin = scores.length > 1 ? cos - scores.slice(1).reduce((a, b) => a + b, 0) / (scores.length - 1) : 0;
+  const words = (candCtx.query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const tags = top.item.tags || [];
+  const ev = { tags, topScore: cos, shared: tags.filter(t => words.some(w => t.includes(w) || w.includes(t))) };
+  let council = null, deb = null;
+  const steps = [
+    { icon: '🔍', label: 'retrieve', run: async () =>
+      ({ status: cos >= MODERATE ? 'ok' : 'caution', detail: `top “${tags.slice(0, 2).join(', ')}” · cos ${cos.toFixed(2)}` }) },
+    { icon: '🥇', label: 'rank', run: async () =>
+      ({ status: margin >= 0.02 ? 'ok' : 'caution', detail: margin >= 0.02 ? `leads by ${margin.toFixed(2)}` : `near-tie (${margin.toFixed(2)})` }) },
+    { icon: '🎯', label: 'conformal', run: async () =>
+      ({ status: cosImg >= TAU80 - 1e-9 ? 'ok' : 'stop', detail: cosImg >= TAU80 - 1e-9 ? `clears cos ≥ ${TAU80.toFixed(2)}` : `below ${TAU80.toFixed(2)} — abstains` }) },
+    { icon: '⚖️', label: 'council', run: async (setSub) => {
+      const votes = [];
+      council = await councilWithLLM(candCtx.query, ev, () => {}, v => { votes.push(v); setSub(judgeRows(votes)); });
+      lastCouncil = council;
+      return { status: council.decision === 'relevant' ? 'ok' : council.decision === 'abstain' ? 'stop' : 'caution',
+        detail: council.decision + (council.consensus != null ? ` · consensus ${Math.round(council.consensus * 100)}%` : ' — hung jury') };
+    } },
+    { icon: '🗣️', label: 'debate', run: async () => {
+      const seat = fromCouncil(council.perJudge);
+      if (seat.opinions.length < 2) return { status: 'caution', detail: 'too few judges to debate' };
+      deb = debate(seat.opinions, seat.weights); lastDebate = { d: deb, names: seat.names };
+      return { status: deb.consensus ? 'ok' : 'stop',
+        detail: deb.consensus ? `consensus in ${deb.rounds} rounds → ${deb.verdict}` : 'contested — split into factions' };
+    } },
+    { icon: '🧮', label: 'trust', run: async () => {
+      const tr = liveTrust(council).v;
+      return { status: tr.level === 'high' ? 'ok' : tr.level === 'abstain' ? 'stop' : 'caution',
+        detail: `trust: ${tr.level}` + (tr.score != null ? ` (${tr.score.toFixed(2)})` : '') };
+    } },
+    { icon: '🧠', label: 'reason', run: async () => {
+      const tr = liveTrust(council).v;
+      const councilArg = council || { decision: tr.level === 'high' ? 'relevant' : 'abstain' };
+      const cons = consequence(tr, councilArg, deb);
+      return { status: cons.status, detail: cons.action, consequence: cons };
+    } },
+  ];
+  await runAgentTrace(box, steps, { alive: () => gen === explainGen && box.isConnected });
+  if (gen === explainGen) { renderTrust(lastCouncil); renderReason(); }  // sync the static panels
+}
+
+const R_MARK = { ok: '✓', caution: '⚠', stop: '✗' };
+function liveReasonSteps() {
+  const top = lastRanked[0];
+  if (!top || !candCtx) return null;
+  const c = candCtx.cand.find(x => x.item === top.item);
+  const cosImg = c ? c.cos_image : -1, cos = top.score;
+  const scores = lastRanked.map(r => r.score);
+  const margin = scores.length > 1 ? cos - scores.slice(1).reduce((a, b) => a + b, 0) / (scores.length - 1) : 0;
+  const t = liveTrust(lastCouncil); if (!t) return null;
+  const tr = t.v;
+  const stt = (ok, stop = false) => stop ? 'stop' : (ok ? 'ok' : 'caution');
+  const steps = [
+    { stage: 'retrieve', icon: '🔍', premise: `embed “${candCtx.query}”, score every image`,
+      conclusion: `top match “${(top.item.tags || []).slice(0, 2).join(', ')}” at cos ${cos.toFixed(2)}`, status: stt(cos >= MODERATE) },
+    { stage: 'rank', icon: '🥇', premise: 'does #1 separate from the pack?',
+      conclusion: margin >= 0.02 ? `leads by ${margin.toFixed(2)}` : `a near-tie (${margin.toFixed(2)})`, status: stt(margin >= 0.02) },
+    { stage: 'conformal', icon: '🎯', premise: `inside the 80% set (cos ≥ ${TAU80.toFixed(2)})?`,
+      conclusion: cosImg >= TAU80 - 1e-9 ? 'clears the calibrated bar' : 'below the bar — conformal abstains',
+      status: stt(cosImg >= TAU80 - 1e-9, cosImg < TAU80 - 1e-9) },
+  ];
+  if (lastCouncil)
+    steps.push({ stage: 'council', icon: '⚖️', premise: `${lastCouncil.nValid} LLM judges score it`,
+      conclusion: lastCouncil.decision + (lastCouncil.consensus != null ? ` (consensus ${Math.round(lastCouncil.consensus * 100)}%)` : ' — hung jury'),
+      status: stt(lastCouncil.decision === 'relevant', lastCouncil.decision === 'abstain') });
+  else
+    steps.push({ stage: 'council', icon: '⚖️', premise: 'a council of LLM judges', conclusion: 'not convened yet — convene it above', status: 'caution' });
+  if (lastDebate)
+    steps.push({ stage: 'debate', icon: '🗣️', premise: 'the judges argue toward peers they can hear',
+      conclusion: lastDebate.d.consensus ? `consensus in ${lastDebate.d.rounds} rounds → ${lastDebate.d.verdict}`
+        : `contested: ${lastDebate.d.factions.map(g => '{' + g.map(i => lastDebate.names[i]).join(', ') + '}').join(' vs ')}`,
+      status: stt(lastDebate.d.consensus, !lastDebate.d.consensus) });
+  steps.push({ stage: 'trust', icon: '🧮', premise: `compose the ${tr.nValid}/${tr.nTotal} lenses that voted`,
+    conclusion: `trust: ${tr.level}` + (tr.score != null ? ` (${tr.score.toFixed(2)})` : ''),
+    status: stt(tr.level === 'high', tr.level === 'abstain') });
+  const councilArg = lastCouncil || { decision: tr.level === 'high' ? 'relevant' : tr.level === 'abstain' ? 'abstain' : 'not relevant' };
+  return { steps, consequence: consequence(tr, councilArg, lastDebate && lastDebate.d) };
+}
+
+function renderReason() {
+  if (!reasonBox || reasonBox.classList.contains('hidden')) return;
+  const r = liveReasonSteps();
+  if (!r) { reasonBox.textContent = 'run a text search first.'; return; }
+  const rows = r.steps.map((s, i) => {
+    const conn = i < r.steps.length - 1 ? '<span class="conn"></span>' : '';
+    return `<div class="rstep ${s.status}"><span class="rmark">${R_MARK[s.status]}</span>`
+      + `<span class="ricon">${s.icon}</span><span class="rstage">${s.stage}</span>`
+      + `<span class="rtext"><b>${s.premise}</b> → ${s.conclusion}</span>${conn}</div>`;
+  }).join('');
+  const c = r.consequence;
+  reasonBox.innerHTML = `<div class="rhead">🧠 reasoning — every step, in and out, to a decision</div>`
+    + `<div class="rchain">${rows}</div>`
+    + `<div class="rconseq ${c.status}"><b>⇒ ${c.action}</b>`
+    + `<span class="rwhy">because ${c.because} · so ${c.effect}</span></div>`;
 }
 
 // trust.js: compose the four honesty lenses on the top result into ONE verdict.

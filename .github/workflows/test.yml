@@ -25,6 +25,7 @@ jobs:
       - run: node docs/js/test_trust.mjs    # the trust composer: agreement + split-decision abstain, pinned to trust.py
       - run: node docs/js/test_drift.mjs    # drift detectors: PSI/KS/coverage stream verdicts, pinned to drift.py
       - run: node docs/js/test_debate.mjs   # multi-agent debate: bounded-confidence consensus/factions, pinned to debate.py
+      - run: node docs/js/test_reason.mjs   # the reasoning layer: end-to-end trace + consequence map, pinned to reason.py
       # the model-free CLI demos must keep running on the committed gallery
       - run: python temperature.py
       - run: python similarity.py --json docs/db.json
@@ -40,6 +41,7 @@ jobs:
       - run: python drift.py --json docs/db.json --selftest  # drift detectors fire in order on a simulated stream
       - run: python debate.py --json docs/db.json --eval      # multi-agent debate as evaluation, model-free
       - run: python scaling.py             # the billion-row back-of-envelope, pure arithmetic
+      - run: python reason.py --json docs/db.json --image images/004_cat.jpg  # end-to-end reasoning trace → consequence
       - run: python scale.py selftest       # the million-row machinery, synthetic + model-free
       - run: python pq.py selftest          # product quantization: the browser index's math
       - run: node docs/js/test_pq.mjs       # …and its JS twin agrees, lookup for lookup

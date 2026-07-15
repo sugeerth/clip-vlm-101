@@ -200,6 +200,71 @@ body.searched .chips { margin: 12px 0 0; }
 .explain .trust .lens.out { color: var(--muted); border-color: var(--hairline); border-style: dashed; }
 
 .explain .cwrap { margin-top: 8px; }
+.explain .rwrap { margin-top: 8px; }
+
+/* the reasoning layer: the whole pipeline as one legible chain → a consequence */
+.explain .reason { margin-top: 10px; }
+.explain .reason.hidden { display: none; }
+.explain .reason .rhead { font-size: 0.76rem; color: var(--muted); margin-bottom: 8px; }
+.explain .reason .rstep { position: relative; display: flex; align-items: baseline; gap: 8px;
+  padding: 5px 0 5px 2px; font-size: 0.82rem; }
+.explain .reason .rmark { width: 14px; font-weight: 700; flex: none; text-align: center; }
+.explain .reason .ricon { flex: none; }
+.explain .reason .rstage { width: 72px; flex: none; color: var(--ink-2); text-transform: capitalize; font-size: 0.78rem; }
+.explain .reason .rtext { color: var(--ink); }
+.explain .reason .rtext b { font-weight: 500; color: var(--ink-2); }
+.explain .reason .rstep.ok .rmark { color: var(--accent); }
+.explain .reason .rstep.caution .rmark { color: #b06a1a; }
+.explain .reason .rstep.stop .rmark { color: var(--bad); }
+/* the connector line down the chain */
+.explain .reason .rstep .conn { position: absolute; left: 8px; top: 26px; bottom: -4px; width: 1px; background: var(--hairline); }
+.explain .reason .rconseq { margin-top: 10px; padding: 8px 11px; border-radius: 9px;
+  border: 1px solid var(--hairline); font-size: 0.84rem; display: flex; flex-direction: column; gap: 2px; }
+.explain .reason .rconseq b { font-weight: 600; }
+.explain .reason .rconseq .rwhy { font-size: 0.76rem; color: var(--muted); }
+.explain .reason .rconseq.ok { border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline)); color: var(--accent-ink); }
+.explain .reason .rconseq.caution { border-color: color-mix(in srgb, #b06a1a 45%, var(--hairline)); color: #b06a1a; }
+.explain .reason .rconseq.stop { border-color: color-mix(in srgb, var(--bad) 50%, var(--hairline)); color: var(--bad); }
+
+/* the LIVE agent trace: nodes light up as each agent is called, in real time */
+.explain .atrace { margin-top: 10px; }
+.explain .atrace.hidden { display: none; }
+.explain .atrace .tnode { display: flex; align-items: baseline; gap: 9px; padding: 6px 2px; font-size: 0.83rem;
+  border-left: 2px solid var(--hairline); margin-left: 4px; padding-left: 12px; position: relative;
+  transition: opacity 0.3s ease; }
+.explain .atrace .tnode .tdot { position: absolute; left: -8px; top: 8px; width: 13px; height: 13px; border-radius: 50%;
+  background: var(--surface); border: 2px solid var(--hairline); font-size: 9px; line-height: 9px; text-align: center; color: #fff; }
+.explain .atrace .tnode .ticon { flex: none; }
+.explain .atrace .tnode .tstage { width: 72px; flex: none; color: var(--ink-2); text-transform: capitalize; font-size: 0.78rem; }
+.explain .atrace .tnode .tdetail { color: var(--ink); }
+.explain .atrace .tnode.pending { opacity: 0.45; }
+.explain .atrace .tnode.pending .tdetail { color: var(--muted); }
+.explain .atrace .tnode.running { border-left-color: var(--accent); }
+.explain .atrace .tnode.running .tdot { border-color: var(--accent); background: var(--accent);
+  animation: tpulse 1s ease-in-out infinite; }
+.explain .atrace .tnode.running .tdetail { color: var(--accent-ink); }
+.explain .atrace .tnode.ok { border-left-color: var(--accent); }
+.explain .atrace .tnode.ok .tdot { background: var(--accent); border-color: var(--accent); }
+.explain .atrace .tnode.caution { border-left-color: #b06a1a; }
+.explain .atrace .tnode.caution .tdot { background: #b06a1a; border-color: #b06a1a; }
+.explain .atrace .tnode.stop { border-left-color: var(--bad); }
+.explain .atrace .tnode.stop .tdot { background: var(--bad); border-color: var(--bad); }
+@keyframes tpulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent); } }
+/* the streamed judges under the council node */
+.explain .atrace .tsub { flex-basis: 100%; margin: 4px 0 0 0; display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.explain .atrace .tjudge { display: inline-flex; align-items: center; gap: 5px; font-size: 0.75rem; }
+.explain .atrace .tjudge .tjn { color: var(--ink-2); text-transform: capitalize; }
+.explain .atrace .tjudge .tjs { font-variant-numeric: tabular-nums; }
+.explain .atrace .tjudge.in span:first-child { color: var(--accent); }
+.explain .atrace .tjudge.out { color: var(--bad); }
+.explain .atrace .tconseq { margin-top: 10px; padding: 8px 11px; border-radius: 9px; border: 1px solid var(--hairline);
+  font-size: 0.84rem; display: flex; flex-direction: column; gap: 2px; }
+.explain .atrace .tconseq b { font-weight: 600; }
+.explain .atrace .tconseq .twhy { font-size: 0.76rem; color: var(--muted); }
+.explain .atrace .tconseq.ok { border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline)); color: var(--accent-ink); }
+.explain .atrace .tconseq.caution { border-color: color-mix(in srgb, #b06a1a 45%, var(--hairline)); color: #b06a1a; }
+.explain .atrace .tconseq.stop { border-color: color-mix(in srgb, var(--bad) 50%, var(--hairline)); color: var(--bad); }
 
 /* the council of LLM judges: each judge's GATE (raw → ✓/⊘), then a score bar,
    then the aggregate verdict + a consensus meter */

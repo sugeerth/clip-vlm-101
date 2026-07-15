@@ -112,7 +112,9 @@ export const council = (queryItem, resultItem) => aggregate(heuristicVotes(query
 // aggregate(). Lazy-loads transformers.js; WebGPU if present, else WASM. On any
 // failure a judge abstains, so the council degrades gracefully to a quorum.
 let genP = null;
-export async function councilWithLLM(query, ev, onStatus = () => {}) {
+// onVote (optional) fires with each judge's gated vote the moment its LLM call
+// resolves — so a live trace can stream the judges in one at a time.
+export async function councilWithLLM(query, ev, onStatus = () => {}, onVote = () => {}) {
   const facts = `query: "${query}"\nresult tags: ${(ev.tags || []).join(', ') || 'none'}\n`
     + `shared with query: ${(ev.shared || []).join(', ') || 'none'}\n`
     + `retrieval similarity: ${(ev.topScore ?? 0).toFixed(2)}`;
@@ -144,6 +146,7 @@ export async function councilWithLLM(query, ev, onStatus = () => {}) {
     } catch (err) { console.error(`judge ${r.name}:`, err); }
     votes.push({ name: r.name, score: parseScore(raw), confidence: r.confidence,
       rationale: raw ? `said "${String(raw).trim().slice(0, 24)}"` : 'no answer' });
+    onVote(votes[votes.length - 1]);   // stream this judge to a live trace
   }
   return { ...aggregate(votes), source: 'llm (gated)' };
 }
