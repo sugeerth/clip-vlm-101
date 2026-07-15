@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLIP VLM 101 — how it scales to a billion</title>
+<meta name="description" content="A system-design walkthrough: how a 14-image demo becomes a billion-image visual search — two towers, an O(√N) index, product quantization, sharding, an honest latency budget, and an agent layer that rides on top for free.">
+<meta property="og:type" content="article">
+<meta property="og:title" content="CLIP VLM 101 — how it scales to a billion">
+<meta property="og:description" content="Two towers, an O(√N) index, 64 bytes a vector, 1,000 shards of a measured million, and agents that don't blow the latency budget. The whole system, honestly.">
+<meta property="og:url" content="https://sugeerth.github.io/clip-vlm-101/blog.html">
+<meta property="og:image" content="https://sugeerth.github.io/clip-vlm-101/images/004_cat.jpg">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
+<link rel="stylesheet" href="style.css">
+<script>
+  const saved = localStorage.getItem('theme');
+  if (saved) document.documentElement.dataset.theme = saved;
+</script>
+</head>
+<body>
+
+<header>
+  <nav class="nav" aria-label="Sections">
+    <a class="wordmark" href="#top">CLIP&nbsp;VLM&nbsp;<span class="dim">101</span></a>
+    <div class="nav-links">
+      <a href="#towers">Two towers</a>
+      <a href="#funnel">The funnel</a>
+      <a href="#budget">A billion</a>
+      <a href="#latency">Latency</a>
+      <a href="#agents">The agents</a>
+      <a href="#reproduce">Reproduce</a>
+    </div>
+    <a class="gh" href="./">← Simple search</a>
+    <a class="gh" href="scale.html">A million</a>
+    <a class="gh" href="https://github.com/sugeerth/clip-vlm-101">GitHub ↗</a>
+  </nav>
+</header>
+
+<main id="top">
+
+  <div class="hero">
+    <p class="eyebrow">System design · a blog post</p>
+    <h1>Fourteen images to a <em>billion</em>.</h1>
+    <p class="lede">
+      The rest of this site searches <b>14 images</b>. One page grew the same database
+      design to <a href="scale.html">a real million</a> and timed it on a laptop. This
+      post finishes the arc: what it takes to serve <b>a billion</b> — and why the answer
+      is not a rewrite, but the <em>same two towers</em>, an index that costs
+      <code>O(√N)</code> instead of <code>O(N)</code>, sixty-four bytes a vector, and a
+      thousand copies of the million we already measured. Every number below is either
+      <b>measured</b> by <code>scale.py</code> or <b>arithmetic</b> by <code>scaling.py</code>,
+      which CI re-runs on every push. Nothing is a vibe.
+    </p>
+    <p class="fine">Read time ~8 minutes. Companion to the terse
+      <a href="https://github.com/sugeerth/clip-vlm-101/blob/main/ARCHITECTURE.md">ARCHITECTURE.md</a> map.</p>
+  </div>
+
+  <!-- =============================================================== towers -->
+  <section id="towers">
+    <p class="eyebrow">01 · The load-bearing choice</p>
+    <h2>Two towers, one space — the decision that makes scale possible</h2>
+    <p class="sub">
+      Everything downstream is affordable because of one architectural choice made at the
+      very top. CLIP has <b>two encoders</b> — a vision tower and a text tower — trained so
+      that an image and its caption land at the <em>same spot</em> in one 512-dimensional
+      space. The towers never see each other; they meet only at a dot product. That
+      independence is not an accident, it is the whole game.
+    </p>
+    <div class="card">
+      <div class="pipe" style="grid-template-columns:1fr 1fr;">
+        <div class="step"><b>Item tower — OFFLINE</b><span>Every stored image is embedded
+          <em>once</em>, before any query exists. A billion forward passes, run in batch on a
+          fleet, then never again. The output is a matrix of vectors —
+          <code>item_tower.py</code>.</span></div>
+        <div class="step"><b>Query tower — ONLINE</b><span>At search time, exactly
+          <em>one</em> forward pass: the query → a 512-d vector. Then it is pure arithmetic
+          against the precomputed matrix — <code>user_tower.py</code>.</span></div>
+      </div>
+      <p class="hint">Ranking every item for a query is then <code>item_matrix @ query_vec</code>
+        — one matrix multiply, <b>no image model on the serving path</b>. That is the sentence
+        the next four sections cash out.</p>
+    </div>
+    <p class="sub">
+      Contrast this with a <em>cross-encoder</em>, which feeds (query, item) <em>together</em>
+      through one network for a richer score. It is more accurate — and it is a non-starter at
+      scale, because it must run the model once <em>per candidate, per query</em>. A billion
+      items would mean a billion forward passes at query time. The two-tower split moves all
+      of that work to the offline side, so the online side only ever does dot products. We pay
+      for the accuracy we lost with a cheap <b>re-ranking</b> stage later (§<a href="#funnel">the funnel</a>) —
+      the industry's answer, and this repo's: <code>dcn.py</code> for the interaction the
+      towers can't express, on a few hundred candidates, not a billion.
+    </p>
+  </section>
+
+  <!-- =============================================================== funnel -->
+  <section id="funnel">
+    <p class="eyebrow">02 · The shape of every real system</p>
+    <h2>Billions → hundreds → ordered → explained</h2>
+    <p class="sub">
+      A production visual search is a <b>funnel</b>: each stage is cheaper per item and
+      richer per item than the last, and each hands a shorter list to the next. This repo
+      has one file per stage — the same design at 14 rows and at 1,000,000,000, only the
+      layout changes.
+    </p>
+    <div class="card">
+      <table>
+        <tr><th>stage</th><th>what it does</th><th>N in → out</th><th>the file</th></tr>
+        <tr><td><b>0 · Encode</b></td><td>two towers → one query vector</td><td>1 query</td>
+          <td><code>embedder.py</code> · <code>fusion.py</code></td></tr>
+        <tr><td><b>1 · Retrieve</b></td><td>cheap ANN over compressed vectors — recall, not order</td>
+          <td>10⁹ → ~10²</td><td><code>ann.py</code> · <code>pq.py</code></td></tr>
+        <tr><td><b>2 · Rank</b></td><td>rich query×item interaction the dot product can't express</td>
+          <td>~10² → ordered</td><td><code>dcn.py</code> · <code>learn2rank.py</code></td></tr>
+        <tr><td><b>3 · Explain + gate</b></td><td>say why, guarantee coverage, or abstain</td>
+          <td>top-k → trusted</td><td><code>explain.py</code> · <code>trust.py</code></td></tr>
+      </table>
+      <p class="hint">The expensive, accurate models only ever see the <b>hundreds</b> that
+        survive stage 1. That is why stage 1 — retrieval — is where scale is won or lost, and
+        it is the rest of this post.</p>
+    </div>
+  </section>
+
+  <!-- =============================================================== budget -->
+  <section id="budget">
+    <p class="eyebrow">03 · The back of the envelope</p>
+    <h2>A billion vectors, three honest constraints</h2>
+    <p class="sub">
+      <code>scaling.py</code> does no simulation — it is pure arithmetic over three facts the
+      rest of the repo already earned. Here is its output for <b>N = 1,000,000,000</b> vectors
+      at 512 dimensions, annotated.
+    </p>
+
+    <h3 style="margin:24px 0 4px;font-size:1.05rem;">① Memory — sixty-four bytes changes everything</h3>
+    <div class="card">
+      <table>
+        <tr><th>encoding</th><th>bytes / vector</th><th>a billion</th><th>where</th></tr>
+        <tr><td>float32</td><td>2048</td><td>1.9 TB</td><td><code>db.py</code>'s raw BLOB</td></tr>
+        <tr><td>float16</td><td>1024</td><td>953.7 GB</td><td><code>scale.py</code>'s packed matrix</td></tr>
+        <tr><td>int8</td><td>512</td><td>476.8 GB</td><td><code>quantize.py</code></td></tr>
+        <tr><td><b>PQ-64</b></td><td><b>64</b></td><td><b>59.6 GB</b></td><td><code>pq.py</code> — what ships</td></tr>
+      </table>
+      <p class="hint">Product quantization (<code>pq.py</code>) splits each 512-d vector into 64
+        eight-dim subvectors and replaces each with the <b>one byte</b> naming its nearest
+        codebook centroid. A billion vectors go from <b>1.9 terabytes to 60 gigabytes</b> — a
+        handful of commodity boxes, and small enough that the <a href="scale.html">million-row
+        page</a> ships a 100k slice of it <em>into your browser</em>.</p>
+    </div>
+
+    <h3 style="margin:28px 0 4px;font-size:1.05rem;">② Work — the index is O(√N), not O(N)</h3>
+    <div class="card">
+      <p class="sub" style="margin-bottom:12px;">Exact search is one dot product per stored
+        vector — a billion multiplies per query, hopeless. IVF (<code>ann.py</code>) clusters
+        the corpus into <code>nlist ≈ √N</code> cells and scans only the <code>nprobe</code>
+        nearest ones. Because embeddings <em>cluster</em> — animals near animals, the demo's map
+        shows it — a query's true neighbours nearly all live in a few cells.</p>
+      <table>
+        <tr><th></th><th>N = 1,000,000 (measured)</th><th>N = 1,000,000,000 (arithmetic)</th></tr>
+        <tr><td>cells (√N)</td><td>1,000</td><td>31,623</td></tr>
+        <tr><td>avg cell holds</td><td>1,000</td><td>31,623</td></tr>
+        <tr><td>nprobe = 32 scans</td><td>32,000</td><td>1,011,922</td></tr>
+        <tr><td>fraction of corpus</td><td>3.2%</td><td><b>0.1012%</b></td></tr>
+      </table>
+      <p class="hint">The punchline is the last row: <b>1000× more data, but the query scans a
+        smaller fraction of it.</b> A billion-vector query touches ~1.04 million vectors — the
+        √N centroids plus one probe's worth of candidates — not a billion. Retrieval work grows
+        like the <em>square root</em> of the corpus. That single fact is why vector search exists.</p>
+    </div>
+
+    <h3 style="margin:28px 0 4px;font-size:1.05rem;">③ Sharding — a billion is 1,000 copies of a measured million</h3>
+    <div class="card">
+      <p class="sub" style="margin-bottom:12px;">Here is the honest bridge from a laptop to a
+        billion. We <em>measured</em> a million rows on one machine (§<a href="#latency">next</a>).
+        A billion is simply <b>1,000 shards of that million</b>, each a 61 MB PQ index that fits
+        in one box's RAM. The query <b>scatters</b> to all shards in parallel, each returns its
+        local top-k, and a tiny <b>gather</b> step merges them.</p>
+      <pre class="dims" style="line-height:1.5;">      query vector
+           │  scatter (fan out, in parallel)
+     ┌─────┼─────┬─────┬───   …   ─┬─────┐
+   shard₀ shard₁ shard₂ shard₃    shard₉₉₉      each = the measured million
+     │     │     │     │           │            (61 MB PQ, IVF, in RAM)
+     └─────┴──┬──┴─────┴───  …  ───┴─────┘
+              │  gather (merge 1,000 local top-k)
+        the global top-k</pre>
+      <p class="hint">Wall-clock latency is <b>one shard's</b> time (they run in parallel), plus
+        a merge and a network hop — <em>not</em> 1,000× the work. The per-shard number is real,
+        measured, on a laptop. The fan-out is the oldest trick in distributed systems. That is
+        the whole trick to a billion: <b>don't build a bigger index, build a thousand of the one
+        that already works.</b></p>
+    </div>
+  </section>
+
+  <!-- ============================================================== latency -->
+  <section id="latency">
+    <p class="eyebrow">04 · What a query actually costs</p>
+    <h2>The latency budget — interactive, at a billion</h2>
+    <p class="sub">
+      System design is spending a millisecond budget. Here is where a single query's time goes,
+      composed by <code>scaling.py</code> from measured per-stage anchors. Shards run in
+      parallel, so the scan is counted <b>once</b> — the slowest shard, not the sum.
+    </p>
+    <div class="card">
+      <div id="latencyBars"></div>
+      <p class="hint" id="latencyNote">Each bar is a stage; the total is a query's p50 at a
+        billion vectors.</p>
+    </div>
+    <p class="sub">
+      These anchors are not invented — they are <a href="scale.html">the million-row page's own
+      laptop measurements</a>. The per-shard IVF scan is budgeted at 6 ms; <code>scale.py bench</code>
+      measured the same million-row IVF index at <b>4.0 ms in RAM</b> (and 11 ms from a
+      memory-mapped file — the difference was pure I/O and f16→f32 casting, ~90% of a naive
+      868 ms brute scan). The query-tower forward pass, ~12 ms, is the <em>only</em> model on the
+      path and the single biggest line item — which is exactly why the two-tower split, keeping
+      the item tower offline, is what buys the budget.
+    </p>
+  </section>
+
+  <!-- =============================================================== agents -->
+  <section id="agents">
+    <p class="eyebrow">05 · ML systems and agents, hand in hand</p>
+    <h2>The agent layer rides on top — for free</h2>
+    <p class="sub">
+      Every agent in this repo is placed so that it <b>does not inflate the p50</b> above. That
+      is the design discipline: intelligence you can afford is intelligence that runs where it's
+      earned, not on every query.
+    </p>
+    <div class="card">
+      <table>
+        <tr><th>agent</th><th>where it runs</th><th>cost on the query path</th></tr>
+        <tr><td><code>crawler.py</code> · <code>spider.py</code></td><td>OFFLINE — grows the corpus</td>
+          <td><b>zero</b> — never on the query path</td></tr>
+        <tr><td><code>item_tower.py</code> + <code>agent.py</code></td><td>OFFLINE — embeds &amp; verifies</td>
+          <td><b>zero</b> — the towers ran before you asked</td></tr>
+        <tr><td><code>hermes.py</code></td><td>ONLINE — refines the query</td>
+          <td>usually <b>zero extra</b>; see below</td></tr>
+        <tr><td><code>trust.py</code> · <code>judge.py</code> · <code>drift.py</code></td>
+          <td>OFFLINE — evaluation &amp; monitoring</td><td><b>zero</b> — sampled, not per-query</td></tr>
+      </table>
+    </div>
+    <p class="sub">
+      The subtle one is <b>Hermes</b>, the agentic searcher, because it runs online. It treats
+      your query as a draft: it proposes a few phrasings (a cheap <em>batch</em> through the query
+      tower), ranks with each, and then can <b>refine</b> — blend the query toward its own top
+      hits and search again. Naïvely, that multiplies the latency by the number of passes. So
+      Hermes has an <b>evaluator</b> — anchored to your <em>original</em> query — that judges every
+      pass: a better one is accepted, a worse one is <em>rejected and the loop stops</em>.
+    </p>
+    <div class="card">
+      <p class="sub" style="margin-bottom:6px;"><b>Measured, before it shipped:</b> unguarded
+        feedback <em>drifts</em> — recall fell from <b>0.348 to 0.333</b> on a 5,000-vector
+        corpus as blind passes wandered away from the question. The evaluator guard never loses
+        ground and settles in <b>~2 passes</b>. On the live gallery you can watch it decide: the
+        <em>pizza</em> query's refinement pass drifts and is <b>rejected</b>; the <em>dog</em>
+        query <b>converges</b>. <a href="explore.html#lessons">See it live →</a></p>
+      <p class="hint">Because most queries pass the gate on the first try, the p50 latency in §4
+        is <b>unchanged</b> by adding Hermes. Only the genuinely ambiguous queries spend a second
+        search — the system pays for extra intelligence <em>exactly where it helps</em>, and
+        nowhere else. Self-correction, in a latency budget, means knowing when to stop.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ reproduce -->
+  <section id="reproduce">
+    <p class="eyebrow">06 · Nothing here is a vibe</p>
+    <h2>Reproduce every number</h2>
+    <p class="sub">Two commands. The first is pure arithmetic (this whole post); the second is
+      the laptop measurement it's anchored to. CI runs both on every push.</p>
+    <div class="card">
+      <pre class="dims">$ python3 scaling.py          # the billion-row budget, printed — no model, no data
+$ python3 scale.py bench      # the million-row measurement it extrapolates from</pre>
+      <p class="hint">The billion-scale arithmetic — memory linearity, the √N index law, the
+        1,000-shard plan, the parallel latency budget — is asserted in <code>test_smoke.py</code>
+        (<code>test_scaling</code>) and re-run in CI, right next to <code>scale.py selftest</code>,
+        so the story and the code can never drift apart.</p>
+    </div>
+    <p class="sub" style="margin-top:24px;">
+      That's the system, end to end: two towers so the work is offline, an O(√N) index so
+      retrieval is sublinear, 64 bytes so a billion fits in RAM, a thousand shards so a laptop's
+      measurement <em>is</em> the fleet's, a millisecond budget so it stays interactive, and an
+      agent layer arranged so intelligence never costs the p50. Fourteen images taught it; a
+      billion only changes the layout.
+    </p>
+  </section>
+
+</main>
+
+<footer>
+  Part of <a href="https://github.com/sugeerth/clip-vlm-101">CLIP VLM 101</a> — the same
+  pipeline, from 14 rows to a billion.
+  &nbsp;·&nbsp; <a href="./">the demo</a>
+  &nbsp;·&nbsp; <a href="explore.html">the explorable</a>
+  &nbsp;·&nbsp; <a href="scale.html">a million rows</a>
+</footer>
+
+<script type="module">
+  // The latency bars are drawn from scaling.py's OWN stage budget, mirrored
+  // here so the page and the Python can't disagree (CI pins the Python).
+  const STAGES = [
+    ['query tower embed', 12.0, 'one CLIP forward pass — the only model on the path'],
+    ['coarse quantizer', 0.5, 'query vs √N centroids — a small matmul'],
+    ['IVF-PQ scan (per shard)', 6.0, 'nprobe lists of PQ codes, table lookups — measured 4 ms in RAM'],
+    ['exact re-rank', 2.0, 'fetch a cheap top-100, score exactly'],
+    ['scatter / gather', 4.0, 'fan out to 1,000 shards, merge their top-k'],
+  ];
+  const total = STAGES.reduce((s, [, ms]) => s + ms, 0);
+  const wrap = document.getElementById('latencyBars');
+  const max = Math.max(...STAGES.map(([, ms]) => ms));
+  for (const [name, ms, why] of STAGES) {
+    const row = document.createElement('div');
+    row.className = 'meter-row';
+    row.style.gridTemplateColumns = '210px 1fr 62px';
+    const label = document.createElement('span');
+    label.className = 'tag'; label.textContent = name; label.title = why;
+    const meter = document.createElement('div');
+    meter.className = 'meter';
+    const fill = document.createElement('div');
+    fill.className = 'fill';
+    fill.style.width = (100 * ms / max) + '%';
+    meter.append(fill);
+    const val = document.createElement('span');
+    val.style.cssText = 'font-variant-numeric:tabular-nums;font-size:0.82rem;text-align:right;';
+    val.textContent = ms.toFixed(1) + ' ms';
+    row.append(label, meter, val);
+    wrap.append(row);
+  }
+  const totalRow = document.createElement('div');
+  totalRow.className = 'meter-row';
+  totalRow.style.cssText = 'grid-template-columns:210px 1fr 72px;margin-top:8px;font-weight:700;';
+  const tl = document.createElement('span'); tl.className = 'tag on'; tl.textContent = 'p50 total';
+  const spacer = document.createElement('div');
+  const tv = document.createElement('span');
+  tv.style.cssText = 'font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;color:var(--accent-ink);';
+  tv.textContent = total.toFixed(1) + ' ms';
+  totalRow.append(tl, spacer, tv);
+  wrap.append(totalRow);
+  document.getElementById('latencyNote').textContent =
+    `Each bar is a stage; the total — ${total.toFixed(1)} ms — is a query's p50 at a billion vectors, `
+    + `interactive by any standard. The scan is counted once because shards run in parallel.`;
+</script>
+</body>
+</html>
