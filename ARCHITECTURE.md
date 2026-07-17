@@ -66,8 +66,14 @@ vector stores do:
 - **ANN / IVF** (`ann.py`): cluster the corpus, scan only the nearest few
   clusters — ~2% of vectors, ~75% of the true neighbours. This is what FAISS
   IVF and ScaNN do ([FAISS](https://arxiv.org/abs/2401.08281),
-  [ScaNN](https://arxiv.org/abs/1908.10396); HNSW/DiskANN for graph and
-  on-SSD variants).
+  [ScaNN](https://arxiv.org/abs/1908.10396)).
+- **ANN / HNSW** (`hnsw.py`): the graph index modern vector databases (Qdrant,
+  Weaviate, pgvector, Vespa, FAISS-HNSW) actually default to — a layered
+  navigable-small-world graph you *walk* toward the query instead of cells you
+  scan. Hops grow like log N, not √N, so at matched work it keeps more of the
+  truth than IVF (measured, same vectors: same recall for ~20% fewer distance
+  computations, and it reaches recall IVF can't touch)
+  ([Malkov & Yashunin 2016](https://arxiv.org/abs/1603.09320)).
 - **Compression** (`quantize.py`, `pq.py`): int8 is 4× smaller;
   **product quantization** is ~32× smaller (64 bytes/vector) and searches by
   table lookup with no multiplies — small enough that `pq.js` ships a
@@ -266,7 +272,7 @@ afternoon.
 | stage | files | run it |
 |---|---|---|
 | encode | `embedder.py` `models.py` `fusion.py` `templates.py` | `python3 features.py images/cat.jpg` |
-| retrieve | `search.py` `ann.py` `pq.py` `quantize.py` `scale.py` | `python3 ann.py` · `python3 pq.py` |
+| retrieve | `search.py` `ann.py` `hnsw.py` `pq.py` `quantize.py` `scale.py` `cascade.py` | `python3 ann.py` · `python3 hnsw.py` · `python3 pq.py` |
 | rank | `dcn.py` `learn2rank.py` `hermes.py` | `python3 dcn.py --image images/004_cat.jpg` · `python3 learn2rank.py` |
 | explain+gate | `explain.py` `conformal.py` `judge.py` `trust.py` `agent.py` | `python3 explain.py --image images/004_cat.jpg` · `python3 conformal.py --json docs/db.json` · `python3 judge.py … --image images/004_cat.jpg` · `python3 trust.py … --image images/004_cat.jpg` |
 
