@@ -160,6 +160,7 @@ Suggested reading order:
 | `scaling.py` | ~180 | **two-billion, on an envelope**: memory · O(√N) · shards · latency · cascade |
 | `cascade.py` | ~170 | **approximate at every level**: binary → PQ → int8 → exact, recall kept |
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
+| `grow.py` | ~150 | **grow the gallery 100× in one command**: bulk-crawl ~114 diverse topics → embed → dedup → a bigger `db.json` (remote thumbnails, no committed blobs) |
 | `spider.py` | ~170 | **the web crawler**: BFS any site for images — robots.txt, pacing, caps |
 | `scale.py` | ~620 | **one million rows**: records in SQLite, scans in packed f16 memmaps — ivf + int8 + RAM serving at industrial size |
 | `pq.py` | ~200 | **product quantization**: 64 bytes/vector + table-lookup search — small enough that a 100k slice ships to the BROWSER (`js/pq.js` is its twin) |
@@ -541,7 +542,33 @@ on `councilWithLLM`). Page-only, like `viz.js`/`motion.js`/`tour.js` — there's
 "live" in a batch script — it's the one place you see the whole stack *execute*,
 not just its result.
 
-## Two ways to grow the corpus
+## Grow the gallery 100× with one command — for free
+
+The demo ships with 14 curated images, but that's a *seed*, not a ceiling.
+`grow.py` turns it into a **thousands-of-images** gallery in one command, free:
+
+```bash
+python3 grow.py --per 12            # ~114 diverse topics × 12 ≈ 1,400 images (100×)
+python3 grow.py --per 30 --merge   # keep the current 14, add ~3,400 more
+python3 grow.py --topics cat sushi "eiffel tower" --per 20   # your own topics
+```
+
+It crawls freely-licensed images from Wikimedia Commons (with attribution —
+`crawler.py` keeps the receipts), embeds each with the *same* clip-ViT-B/32 the
+demo runs, drops near-duplicates by embedding cosine, and writes a bigger
+`docs/db.json` in the exact format the browser already searches — **no code
+change, no committed image blobs**: each item stores its embedding plus the
+**remote Commons thumbnail URL**, so 100× the images is a few MB of JSON and the
+browser loads thumbnails straight from the free host. The search stays instant —
+it's the same dot products, and the page's one O(n²) step (the conformal
+calibration) is capped to a representative sample, so **load and search are fast
+at any gallery size** (measured: 1,400 images → interactive in ~1.6 s, a query
+answered in ~130 ms, all in the browser).
+
+`python3 grow.py --selftest` exercises the dedup + export offline (no model, no
+network) — that's what CI runs.
+
+### The two lower-level ways underneath it
 
 - **Ask** (`crawler.py`): the Commons search API returns curated, freely
   licensed images with attribution — every download gets a manifest receipt.
@@ -551,8 +578,11 @@ not just its result.
   gate (icon-sized files skipped) and content-hash dedupe. Crawled pages
   carry no license metadata, and the manifest says so: reuse is on you.
 
-Either way the output feeds the same pipeline: crawl → `ingest.py` →
-`export_web.py`, and the live search box now searches YOUR corpus.
+Either way the output feeds the same pipeline, and the live search box now
+searches YOUR corpus. **Already too many for raw JSON?** The repo's own
+`scale.html` searches a **100,000-image** slice in the browser via
+`pq.py`/`js/pq.js` — product-quantized to 64 bytes each, a ~7 MB pack — the path
+to 100k–1M images at a tiny download.
 
 And **every search crawls, live**: after each text query the demo fans out
 to **five independent, keyless, CORS-open image APIs in parallel** —

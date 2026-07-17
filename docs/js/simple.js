@@ -38,7 +38,14 @@ const persistRanker = () => localStorage.setItem(RANK_KEY, JSON.stringify(ranker
 // the stand-in query) over image_emb. Image→image cosines sit at ~0.5–1.0 but
 // text→image cosines at ~0.15–0.30 (CLIP's modality gap), so a threshold from
 // the image-side band would never fire on a real text query.
-const CAL = looScores(DB.items, 'image_emb', 'text_emb');
+// looScores is O(n²); on a grown gallery (grow.py can push this into the
+// thousands) calibrate on an evenly-spaced sample so page load stays instant —
+// a conformal threshold needs a representative sample, not every pair.
+const CAL_MAX = 300;
+const CAL_SET = DB.items.length > CAL_MAX
+  ? DB.items.filter((_, i) => i % Math.ceil(DB.items.length / CAL_MAX) === 0)
+  : DB.items;
+const CAL = looScores(CAL_SET, 'image_emb', 'text_emb');
 const TAU80 = 1 - calibrate(CAL, 0.2);        // cos ≥ TAU80  → the 80%-coverage set
 let candCtx = null;                            // { query, cand:[{item,features,...}] }
 
