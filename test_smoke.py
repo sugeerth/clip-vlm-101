@@ -270,6 +270,14 @@ def test_hnsw():
     assert idx.entry in idx.layers[idx.top]
     assert idx.top == len(idx.layers) - 1
 
+    # the entry must be present on its own top layer even when it is the SOLE node
+    # that tall — a small n produces a unique-max level and would expose a gap.
+    for n in (50, 200):
+        small = HNSW(synthetic(n=n, n_queries=1)[0], M=16, ef_construction=48)
+        assert small.entry in small.layers[small.top]
+        for layer in small.layers:                  # no layer has a missing/void key
+            assert all(0 <= node < n for node in layer)
+
     # every node is pruned to the per-layer budget (M0 on layer 0), no self-loops,
     # and every neighbour id is a real node — the graph stays sparse and valid.
     for node, nbrs in idx.layers[0].items():

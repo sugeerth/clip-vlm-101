@@ -139,6 +139,8 @@ class HNSW:
                         self.X[nb], np.asarray(lst, dtype=int), m)
             ep = found
         if level > self.top:            # a taller node becomes the new entry
+            for l in range(self.top + 1, level + 1):
+                self.layers[l][i] = []  # sole node this high: present, just no peers yet
             self.entry, self.top = i, level
 
     def search(self, q, k=10, ef=32):
