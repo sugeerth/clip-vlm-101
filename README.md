@@ -181,6 +181,8 @@ holds both languages to it):
 | `quantize.py` | ~75 | int8 scalar quantization: 4× smaller, measure the damage |
 | `similarity.py --centered` | +25 | closing the gap: center each modality, margin widens ~3× |
 | `ann.py` | ~110 | IVF (what vector DBs do): scan ~2%, keep ~75% of the truth |
+| `hnsw.py` | ~180 | HNSW graph index (Qdrant/Weaviate/pgvector default): walk a map, log N not √N — beats IVF at matched work |
+| `diskann.py` | ~230 | DiskANN: a billion on one box — Vamana robust-prune graph, PQ sketch in RAM, full vectors on SSD, reads only ~L per query |
 
 The browser demo mirrors the same pipeline in `docs/js/` with **matching
 module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
@@ -774,6 +776,8 @@ lesson runs on committed data — and CI re-runs all of them on every push:
 | `python3 quantize.py --json docs/db.json` | 4× smaller, **39/42** top-3 neighbor slots unchanged |
 | `python3 similarity.py --json docs/db.json --centered` | own-caption margin **+0.120 → +0.388** after centering |
 | `python3 ann.py` | probes 1: recall **0.75** scanning **1.8%**; probes 8: **0.94** at 12.8% |
+| `python3 hnsw.py` | the graph gets **0.90** recall for **~360** distances/query where IVF gets only **0.87** at **~445** — and reaches **0.99** where IVF stalls near 0.87 |
+| `python3 diskann.py` | navigating a **16-byte** PQ sketch then reranking **L=64** disk reads recovers **0.99** recall — touching **64 of 1,200** full vectors |
 | `python3 hermes.py --image pizza --json docs/db.json` | the evaluator **rejects** the drifting pass and keeps the honest ranking |
 | `python3 learn2rank.py` | after 👍 the tag-sharers / 👎 the rest, `tag_overlap` importance dominates and the parrot lifts above the sunflower |
 | `python3 conformal.py --json docs/db.json` | coverage sits **on or above** every target (80% → 84.6%, 90% → 92.3%); the set grows as you demand more confidence |

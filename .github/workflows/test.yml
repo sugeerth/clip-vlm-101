@@ -34,6 +34,8 @@ jobs:
       - run: python quantize.py --json docs/db.json
       - run: python similarity.py --json docs/db.json --centered
       - run: python ann.py
+      - run: python hnsw.py               # the navigable-small-world graph index: recall beats IVF at matched work
+      - run: python diskann.py            # Vamana graph + PQ-in-RAM: a billion on one box, reads only ~L vectors from disk
       - run: python learn2rank.py           # on-device learning-to-rank, model-free demo
       - run: python conformal.py --json docs/db.json  # conformal coverage table on the gallery
       - run: python judge.py --json docs/db.json --image images/004_cat.jpg  # council of judges, model-free

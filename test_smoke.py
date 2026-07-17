@@ -252,6 +252,133 @@ def test_cascade():
     assert h[0] == 0 and h.argmin() == 0
 
 
+def test_hnsw():
+    """hnsw.py: the navigable-small-world graph is well-formed and, at matched
+    work, keeps more of the truth than IVF — the whole reason the graph exists."""
+    from ann import build as ivf_build, recall_at_k, search as ivf_search, synthetic
+    from hnsw import HNSW
+
+    X, Q = synthetic(n=1500, n_queries=60)
+    exact = np.argsort(Q @ X.T, axis=1)[:, ::-1][:, :10]
+    idx = HNSW(X, M=16, ef_construction=48)
+
+    # a well-formed HNSW: every node lives on layer 0, layers shrink going up,
+    # and the entry point sits on the top layer.
+    assert len(idx.layers[0]) == len(X)
+    sizes = [len(l) for l in idx.layers]
+    assert all(a >= b for a, b in zip(sizes, sizes[1:]))     # a pyramid, not a wall
+    assert idx.entry in idx.layers[idx.top]
+    assert idx.top == len(idx.layers) - 1
+
+    # the entry must be present on its own top layer even when it is the SOLE node
+    # that tall — a small n produces a unique-max level and would expose a gap.
+    for n in (50, 200):
+        small = HNSW(synthetic(n=n, n_queries=1)[0], M=16, ef_construction=48)
+        assert small.entry in small.layers[small.top]
+        for layer in small.layers:                  # no layer has a missing/void key
+            assert all(0 <= node < n for node in layer)
+
+    # every node is pruned to the per-layer budget (M0 on layer 0), no self-loops,
+    # and every neighbour id is a real node — the graph stays sparse and valid.
+    for node, nbrs in idx.layers[0].items():
+        assert len(nbrs) <= idx.M0
+        assert node not in nbrs
+        assert len(set(nbrs)) == len(nbrs)              # no duplicate edges
+        assert all(0 <= nb < len(X) for nb in nbrs)
+    # links start bidirectional; pruning may drop the far side, so most (not all)
+    # edges survive both ways — the graph is well-connected, not a set of one-way streets.
+    both = sum(node in idx.layers[0][nb] for node, nbrs in idx.layers[0].items() for nb in nbrs)
+    total = sum(len(nbrs) for nbrs in idx.layers[0].values())
+    assert both > 0.5 * total
+
+    # deterministic: same seed, same graph, same answers
+    idx2 = HNSW(X, M=16, ef_construction=48)
+    assert idx.layers[0] == idx2.layers[0]
+
+    def hnsw_recall(ef):
+        idx.dist_calls = 0
+        rec = sum(recall_at_k(idx.search(q, ef=ef), exact[qi]) for qi, q in enumerate(Q))
+        return rec / len(Q), idx.dist_calls / len(Q)
+
+    sweep = {ef: hnsw_recall(ef) for ef in (8, 16, 32, 64)}
+    r_lo, w_lo = sweep[8]
+    r_hi, w_hi = sweep[64]
+    assert r_hi > r_lo and w_hi > w_lo          # ef is a dial: more truth, more work
+    assert r_hi > 0.9                            # and it genuinely finds the truth
+
+    # apples-to-apples: give IVF its best shot here, then show HNSW reaches the
+    # SAME recall for FEWER distance computations — the graph's whole reason to exist.
+    C, lists = ivf_build(X, n_lists=64)
+    ivf_rec = ivf_scan = 0
+    for qi, q in enumerate(Q):
+        found, n = ivf_search(q, X, C, lists, probes=16)
+        ivf_rec += recall_at_k(found, exact[qi])
+        ivf_scan += n + len(C)
+    ivf_rec /= len(Q); ivf_scan /= len(Q)
+    # the cheapest HNSW pass that matches IVF's recall costs strictly less work
+    matched = [w for r, w in sweep.values() if r >= ivf_rec]
+    assert matched and min(matched) < ivf_scan
+
+
+def test_diskann():
+    """diskann.py: the Vamana graph is sparse and valid, the search navigates on
+    the PQ sketch and reads only ~L full vectors from 'disk', and reranking
+    recovers essentially all the recall — the billion-on-one-box trick."""
+    from ann import recall_at_k, synthetic
+    from diskann import DiskANN
+
+    X, Q = synthetic(n=900, n_queries=40)
+    exact = np.argsort(Q @ X.T, axis=1)[:, ::-1][:, :10]
+    idx = DiskANN(X, R=24, L=32, alpha=1.2, m=16)
+
+    # a valid Vamana graph: degree-bounded, no self-loops, no dup edges, real ids,
+    # a PQ sketch with one code row per vector, and a medoid entry point.
+    assert idx.medoid in range(len(X))
+    assert idx.codes.shape[0] == len(X)
+    for node, nbrs in enumerate(idx.nbrs):
+        assert len(nbrs) <= idx.R
+        assert node not in nbrs
+        assert len(set(nbrs)) == len(nbrs)
+        assert all(0 <= nb < len(X) for nb in nbrs)
+    # the graph is actually connected outward from the medoid (a BFS reaches most
+    # of it) — robust-prune must not have severed it into islands.
+    seen, frontier = {idx.medoid}, [idx.medoid]
+    while frontier:
+        nxt = []
+        for u in frontier:
+            for v in idx.nbrs[u]:
+                if v not in seen:
+                    seen.add(v); nxt.append(v)
+        frontier = nxt
+    assert len(seen) > 0.9 * len(X)             # reachable, not fragmented
+
+    # deterministic: same seed → same graph
+    idx2 = DiskANN(X, R=24, L=32, alpha=1.2, m=16)
+    assert idx.nbrs == idx2.nbrs
+
+    # search: L is a dial (more truth, more disk), and it reads only ~L of N.
+    def run(L):
+        rec = reads = pq = 0
+        for qi, q in enumerate(Q):
+            found, cost = idx.search(q, L=L)
+            assert len(found) == 10
+            assert cost["ssd_reads"] <= L        # the rerank cap: never more than L reads
+            rec += recall_at_k(found, exact[qi])
+            reads += cost["ssd_reads"]
+            pq += cost["pq_dists"]
+        return rec / len(Q), reads / len(Q), pq / len(Q)
+
+    r_lo, reads_lo, pq_lo = run(16)
+    r_hi, reads_hi, pq_hi = run(64)
+    assert r_hi > r_lo                          # bigger L keeps more of the truth
+    assert r_hi > 0.9                           # and reranking recovers it
+    assert reads_hi < 0.1 * len(X)              # a rounding error against N — the point
+    # navigation must happen on the PQ sketch, not full vectors: the walk touches
+    # strictly more candidates via PQ than it ever reads from 'disk'. (If someone
+    # rewired search to navigate on self.X, disk reads would balloon and this fails.)
+    assert pq_hi > reads_hi
+
+
 def test_softmax():
     from temperature import softmax
     scores = [0.3, 0.2, 0.1]
