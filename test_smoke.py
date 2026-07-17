@@ -320,6 +320,60 @@ def test_hnsw():
     assert matched and min(matched) < ivf_scan
 
 
+def test_diskann():
+    """diskann.py: the Vamana graph is sparse and valid, the search navigates on
+    the PQ sketch and reads only ~L full vectors from 'disk', and reranking
+    recovers essentially all the recall — the billion-on-one-box trick."""
+    from ann import recall_at_k, synthetic
+    from diskann import DiskANN
+
+    X, Q = synthetic(n=900, n_queries=40)
+    exact = np.argsort(Q @ X.T, axis=1)[:, ::-1][:, :10]
+    idx = DiskANN(X, R=24, L=32, alpha=1.2, m=16)
+
+    # a valid Vamana graph: degree-bounded, no self-loops, no dup edges, real ids,
+    # a PQ sketch with one code row per vector, and a medoid entry point.
+    assert idx.medoid in range(len(X))
+    assert idx.codes.shape[0] == len(X)
+    for node, nbrs in enumerate(idx.nbrs):
+        assert len(nbrs) <= idx.R
+        assert node not in nbrs
+        assert len(set(nbrs)) == len(nbrs)
+        assert all(0 <= nb < len(X) for nb in nbrs)
+    # the graph is actually connected outward from the medoid (a BFS reaches most
+    # of it) — robust-prune must not have severed it into islands.
+    seen, frontier = {idx.medoid}, [idx.medoid]
+    while frontier:
+        nxt = []
+        for u in frontier:
+            for v in idx.nbrs[u]:
+                if v not in seen:
+                    seen.add(v); nxt.append(v)
+        frontier = nxt
+    assert len(seen) > 0.9 * len(X)             # reachable, not fragmented
+
+    # deterministic: same seed → same graph
+    idx2 = DiskANN(X, R=24, L=32, alpha=1.2, m=16)
+    assert idx.nbrs == idx2.nbrs
+
+    # search: L is a dial (more truth, more disk), and it reads only ~L of N.
+    def run(L):
+        rec = reads = 0
+        for qi, q in enumerate(Q):
+            found, cost = idx.search(q, L=L)
+            assert len(found) == 10
+            rec += recall_at_k(found, exact[qi])
+            reads += cost["ssd_reads"]
+        return rec / len(Q), reads / len(Q)
+
+    r_lo, reads_lo = run(16)
+    r_hi, reads_hi = run(64)
+    assert r_hi > r_lo                          # bigger L keeps more of the truth
+    assert r_hi > 0.9                           # and reranking recovers it
+    assert reads_hi <= 64 + 1                   # reads ~L, never the whole corpus
+    assert reads_hi < 0.1 * len(X)              # a rounding error against N — the point
+
+
 def test_softmax():
     from temperature import softmax
     scores = [0.3, 0.2, 0.1]
