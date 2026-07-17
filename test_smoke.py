@@ -358,20 +358,25 @@ def test_diskann():
 
     # search: L is a dial (more truth, more disk), and it reads only ~L of N.
     def run(L):
-        rec = reads = 0
+        rec = reads = pq = 0
         for qi, q in enumerate(Q):
             found, cost = idx.search(q, L=L)
             assert len(found) == 10
+            assert cost["ssd_reads"] <= L        # the rerank cap: never more than L reads
             rec += recall_at_k(found, exact[qi])
             reads += cost["ssd_reads"]
-        return rec / len(Q), reads / len(Q)
+            pq += cost["pq_dists"]
+        return rec / len(Q), reads / len(Q), pq / len(Q)
 
-    r_lo, reads_lo = run(16)
-    r_hi, reads_hi = run(64)
+    r_lo, reads_lo, pq_lo = run(16)
+    r_hi, reads_hi, pq_hi = run(64)
     assert r_hi > r_lo                          # bigger L keeps more of the truth
     assert r_hi > 0.9                           # and reranking recovers it
-    assert reads_hi <= 64 + 1                   # reads ~L, never the whole corpus
     assert reads_hi < 0.1 * len(X)              # a rounding error against N — the point
+    # navigation must happen on the PQ sketch, not full vectors: the walk touches
+    # strictly more candidates via PQ than it ever reads from 'disk'. (If someone
+    # rewired search to navigate on self.X, disk reads would balloon and this fails.)
+    assert pq_hi > reads_hi
 
 
 def test_softmax():
