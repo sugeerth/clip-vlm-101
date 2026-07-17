@@ -529,6 +529,32 @@ def test_debate():
     assert debate.EPS == 0.30 and debate.RELEVANT == 0.5
 
 
+def test_grow():
+    """grow.py: the offline gallery-growth logic — dedup + the db.json export."""
+    import json
+
+    import grow
+
+    seed = grow._seed_records()
+    assert len(seed) >= 10
+    # the curated gallery has no near-duplicates; an exact copy is dropped
+    assert len(grow.dedup(seed)) == len(seed)
+    assert len(grow.dedup(seed + [dict(seed[0])])) == len(seed)
+
+    # build_payload reproduces the exact db.json shape (items + 2-D PCA basis)
+    payload = grow.build_payload(seed)
+    assert payload["dim"] == 512 and len(payload["items"]) == len(seed)
+    assert len(payload["pca"]["mean"]) == 512 and len(payload["pca"]["components"]) == 2
+    it = payload["items"][0]
+    assert len(it["image_emb"]) == 512 and len(it["text_emb"]) == 512
+    assert 0.0 <= it["map"][0] <= 1.0 and 0.0 <= it["map"][1] <= 1.0
+    assert json.loads(json.dumps(payload))  # serializes cleanly
+
+    # a big diverse vocabulary → a ~100x gallery at a dozen images each
+    assert len(grow.DEFAULT_TOPICS) >= 100
+    assert len(grow.DEFAULT_TOPICS) * 12 >= 100 * len(seed) // 10
+
+
 def test_reason():
     """reason.py: the end-to-end reasoning trace and the consequence map."""
     import reason

@@ -43,6 +43,7 @@ jobs:
       - run: python scaling.py             # the two-billion back-of-envelope, pure arithmetic
       - run: python cascade.py             # the approximation cascade: recall retained at every level
       - run: python reason.py --json docs/db.json --image images/004_cat.jpg  # end-to-end reasoning trace → consequence
+      - run: python grow.py --selftest     # bulk gallery-growth: dedup + db.json export, model-free
       - run: python scale.py selftest       # the million-row machinery, synthetic + model-free
       - run: python pq.py selftest          # product quantization: the browser index's math
       - run: node docs/js/test_pq.mjs       # …and its JS twin agrees, lookup for lookup
