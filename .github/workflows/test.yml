@@ -46,5 +46,6 @@ jobs:
       - run: python grow.py --selftest     # bulk gallery-growth: dedup + db.json export, model-free
       - run: python scale.py selftest       # the million-row machinery, synthetic + model-free
       - run: python pq.py selftest          # product quantization: the browser index's math
+      - run: python opq.py selftest         # optimised PQ: the learned rotation earns its recall
       - run: node docs/js/test_pq.mjs       # …and its JS twin agrees, lookup for lookup
       - run: python hermes.py --image pizza --json docs/db.json
