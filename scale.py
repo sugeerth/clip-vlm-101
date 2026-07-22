@@ -48,6 +48,12 @@ def cmd_search(args):
     rows = n_rows(con)
     q = ensemble_query(ClipEmbedder().embed_texts, args.query)
     img = np.load(IMG, mmap_mode="r")
+    stale = {"cascade": lambda: binary.bin_stale(rows) or opq.opq_stale(rows) or intq.i8_stale(rows),
+             "binary": lambda: binary.bin_stale(rows), "int8": lambda: intq.i8_stale(rows),
+             "opq": lambda: opq.opq_stale(rows)}          # guard every compressed method, not just ivf
+    if args.method in stale and stale[args.method]():
+        raise SystemExit(f"the {args.method} index isn't built for {rows:,} rows — "
+                         "run `python3 scale.py bench` first")
     t0 = time.time()
     if args.method == "cascade":            # binary → OPQ → int8 → exact
         ids, scores, scanned = engine.cascade_search(
@@ -157,7 +163,8 @@ def cmd_selftest(args):
         # engine.py — the cascade: binary → OPQ → int8 → exact
         idx = {"bits": bits, "R": Ro, "books": books, "codes": codes, "i8": i8, "i8scale": sc}
         cids, _, cscanned = engine.cascade_search(q, M, idx, k=10, stages=(2000, 400, 100), rows=n)
-        check(cscanned == n, "engine.py: the cascade's coarse pass sees every row")
+        check(cscanned <= 100 and cscanned < n,
+              "engine.py: the cascade reads only a handful at full precision (not every row)")
         check(len(set(cids.tolist()) & Tset) >= 8,
               "engine.py: cascade keeps most of the exact top-10 (approximate everywhere)")
 
@@ -195,6 +202,8 @@ def main():
     p.add_argument("--cand", type=int, default=400, help="candidates for the re-rank stage")
     p = sub.add_parser("serve", help="the corpus live at localhost — cascade in RAM")
     p.add_argument("--port", type=int, default=8071)
+    p.add_argument("--full", action="store_true",
+                   help="also promote both f32 towers for exact/ivf/fused (much more RAM)")
     sub.add_parser("selftest", help="synthetic end-to-end check, CI-safe")
     args = ap.parse_args()
     if args.cmd == "ingest":

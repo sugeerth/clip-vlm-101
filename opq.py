@@ -75,7 +75,7 @@ def opq_train(X, m=64, ks=KS, outer=8, inner=4, seed=0, log=print):
     return R, books
 
 
-def opq_encode(X, R, books, chunk=131_072):
+def opq_encode(X, R, books, chunk=CHUNK):
     """Rotate, then it's pq.py: every vector → m bytes. Returns (n, m) uint8."""
     return pq_encode((X @ R.T).astype(np.float32), books, chunk=chunk)
 

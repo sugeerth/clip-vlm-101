@@ -22,9 +22,9 @@ from store import DB, IMG, TXT, connect, n_rows
 def cmd_bench(args):
     con = connect()
     rows = n_rows(con)
-    img = np.load(IMG, mmap_mode="r")
-    if rows == 0:
+    if rows == 0 or not os.path.exists(IMG):
         raise SystemExit("no rows — run `python3 scale.py ingest` first")
+    img = np.load(IMG, mmap_mode="r")
 
     print(f"{rows:,} rows.  building any missing / stale indexes:")
     engine.build_indexes(img, rows, log=lambda s: print(s, flush=True))
@@ -53,11 +53,13 @@ def cmd_bench(args):
     C, order, starts, _ = ivfmod.load_ivf()
 
     def exact(q, k):
+        k = min(k, len(Rimg))
         s = Rimg @ q; top = np.argpartition(s, -k)[-k:]
         return top[np.argsort(s[top])[::-1]]
-    truth = [exact(q, 100) for q in Q]
-    T = {1: [{int(t[0])} for t in truth], 10: [set(t[:10]) for t in truth],
-         100: [set(t) for t in truth]}
+    deep = min(100, rows)                    # recall@deep, robust on a tiny dev corpus
+    truth = [exact(q, deep) for q in Q]
+    T = {1: [{int(t[0])} for t in truth], 10: [set(t[:min(10, rows)]) for t in truth],
+         deep: [set(t) for t in truth]}
 
     def recall(fn, k):
         return float(np.mean([len(set(np.asarray(fn(q, k))[:k].tolist()) & T[k][i]) / k
@@ -69,8 +71,15 @@ def cmd_bench(args):
             t0 = time.time(); fn(q); ts.append(time.time() - t0)
         return 1e3 * float(np.median(ts))
 
-    def row3(fn):                            # recall@1/@10/@100 from one k=100 call
-        return recall(fn, 1), recall(fn, 10), recall(fn, 100)
+    def row3(fn):                            # recall@1/@10/@deep from ONE k=deep call per query
+        r1 = r10 = rd = 0.0
+        for i, qq in enumerate(Q):
+            g = np.asarray(fn(qq, deep)).tolist()
+            r1 += g[0] in T[1][i]
+            r10 += len(set(g[:10]) & T[10][i]) / 10
+            rd += len(set(g[:deep]) & T[deep][i]) / deep
+        nq = len(Q)
+        return r1 / nq, r10 / nq, rd / nq
 
     qlat = Q[:min(12, len(Q))]
     scan([(img, 1.0)], Q[0], rows=rows)     # first touch: page the file in
@@ -99,7 +108,7 @@ def cmd_bench(args):
             ("int8 → exact re-rank", i8_rr, 512, med(lambda q: i8_rr(q, 10), qlat[:6])),
             ("OPQ 64B (lookup scan)", opq_scan, 64, med(lambda q: opq_scan(q, 10), qlat)),
             ("OPQ 64B → exact re-rank", opq_rr, 64, med(lambda q: opq_rr(q, 10), qlat)),
-            ("cascade (bin→OPQ→int8→exact)", casc, 64, med(lambda q: casc(q, 10), qlat))]:
+            ("cascade (bin→OPQ→int8→exact)", casc, 640, med(lambda q: casc(q, 10), qlat))]:
         r1, r10, r100 = row3(fn)
         print(f"  {name:<28}{lat:>8.1f}{r1:>7.2f}{r10:>7.2f}{r100:>8.2f}  {b}")
 

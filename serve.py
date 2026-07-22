@@ -138,19 +138,19 @@ const p=new URLSearchParams({q,mode:$('mode').value,engine:eng,
 probes:$('probes').value,k:24});
 try{const r=await(await fetch('/api/search?'+p)).json();if(my!==seq)return;
 if(r.error){$('lat').textContent=r.error;return}render(r,'query')}
-catch(e){$('lat').textContent='search failed: '+e.message}}
+catch(e){if(my!==seq)return;$('lat').textContent='search failed: '+e.message}}
 async function goImage(file){if(!file||!file.type.startsWith('image/'))return;
 const my=++seq;$('lat').textContent='embedding your photo…';
 const p=new URLSearchParams({engine:eng,probes:$('probes').value,k:24});
 try{const r=await(await fetch('/api/search-image?'+p,{method:'POST',body:file})).json();
 if(my!==seq)return;if(r.error){$('lat').textContent=r.error;return}render(r,'photo')}
-catch(e){$('lat').textContent='image search failed: '+e.message}}
+catch(e){if(my!==seq)return;$('lat').textContent='image search failed: '+e.message}}
 $('q').addEventListener('input',()=>{clearTimeout(deb);deb=setTimeout(go,250)});
 $('q').addEventListener('keydown',e=>{if(e.key==='Enter')go()});
 $('probes').addEventListener('input',()=>{$('pv').textContent=$('probes').value;go()});
 $('engine').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
 [...$('engine').children].forEach(x=>x.setAttribute('aria-pressed',x===b));
-eng=b.dataset.e;$('probesWrap').style.opacity=eng==='ivf'?1:.4;go()});
+eng=b.dataset.e;$('probesWrap').style.opacity=eng==='ivf'?1:.4;$('probes').disabled=eng!=='ivf';go()});
 $('mode').addEventListener('change',go);
 $('cam').addEventListener('click',()=>$('file').click());
 $('file').addEventListener('change',()=>goImage($('file').files[0]));
@@ -162,7 +162,7 @@ addEventListener('drop',e=>{e.preventDefault();document.body.classList.remove('d
 goImage(e.dataTransfer.files[0])});
 addEventListener('paste',e=>{const f=[...(e.clipboardData?.items||[])]
 .find(i=>i.type.startsWith('image/'));if(f)goImage(f.getAsFile())});
-$('probesWrap').style.opacity=.4;
+$('probesWrap').style.opacity=.4;$('probes').disabled=true;
 </script></body></html>"""
 
 
@@ -175,28 +175,34 @@ def cmd_serve(args):
     print(f"loading the corpus for {rows:,} rows …")
     t0 = time.time()
     img = np.load(IMG, mmap_mode="r")        # f16 memmap: the cascade's exact tier reads ~100/query
-    idx = engine.load_indexes(rows, to_ram=True)   # binary+OPQ+int8 in RAM (≈ ⅛ the f32 towers)
-    print(f"  compressed indexes in RAM ({time.time() - t0:,.0f}s) — cascade ready")
+    idx = engine.load_indexes(rows, to_ram=True)   # binary+OPQ+int8 REALLY in RAM (≈ ⅛ the f32 towers)
+    gb = (idx["bits"].nbytes + idx["codes"].nbytes + idx["i8"].nbytes) / 1e9
+    print(f"  compressed indexes in RAM ({gb:.1f} GB) — cascade ready in {time.time() - t0:,.0f}s")
 
-    ivf_idx = None                           # ivf/exact need the f32 towers; load them too
-    Rimg = np.asarray(img[:rows], dtype=np.float32)
-    Rtxt = np.asarray(np.load(TXT, mmap_mode="r")[:rows], dtype=np.float32)
-    mats = {"image": [(Rimg, 1.0)], "text": [(Rtxt, 1.0)], "fused": [(Rimg, 0.5), (Rtxt, 0.5)]}
-    if not ivfmod.ivf_stale(rows):
-        Cv, orderv, startsv, _ = ivfmod.load_ivf()
-        ivf_idx = (Cv, orderv, startsv)
+    # exact / ivf / fused need the full f32 towers (~8 bytes per dim, both towers).
+    # OFF by default so the low-memory cascade IS the default; --full opts in.
+    mats = ivf_idx = None
     gpu = {}
-    try:
-        g = gpu_promote([(Rimg, 1.0), (Rtxt, 1.0)])
-        if g:
-            dev, ((gi, _), (gt, _)) = g
-            gpu = {"image": (dev, [(gi, 1.0)]), "text": (dev, [(gt, 1.0)]),
-                   "fused": (dev, [(gi, 0.5), (gt, 0.5)])}
-            scan_gpu(gpu["fused"], np.zeros(512, np.float32))
-            print(f"  towers on {dev} — exact scans run on the GPU")
-    except Exception as e:
-        print(f"  (no GPU path: {e})")
-    print(f"  ready in {time.time() - t0:,.0f}s")
+    if args.full:
+        print(f"  --full: promoting both f32 towers to RAM (~{rows * 512 * 8 / 1e9:.1f} GB) …")
+        Rimg = np.asarray(img[:rows], dtype=np.float32)
+        Rtxt = np.asarray(np.load(TXT, mmap_mode="r")[:rows], dtype=np.float32)
+        mats = {"image": [(Rimg, 1.0)], "text": [(Rtxt, 1.0)], "fused": [(Rimg, 0.5), (Rtxt, 0.5)]}
+        if not ivfmod.ivf_stale(rows):
+            Cv, orderv, startsv, _ = ivfmod.load_ivf()
+            ivf_idx = (Cv, orderv, startsv)
+        try:
+            g = gpu_promote([(Rimg, 1.0), (Rtxt, 1.0)])
+            if g:
+                dev, ((gi, _), (gt, _)) = g
+                gpu = {"image": (dev, [(gi, 1.0)]), "text": (dev, [(gt, 1.0)]),
+                       "fused": (dev, [(gi, 0.5), (gt, 0.5)])}
+                scan_gpu(gpu["fused"], np.zeros(512, np.float32))
+                print(f"  towers on {dev} — exact/ivf scans run on the GPU")
+        except Exception as e:
+            print(f"  (no GPU path: {e})")
+    print(f"  ready in {time.time() - t0:,.0f}s"
+          + ("" if args.full else " — cascade-only (add --full for exact/ivf/fused)"))
 
     emb = ClipEmbedder()
     emb.embed_texts(["warm-up"])
@@ -204,18 +210,19 @@ def cmd_serve(args):
 
     def run_query(qv, mode, eng, probes, k, embed_ms):
         t0 = time.time()
-        if eng == "cascade":                 # low-memory, image-tower, accurate
-            ids, scores, scanned = engine.cascade_search(qv, img, idx, k=k, rows=rows)
-            label = "cascade"
-        elif eng == "ivf" and ivf_idx:
+        if eng == "ivf" and ivf_idx:         # needs the towers (--full)
             ids, scores, scanned = ivfmod.ivf_search(qv, mats[mode], *ivf_idx, k=k, probes=probes)
             label = "ivf"
-        elif gpu:
-            ids, scores = scan_gpu(gpu[mode], qv, k=k)
-            scanned, label = rows, f"exact on {gpu[mode][0]}"
-        else:
-            ids, scores = scan_ram(mats[mode], qv, k=k)
-            scanned, label = rows, "exact in RAM"
+        elif eng == "exact" and mats:
+            if gpu:
+                ids, scores = scan_gpu(gpu[mode], qv, k=k)
+                scanned, label = rows, f"exact on {gpu[mode][0]}"
+            else:
+                ids, scores = scan_ram(mats[mode], qv, k=k)
+                scanned, label = rows, "exact in RAM"
+        else:                                # cascade — always available, the low-memory default
+            ids, scores, scanned = engine.cascade_search(qv, img, idx, k=k, rows=rows)
+            label = "cascade"
         ms = (time.time() - t0) * 1e3
         con = connect(); recs = fetch(con, ids); con.close()
         return json.dumps({
@@ -227,10 +234,13 @@ def cmd_serve(args):
         }).encode()
 
     def knobs(p):
-        return (p.get("mode", ["fused"])[0],
-                p.get("engine", ["cascade"])[0],
-                max(1, min(64, int(p.get("probes", ["8"])[0]))),
-                max(1, min(50, int(p.get("k", ["24"])[0]))))
+        def i(name, dflt, lo, hi):
+            try:
+                return max(lo, min(hi, int(p.get(name, [str(dflt)])[0])))
+            except (ValueError, TypeError):
+                return dflt
+        return (p.get("mode", ["fused"])[0], p.get("engine", ["cascade"])[0],
+                i("probes", 8, 1, 64), i("k", 24, 1, 50))
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -255,7 +265,7 @@ def cmd_serve(args):
             if not query:
                 return self.send(400, b'{"error":"empty query"}', "application/json")
             mode, eng, probes, k = knobs(p)
-            if mode not in mats:
+            if mode not in ("image", "text", "fused"):
                 return self.send(400, b'{"error":"bad mode"}', "application/json")
             t0 = time.time()
             with mps:

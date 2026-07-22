@@ -58,8 +58,10 @@ def load_binary():
 def binary_search(bits, q, k=10, rows=None):
     """Rank by agreeing sign bits (= d − Hamming). One XOR + table-lookup +
     sum per row — no multiplies. Returns (top-k ids, agreeing-bit counts)."""
-    rows = rows if rows is not None else len(bits)
+    rows = min(rows if rows is not None else len(bits), len(bits))   # never index past the packed rows
     qb = binarize(q)                                # the query's own sign bits
+    if qb.shape[-1] != bits.shape[1]:               # d must match the packed width
+        raise ValueError(f"query packs to {qb.shape[-1]} bytes, index has {bits.shape[1]}")
     d = bits.shape[1] * 8
     ids = np.empty(0, dtype=np.int64)
     scores = np.empty(0, dtype=np.int32)

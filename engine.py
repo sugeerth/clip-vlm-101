@@ -46,23 +46,32 @@ def build_indexes(img, rows, log=print, want=("binary", "i8", "opq", "ivf")):
 
 def load_indexes(rows, to_ram=False):
     """Load the compressed image-tower indexes the cascade rides on. With
-    to_ram, the binary/OPQ/int8 codes are pulled into RAM (≈ ⅛ the f32 towers) —
-    what `serve` does to search a million-plus in a fraction of the memory."""
+    to_ram, the binary/OPQ/int8 codes are really COPIED into RAM (≈ ⅛ the f32
+    towers) — np.array, not np.asarray, since same-dtype slicing only makes a
+    view; what `serve` does to search a million-plus in a fraction of the memory."""
     bits = binary.load_binary()
     R, books, codes = opq.load_opq()
     i8, i8scale = intq.load_i8()
-    if to_ram:
-        bits = np.asarray(bits[:rows]); codes = np.asarray(codes[:rows]); i8 = np.asarray(i8[:rows])
+    if to_ram:      # np.array forces a real copy off the memmap (asarray would view)
+        bits = np.array(bits[:rows]); codes = np.array(codes[:rows]); i8 = np.array(i8[:rows])
     return {"bits": bits, "R": R, "books": books, "codes": codes,
             "i8": i8, "i8scale": i8scale}
 
 
-def cascade_search(q, img, idx, k=10, stages=(2000, 400, 100), rows=None):
-    """binary → OPQ → int8 → exact, each re-scoring a shorter list. `img` is only
-    touched for the final ~stages[-1] vectors. Returns (ids, scores, rows scanned)."""
+def cascade_search(q, img, idx, k=10, stages=None, rows=None):
+    """binary → OPQ → int8 → exact, each re-scoring a shorter list. `img` (full
+    precision) is touched for ONLY the final ~stages[-1] vectors. Returns
+    (ids, scores, n read at full precision) — the honest "touched" number.
+
+    The binary top-n1 is the recall ceiling (nothing it drops is recoverable), so
+    n1 grows with the corpus by default (~2% of rows): coarse but cheap, it just
+    has to keep the true neighbours ALIVE for the finer stages to order."""
+    n = rows if rows is not None else len(idx["bits"])
+    if stages is None:
+        stages = (min(n, max(4000, n // 50)), 400, 100)
     n1, n2, n3 = stages
-    # LEVEL 0 — binary over all rows: the cheapest distance, widest net
-    pool = binary.binary_search(idx["bits"], q, k=n1, rows=rows)[0]
+    # LEVEL 0 — binary over all rows: the cheapest distance, the widest net
+    pool = binary.binary_search(idx["bits"], q, k=n1, rows=n)[0]
     # LEVEL 1 — OPQ ADC on the pool's codes (rotated-space table lookups)
     T = opq.opq_tables(q, idx["R"], idx["books"])
     codes = np.asarray(idx["codes"])[pool]
@@ -72,7 +81,7 @@ def cascade_search(q, img, idx, k=10, stages=(2000, 400, 100), rows=None):
     s = np.asarray(idx["i8"])[pool].astype(np.float32) @ (idx["i8scale"] * q)
     pool = pool[np.argsort(s)[::-1][:n3]]
     # LEVEL 3 — exact f32, on the tiny finalist list: the ordering
+    reads = len(pool)                        # the only vectors read at full precision
     e = np.asarray(img[pool], np.float32) @ q
     top = np.argsort(e)[::-1][:k]
-    n = rows if rows is not None else len(idx["bits"])
-    return pool[top], e[top], n
+    return pool[top], e[top], reads
