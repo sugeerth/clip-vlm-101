@@ -418,6 +418,11 @@ def test_orchestrate():
     def top1(q):
         qv = fused(q)
         return max((it for it in items if it is not q), key=lambda it: float(fused(it) @ qv))
+    # empty input is coherent and matches the JS twin (no fabricated baseline):
+    empty = orchestrate.route_stats([])
+    assert empty == {"n": 0, "tiers": {1: 0, 2: 0, 3: 0}, "spent": 0,
+                     "naive": 0, "saved": 0, "abstains": 0}
+
     stats = orchestrate.route_stats([(q, top1(q)) for q in items])
     assert stats["spent"] < stats["naive"]          # escalation genuinely saves calls
     assert stats["saved"] == stats["naive"] - stats["spent"] > 0

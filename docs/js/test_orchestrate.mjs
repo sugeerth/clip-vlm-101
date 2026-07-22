@@ -48,5 +48,10 @@ check(stats.n === 14 && stats.tiers[1] === 6 && stats.tiers[2] === 6 && stats.ti
 check(stats.spent === 30 && stats.naive === 42 && stats.saved === 12 && stats.abstains === 2,
   'spent 30 vs 42 (saved 12, 29%) with 2 honest abstains — matches Python');
 
+// empty input is coherent and identical to route_stats([]) in Python (no fabricated baseline)
+const e = routeStats([]);
+check(e.n === 0 && e.naive === 0 && e.saved === 0 && e.spent === 0 && e.abstains === 0,
+  'route_stats([]) → all zeros, byte-identical to orchestrate.py');
+
 if (failed) { console.error('some orchestrate.js checks FAILED'); process.exit(1); }
 console.log('all orchestrate.js checks passed');

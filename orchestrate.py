@@ -71,9 +71,9 @@ def orchestrate(query_item, result_item):
 
     # ---- TIER 3 · DEBATE — only when the panel is deadlocked ----
     names, ops, ws = debate.from_council(votes)
-    if len(ops) < 2:                       # can't argue a blank — stay abstained
+    if len(ops) < 2:                       # escalated to debate but can't seat it
         path.append({"tier": 3, "name": "debate", "skipped": "too few seats"})
-        return _verdict("abstain", "no quorum", 2, 3, path, council=council)
+        return _verdict("abstain", "no quorum", 3, 3, path, council=council)
     d = debate.debate(ops, ws)
     camps = [[names[i] for i in g] for g in d["factions"]]
     path.append({"tier": 3, "name": "debate", "consensus": d["consensus"],
@@ -101,8 +101,7 @@ def route_stats(pairs):
         tiers[out["tier"]] += 1
         spent += out["llm_calls"]
         abstains += out["decision"] == "abstain"
-    n = max(len(pairs), 1)
-    naive = 3 * n                          # the panel-on-everything baseline
+    naive = 3 * len(pairs)                 # the panel-on-everything baseline
     return {"n": len(pairs), "tiers": tiers, "spent": spent, "naive": naive,
             "saved": naive - spent, "abstains": abstains}
 
@@ -145,8 +144,9 @@ if __name__ == "__main__":
         print(f"  resolved at TIER 2 panel  : {s['tiers'][2]:>2}/{s['n']}")
         print(f"  went to  TIER 3 debate    : {s['tiers'][3]:>2}/{s['n']}")
         print(f"  honestly abstained        : {s['abstains']:>2}/{s['n']}\n")
+        pct = f"{s['saved'] / s['naive']:.0%}" if s['naive'] else "0%"
         print(f"  judge calls spent : {s['spent']}   vs panel-on-everything: {s['naive']}"
-              f"   → saved {s['saved']} ({s['saved'] / s['naive']:.0%})")
+              f"   → saved {s['saved']} ({pct})")
         print("\neasy cases stop at a glance; only the genuinely uncertain pay for the")
         print("panel, only the deadlocked pay for a debate. Compute follows difficulty.")
         raise SystemExit(0)

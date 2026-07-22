@@ -49,9 +49,9 @@ export function orchestrate(queryItem, resultItem) {
 
   // ---- TIER 3 · DEBATE — only when the panel is deadlocked ----
   const { names, opinions, weights } = fromCouncil(votes);
-  if (opinions.length < 2) {                 // can't argue a blank — stay abstained
+  if (opinions.length < 2) {                 // escalated to debate but can't seat it
     path.push({ tier: 3, name: 'debate', skipped: 'too few seats' });
-    return verdict('abstain', 'no quorum', 2, 3, path, { council });
+    return verdict('abstain', 'no quorum', 3, 3, path, { council });
   }
   const d = debate(opinions, weights);
   const camps = d.factions.map(g => g.map(i => names[i]));
