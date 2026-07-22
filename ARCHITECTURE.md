@@ -282,7 +282,7 @@ afternoon.
 | encode | `embedder.py` `models.py` `fusion.py` `templates.py` | `python3 features.py images/cat.jpg` |
 | retrieve | `search.py` `ann.py` `hnsw.py` `diskann.py` `pq.py` `quantize.py` `scale.py` `cascade.py` | `python3 ann.py` · `python3 hnsw.py` · `python3 diskann.py` · `python3 pq.py` |
 | rank | `dcn.py` `learn2rank.py` `hermes.py` | `python3 dcn.py --image images/004_cat.jpg` · `python3 learn2rank.py` |
-| explain+gate | `explain.py` `conformal.py` `judge.py` `trust.py` `agent.py` | `python3 explain.py --image images/004_cat.jpg` · `python3 conformal.py --json docs/db.json` · `python3 judge.py … --image images/004_cat.jpg` · `python3 trust.py … --image images/004_cat.jpg` |
+| explain+gate | `explain.py` `conformal.py` `judge.py` `trust.py` `agent.py` `debate.py` `orchestrate.py` | `python3 explain.py --image images/004_cat.jpg` · `python3 conformal.py --json docs/db.json` · `python3 judge.py … --image images/004_cat.jpg` · `python3 trust.py … --image images/004_cat.jpg` · `python3 orchestrate.py --json docs/db.json --eval` |
 
 Sources: DCN v2 [arXiv:2008.13535], DCN v1 [arXiv:1708.05123], RankNet (Burges et
 al., ICML 2005), YouTube two-stage (Covington et al., RecSys 2016), Wide&Deep

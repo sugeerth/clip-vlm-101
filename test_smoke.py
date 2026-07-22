@@ -379,6 +379,53 @@ def test_diskann():
     assert pq_hi > reads_hi
 
 
+def test_orchestrate():
+    """orchestrate.py: the supervisor routes up the escalation ladder — easy cases
+    stop at a glance, uncertain ones convene the panel, deadlocked ones debate,
+    contested ones abstain — and it spends strictly fewer calls than the naive
+    panel-on-everything while never over-ruling a split panel."""
+    import orchestrate
+    import db
+
+    items = db.load_json_gallery("docs/db.json")
+    by = lambda s: next(it for it in items if s in it["path"])
+
+    # a decisive glance rules in ONE call and records only the glance
+    easy = orchestrate.orchestrate(by("004_cat"), by("005_dog"))
+    assert easy["tier"] == 1 and easy["decision"] == "relevant" and easy["llm_calls"] == 1
+    assert [p["name"] for p in easy["path"]] == ["glance"]
+
+    # an uncertain glance escalates to the panel, which rules (3 calls)
+    mid = orchestrate.orchestrate(by("004_cat"), by("001_bear"))
+    assert mid["tier"] == 2 and mid["reason"] == "panel" and mid["llm_calls"] == 3
+    assert [p["name"] for p in mid["path"]] == ["glance", "panel"]
+
+    # a deadlocked panel escalates to debate; a contested split abstains with factions
+    hard = orchestrate.orchestrate(by("000_apple"), by("010_pizza"))
+    assert hard["tier"] == 3 and hard["decision"] == "abstain" and hard["reason"] == "contested"
+    assert [p["name"] for p in hard["path"]] == ["glance", "panel", "debate"]
+    assert len(hard["factions"]) > 1                # dissenters named, not averaged away
+
+    # routing is monotone in the glance: extreme signals never escalate
+    lo = orchestrate.orchestrate(by("004_cat"), by("002_bicycle"))
+    assert lo["tier"] == 1 and lo["decision"] == "not relevant"
+
+    # the adaptive-compute payoff over the gallery: strictly cheaper than the
+    # panel-on-everything baseline, and every abstention is a genuine tier-3 split.
+    def fused(it):
+        v = np.asarray(it["image_emb"], np.float64); w = np.asarray(it["text_emb"], np.float64)
+        return np.concatenate([v, w]) / np.sqrt(2.0)
+    def top1(q):
+        qv = fused(q)
+        return max((it for it in items if it is not q), key=lambda it: float(fused(it) @ qv))
+    stats = orchestrate.route_stats([(q, top1(q)) for q in items])
+    assert stats["spent"] < stats["naive"]          # escalation genuinely saves calls
+    assert stats["saved"] == stats["naive"] - stats["spent"] > 0
+    assert stats["tiers"][1] + stats["tiers"][2] + stats["tiers"][3] == stats["n"]
+    # cost is monotone by tier: only tier-1 cases cost 1 call, the rest cost 3
+    assert stats["spent"] == stats["tiers"][1] * 1 + (stats["tiers"][2] + stats["tiers"][3]) * 3
+
+
 def test_softmax():
     from temperature import softmax
     scores = [0.3, 0.2, 0.1]
