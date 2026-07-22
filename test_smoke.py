@@ -431,6 +431,68 @@ def test_orchestrate():
     assert stats["spent"] == stats["tiers"][1] * 1 + (stats["tiers"][2] + stats["tiers"][3]) * 3
 
 
+def test_flow():
+    """flow.py: the structured orchestration runtime — deterministic topo order,
+    contract-gated handoffs (off-contract → quarantine → fail closed), fan-out
+    sub-agents that drop off-spec workers — and the demo graph agrees with the
+    council/debate agents it wires."""
+    import flow
+    import db
+
+    # deterministic topological order, tie-broken by insertion order
+    mk = lambda name, needs=(), contract=(), out=None: flow.Node(
+        name, (lambda i, c, _o=out or {}: dict(_o)), needs=needs, contract=contract)
+    diamond = flow.Flow([mk("a"), mk("b", ("a",)), mk("c", ("a",)), mk("d", ("b", "c"))])
+    assert diamond.order() == ["a", "b", "c", "d"]
+
+    # a cycle raises rather than hanging
+    try:
+        flow.Flow([mk("x", ("y",)), mk("y", ("x",))]).order()
+        assert False, "cycle should raise"
+    except ValueError:
+        pass
+
+    # off-contract output is quarantined and its dependents are skipped (fail closed)
+    bad = flow.Flow([
+        flow.Node("src", lambda i, c: {"nope": 1}, contract=("value",)),
+        flow.Node("sink", lambda i, c: {"ok": 1}, needs=("src",)),
+    ])
+    res = bad.run()
+    assert res["trace"][0]["status"] == "off-contract" and res["trace"][0]["missing"] == ["value"]
+    assert res["trace"][1]["status"] == "skipped" and res["trace"][1]["blocked_by"] == ["src"]
+    assert res["quarantined"] == ["sink", "src"]
+
+    # fan_out keeps contract-satisfying sub-agents, drops the off-spec ones
+    fo = flow.fan_out("p", [("good", lambda i, c: {"score": 0.5}),
+                            ("rogue", lambda i, c: {"opinion": "x"})],
+                      worker_contract=("score",))
+    out = fo.run({}, {})
+    assert len(out["workers"]) == 1 and out["workers"][0]["worker"] == "good"
+    assert out["dropped"] == ["rogue"]
+
+    # the demo graph on the committed gallery, agreeing with the wired agents
+    items = db.load_json_gallery("docs/db.json")
+    by = lambda s: next(it for it in items if s in it["path"])
+    assert flow.verdict_flow().order() == ["panel", "council", "decide"]
+
+    catdog = flow.run_verdict(by("004_cat"), by("005_dog"))
+    assert all(s["status"] == "ok" for s in catdog["trace"])
+    assert catdog["outputs"]["decide"] == {"decision": "relevant", "reason": "ruled", "via": "council"}
+
+    # a hung panel escalates through the graph to a debate → contested
+    ap = flow.run_verdict(by("000_apple"), by("010_pizza"))
+    dec = ap["outputs"]["decide"]
+    assert dec["decision"] == "abstain" and dec["reason"] == "contested" and dec["via"] == "debate"
+    assert len(dec["factions"]) > 1
+
+    # a rogue sub-agent injected into the real graph is dropped; the graph still rules
+    rogue = ("rogue", lambda i, c: {"name": "rogue", "opinion": "trust me"})
+    wr = flow.run_verdict(by("000_apple"), by("010_pizza"), extra_workers=[rogue])
+    assert wr["outputs"]["panel"]["dropped"] == ["rogue"]
+    assert len(wr["outputs"]["panel"]["workers"]) == 3      # the three real judges survive
+    assert wr["outputs"]["decide"]["decision"] == "abstain" and wr["quarantined"] == []
+
+
 def test_softmax():
     from temperature import softmax
     scores = [0.3, 0.2, 0.1]

@@ -27,6 +27,7 @@ jobs:
       - run: node docs/js/test_debate.mjs   # multi-agent debate: bounded-confidence consensus/factions, pinned to debate.py
       - run: node docs/js/test_reason.mjs   # the reasoning layer: end-to-end trace + consequence map, pinned to reason.py
       - run: node docs/js/test_orchestrate.mjs # the escalation orchestrator: glance▸panel▸debate routing, pinned to orchestrate.py
+      - run: node docs/js/test_flow.mjs     # the structured orchestration runtime: typed DAG + contract gate, pinned to flow.py
       # the model-free CLI demos must keep running on the committed gallery
       - run: python temperature.py
       - run: python similarity.py --json docs/db.json
@@ -44,6 +45,7 @@ jobs:
       - run: python drift.py --json docs/db.json --selftest  # drift detectors fire in order on a simulated stream
       - run: python debate.py --json docs/db.json --eval      # multi-agent debate as evaluation, model-free
       - run: python orchestrate.py --json docs/db.json --eval  # adaptive escalation: compute follows difficulty, honest abstain
+      - run: python flow.py --json docs/db.json --demo-contract # structured orchestration: a rogue sub-agent is quarantined, graph fails closed
       - run: python scaling.py             # the two-billion back-of-envelope, pure arithmetic
       - run: python cascade.py             # the approximation cascade: recall retained at every level
       - run: python reason.py --json docs/db.json --image images/004_cat.jpg  # end-to-end reasoning trace → consequence

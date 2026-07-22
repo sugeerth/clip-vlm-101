@@ -76,6 +76,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python debate.py --json docs/db.json --eval   # multi-agent debate as evaluation
 .venv/bin/python reason.py --json docs/db.json --image images/004_cat.jpg  # trace the whole stack → a decision
 .venv/bin/python orchestrate.py --json docs/db.json --eval   # adaptive escalation: compute follows difficulty
+.venv/bin/python flow.py --json docs/db.json --demo-contract # structured orchestration: quarantine a rogue agent
 .venv/bin/python crawler.py "red panda" -n 6 # grow the gallery, with receipts
 .venv/bin/python spider.py https://example.com/gallery  # or crawl any site
 .venv/bin/python search.py --image images/cat.jpg   # image-to-image search
@@ -158,6 +159,7 @@ Suggested reading order:
 | `debate.py` | ~180 | **multiple agents that talk**: the council's judges DEBATE via bounded-confidence dynamics — converge to consensus or split into named factions (contested) |
 | `reason.py` | ~200 | **the reasoning layer**: traces the whole pipeline into one legible chain (each step premise→conclusion→status) and maps it to a CONSEQUENCE — show / caveat / withhold |
 | `orchestrate.py` | ~140 | **the supervisor**: routes each case up an escalation ladder (glance ▸ panel ▸ debate ▸ abstain), spending compute only on doubt — an adaptive-compute agent cascade over the four agents above |
+| `flow.py` | ~230 | **structured orchestration**: a typed DAG of agents — fan-out to parallel sub-agents, fan-in, every handoff a schema-checked CONTRACT so an off-spec agent is quarantined, not trusted (orchestrator-worker, fails closed) |
 | `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
 | `scaling.py` | ~180 | **two-billion, on an envelope**: memory · O(√N) · shards · latency · cascade |
 | `cascade.py` | ~170 | **approximate at every level**: binary → PQ → int8 → exact, recall kept |
@@ -192,7 +194,7 @@ module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
 `agent.js` ↔ `agent.py`, `recsys.js` ↔ `user_tower.py`, `learn.js` ↔
 `learn2rank.py`, `conformal.js` ↔ `conformal.py`, `judge.js` ↔ `judge.py`,
 `trust.js` ↔ `trust.py`, `drift.js` ↔ `drift.py`, `debate.js` ↔ `debate.py`,
-`reason.js` ↔ `reason.py`, `orchestrate.js` ↔ `orchestrate.py`; `viz.js`, `motion.js`,
+`reason.js` ↔ `reason.py`, `orchestrate.js` ↔ `orchestrate.py`, `flow.js` ↔ `flow.py`; `viz.js`, `motion.js`,
 `tour.js`, and `trace.js` are page-only (the matrix, map and strips, the
 animation helpers, the guided tour, and the live agent trace), and `app.js`
 wires everything together. Read a Python file, then its twin — same pipeline,
@@ -789,6 +791,7 @@ lesson runs on committed data — and CI re-runs all of them on every push:
 | `python3 debate.py --json docs/db.json --eval` | the panel reaches **consensus on 12/14** top hits and stays **contested on 2** (the tag-fluke cases); ≥1 agent changes its mind on 8/14 |
 | `python3 reason.py --json docs/db.json --image images/004_cat.jpg` | every step passes (retrieve→…→trust) → **high trust → "show it as the answer"**; `--image .../000_apple.jpg` breaks at the council → **"show with a caveat"** |
 | `python3 orchestrate.py --json docs/db.json --eval` | **6/14** resolve at a glance, **6/14** at the panel, **2/14** debate (both abstain); **30 judge calls vs 42** — a **29%** saving by spending compute only on doubt |
+| `python3 flow.py --json docs/db.json --demo-contract` | the panel spawns **4 sub-agents**; the rogue emits no `score` and is **dropped**; the council rules from the **3 valid** votes — a bad agent can't poison the graph |
 | `python3 scale.py selftest` | chunked scan == naive argsort; ivf probes=8 keeps ≥7/10 of the truth scanning <½ the rows |
 
 (The numbers are pinned to the committed sample gallery; re-exporting your
