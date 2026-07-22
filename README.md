@@ -195,10 +195,11 @@ module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
 `learn2rank.py`, `conformal.js` ↔ `conformal.py`, `judge.js` ↔ `judge.py`,
 `trust.js` ↔ `trust.py`, `drift.js` ↔ `drift.py`, `debate.js` ↔ `debate.py`,
 `reason.js` ↔ `reason.py`, `orchestrate.js` ↔ `orchestrate.py`, `flow.js` ↔ `flow.py`; `viz.js`, `motion.js`,
-`tour.js`, and `trace.js` are page-only (the matrix, map and strips, the
-animation helpers, the guided tour, and the live agent trace), and `app.js`
-wires everything together. Read a Python file, then its twin — same pipeline,
-two languages.
+`tour.js`, `trace.js`, and `flowviz.js` are page-only (the matrix, map and
+strips, the animation helpers, the guided tour, the live agent trace, and the
+[live structured-graph visualization](https://sugeerth.github.io/clip-vlm-101/flow.html)),
+and `app.js` wires everything together. Read a Python file, then its twin — same
+pipeline, two languages.
 
 ## Why concatenate embeddings?
 
