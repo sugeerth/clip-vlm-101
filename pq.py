@@ -141,15 +141,15 @@ def cmd_export(args):
               user asks for precision, then a two-stage search re-ranks exactly.
     The manifest bakes in the MEASURED recall of each tier so js/pq.js can
     print honest numbers, not hopeful ones."""
-    import scale
+    import store
     from opq import opq_encode, opq_train
 
-    con = scale.connect()
-    rows = scale.n_rows(con)
+    con = store.connect()
+    rows = store.n_rows(con)
     stride = max(1, rows // args.rows)
     pick = np.arange(0, rows, stride)[:args.rows]
     print(f"slice: every {stride}th row of {rows:,} -> {len(pick):,} dishes")
-    X = np.asarray(np.load(scale.IMG, mmap_mode="r")[pick], dtype=np.float32)
+    X = np.asarray(np.load(store.IMG, mmap_mode="r")[pick], dtype=np.float32)
     X /= (np.linalg.norm(X, axis=1, keepdims=True) + 1e-12)
 
     t0 = time.time()

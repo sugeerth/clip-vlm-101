@@ -32,11 +32,16 @@ Measured on the real 690k image tower, self-queries (the hardest case):
 Run me:  python3 opq.py selftest      (synthetic clustered vectors, CI-safe)
 """
 import argparse
+import os
 import time
 
 import numpy as np
 
 from pq import KS, adc_tables, pq_encode, pq_search, pq_train
+from store import CHUNK, DATA
+
+OPQC = os.path.join(DATA, "img_opq_codes.npy")     # (rows, m) uint8 — 64 bytes/vector
+OPQZ = os.path.join(DATA, "img_opq.npz")           # rotation R, codebooks, row count
 
 
 def _reconstruct(codes, books):
@@ -84,6 +89,50 @@ def opq_search(codes, tables, k=10):
     """Identical to pq.py once the query is rotated — the codes already live
     in the rotated space, so the lookup scan never sees R again."""
     return pq_search(codes, tables, k=k)
+
+
+# ------------------------------------------ the million-scale OPQ index --
+# The extreme end of the storage hierarchy: 64 bytes/vector (32× smaller than
+# float32). Coarse on its own (~0.6 recall@10); its real job is stage one of a
+# two-stage search — nominate a few hundred candidates for an exact re-rank.
+def build_opq(img, rows, sample=150_000, log=print):
+    """Train OPQ on a sample, encode every row, persist codes + rotation +
+    codebooks, keyed to the row count so a grown corpus rebuilds it."""
+    stride = max(1, rows // sample)
+    tr = np.asarray(img[:rows][::stride][:sample], dtype=np.float32)   # only real rows
+    log(f"  training OPQ on {len(tr):,} rows (rotation + 64 codebooks) …")
+    R, books = opq_train(tr, log=lambda s: log(s))
+    codes = np.lib.format.open_memmap(OPQC, mode="w+", dtype=np.uint8,
+                                      shape=(rows, books.shape[0]))
+    for lo in range(0, rows, CHUNK):
+        hi = min(lo + CHUNK, rows)
+        codes[lo:hi] = opq_encode(np.asarray(img[lo:hi], np.float32), R, books)
+    codes.flush()
+    np.savez(OPQZ, R=R, books=books, rows=rows)
+    log(f"  OPQ: {OPQC} ({os.path.getsize(OPQC) / 1e6:,.0f} MB) + rotation/codebooks")
+
+
+def opq_stale(rows):
+    if not (os.path.exists(OPQC) and os.path.exists(OPQZ)):
+        return True
+    with np.load(OPQZ) as z:
+        return "rows" not in z or int(z["rows"]) != rows
+
+
+def load_opq():
+    z = np.load(OPQZ)
+    return z["R"], z["books"], np.load(OPQC, mmap_mode="r")
+
+
+def opq_rerank(codes, R, books, img, q, k=10, cand=400, rows=None):
+    """Stage one: OPQ's table-lookup scan over every row (no multiplies) picks a
+    shortlist. Stage two: score that shortlist exactly on f16. 64 bytes a vector
+    into ~0.9 recall — the compression AND the accuracy."""
+    n = rows if rows is not None else len(codes)
+    pool = opq_search(np.asarray(codes[:n]), opq_tables(q, R, books), k=cand)[0]
+    e = np.asarray(img[pool], np.float32) @ q
+    top = np.argsort(e)[::-1][:k]
+    return pool[top], e[top]
 
 
 # -------------------------------------------------------------- selftest --

@@ -100,6 +100,17 @@
   }
   .prec-btn:disabled { opacity: .6; cursor: default; }
   .prec-cost { opacity: .7; }
+  #liveGrid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  #liveGrid figure { transition: transform .18s, box-shadow .18s; }
+  #liveGrid figure:hover { transform: translateY(-3px); box-shadow: 0 12px 30px rgba(0,0,0,.18); }
+  #liveLb { position: fixed; inset: 0; background: rgba(0,0,0,.86); display: none;
+    place-items: center; z-index: 60; padding: 28px; cursor: zoom-out; backdrop-filter: blur(6px); }
+  #liveLb.on { display: grid; }
+  #liveLb img { max-width: min(94vw, 1100px); max-height: 82vh; border-radius: 14px;
+    box-shadow: 0 30px 90px rgba(0,0,0,.6); }
+  #liveLb .cap { position: fixed; bottom: 26px; left: 0; right: 0; text-align: center;
+    color: #eee; font-size: .9rem; text-shadow: 0 1px 6px #000; }
+  #liveLb .cap b { color: var(--accent); }
 </style>
 <script type="module">
   import { getTextEncoder } from './js/clip.js';
@@ -177,17 +188,34 @@
       + `query embedded in ${(tEmbed - t0).toFixed(0)} ms · ${stage}`;
     $('liveGrid').replaceChildren(...hits.map(h => {
       const [name, cafe, urlSuffix] = pack.items[h.id];
+      const url = pack.manifest.url_prefix + urlSuffix;
       const fig = document.createElement('figure');
+      fig.style.cursor = 'zoom-in';
       const img = document.createElement('img');
-      img.src = pack.manifest.url_prefix + urlSuffix;
-      img.alt = name; img.loading = 'lazy';
+      img.src = url; img.alt = name; img.loading = 'lazy';
       img.onerror = () => fig.classList.add('hidden');
       const cap = document.createElement('figcaption');
       cap.textContent = `${h.score >= 0 ? '+' : ''}${h.score.toFixed(3)} · ${name}`
         + (cafe ? ` — ${cafe}` : '');
+      fig.onclick = () => openLb(url, name, cafe, h.score);
       fig.append(img, cap);
       return fig;
     }));
+  }
+  // full-resolution lightbox — the demo's higher-res image view
+  function openLb(url, name, cafe, score) {
+    let lb = $('liveLb');
+    if (!lb) {
+      lb = document.createElement('div'); lb.id = 'liveLb';
+      lb.innerHTML = '<img alt=""><div class="cap"></div>';
+      lb.addEventListener('click', () => lb.classList.remove('on'));
+      addEventListener('keydown', e => { if (e.key === 'Escape') lb.classList.remove('on'); });
+      document.body.append(lb);
+    }
+    lb.querySelector('img').src = url;
+    lb.querySelector('.cap').innerHTML =
+      `<b>${score >= 0 ? '+' : ''}${score.toFixed(3)}</b> · ${name}` + (cafe ? ` — ${cafe}` : '');
+    lb.classList.add('on');
   }
   $('liveq').addEventListener('input', () => {
     if (!pack) return;                    // never auto-download on a keystroke

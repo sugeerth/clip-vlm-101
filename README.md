@@ -162,9 +162,17 @@ Suggested reading order:
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
 | `grow.py` | ~150 | **grow the gallery 100× in one command**: bulk-crawl ~114 diverse topics → embed → dedup → a bigger `db.json` (remote thumbnails, no committed blobs) |
 | `spider.py` | ~170 | **the web crawler**: BFS any site for images — robots.txt, pacing, caps |
-| `scale.py` | ~730 | **at scale**: records in SQLite, scans in packed f16 memmaps — per-dim int8, OPQ, ivf, two-stage re-rank + RAM/GPU serving, all rows-keyed and self-healing |
-| `pq.py` | ~230 | **product quantization**: 64 bytes/vector + table-lookup (ADC) search — a 100k slice ships to the BROWSER (`js/pq.js` is its twin), with a lazy int8 refine tier |
-| `opq.py` | ~150 | **optimised PQ**: a learned rotation before the split — same 64 bytes, ~10 recall points more; reused by `scale.py` and `pq.py` |
+| `scale.py` | ~230 | **at scale** — the conductor: one CLI over the engine below (`ingest`, `search`, `bench`, `serve`, `selftest`) |
+| `store.py` | ~140 | records in SQLite + packed f16 memmaps; the ingest — row id i is row i of every matrix |
+| `scan.py` | ~90 | the exact answer at three rungs of the storage hierarchy: memmap → RAM → GPU |
+| `ivf.py` | ~70 | the inverted-file index, industrial size: scan a few cells, not all rows |
+| `intq.py` | ~65 | **int8, per dimension** — half the bytes, CLIP's outlier dims tamed (0.68 → 0.86) |
+| `opq.py` | ~200 | **optimised PQ**: a learned rotation before the split — same 64 bytes, ~10 recall points more |
+| `binary.py` | ~75 | **1 bit/dimension** — the cheapest distance a CPU has (popcount); the cascade's widest net |
+| `engine.py` | ~90 | **the approximation cascade**: binary → OPQ → int8 → exact, + the self-healing index build |
+| `bench.py` | ~120 | the honest recall/latency table — every method measured, never claimed |
+| `serve.py` | ~250 | the corpus live at localhost — **low-memory via the cascade**, click-to-zoom, reverse image search |
+| `pq.py` | ~230 | **product quantization for the BROWSER**: 64 bytes/vector + ADC lookups (`js/pq.js` twin), lazy int8 refine tier |
 | `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 Five standalone lessons build on the stored vectors — every one runs
