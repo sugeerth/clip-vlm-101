@@ -162,8 +162,9 @@ Suggested reading order:
 | `crawler.py` | ~120 | **the crawler agent**: grow the gallery from Commons, with receipts |
 | `grow.py` | ~150 | **grow the gallery 100× in one command**: bulk-crawl ~114 diverse topics → embed → dedup → a bigger `db.json` (remote thumbnails, no committed blobs) |
 | `spider.py` | ~170 | **the web crawler**: BFS any site for images — robots.txt, pacing, caps |
-| `scale.py` | ~620 | **one million rows**: records in SQLite, scans in packed f16 memmaps — ivf + int8 + RAM serving at industrial size |
-| `pq.py` | ~200 | **product quantization**: 64 bytes/vector + table-lookup search — small enough that a 100k slice ships to the BROWSER (`js/pq.js` is its twin) |
+| `scale.py` | ~730 | **at scale**: records in SQLite, scans in packed f16 memmaps — per-dim int8, OPQ, ivf, two-stage re-rank + RAM/GPU serving, all rows-keyed and self-healing |
+| `pq.py` | ~230 | **product quantization**: 64 bytes/vector + table-lookup (ADC) search — a 100k slice ships to the BROWSER (`js/pq.js` is its twin), with a lazy int8 refine tier |
+| `opq.py` | ~150 | **optimised PQ**: a learned rotation before the split — same 64 bytes, ~10 recall points more; reused by `scale.py` and `pq.py` |
 | `export_web.py` | ~90 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 Five standalone lessons build on the stored vectors — every one runs
@@ -624,79 +625,99 @@ On the live demo, the 🧠 dropdown swaps brains (MobileCLIP S0/B-LT and
 SigLIP 2 via transformers.js) — the gallery re-embeds right in your
 browser, because embeddings from different models never mix.
 
-## One million rows — where the database's shape starts to matter
+## Many rows — where the database's shape starts to matter
 
 Everything above runs on a 14-image gallery. `scale.py` grows the SAME
-design to **1,000,000 real dishes** — [Qdrant's public Wolt food
+design to **690,000 real dishes** (of the dataset's 1M+, the slice this laptop
+has ingested so far) — [Qdrant's public Wolt food
 dataset](https://huggingface.co/datasets/Qdrant/wolt-food-clip-ViT-B-32-embeddings),
 whose image embeddings were precomputed with the *same* clip-ViT-B-32
-checkpoint this repo uses — and computes a million text embeddings itself,
+checkpoint this repo uses — and computes every text embedding itself,
 one dish name at a time through `embedder.py` (~1,900 names/s on MPS).
-Same 512-d space; the demo's text tower queries it directly.
+Same 512-d space; the demo's text tower queries it directly. The shape
+lessons below are identical at any scale.
 
-What changes at a million is the *layout*, not the math. `db.py`'s
-vector-BLOBs-in-SQLite is perfect at 14 rows and wrong at 1M (a scan would
-decode a million BLOBs per query), so `scale.py` splits the two jobs the
+What changes at scale is the *layout*, not the math. `db.py`'s
+vector-BLOBs-in-SQLite is perfect at 14 rows and wrong at 690k (a scan would
+decode 690k BLOBs per query), so `scale.py` splits the two jobs the
 way real vector stores do:
 
 ```
 data/scale.sqlite      the RECORDS - name, caption, cafe, url; row id i = matrix row i
-data/img_emb_f16.npy   the SCAN    - packed (1M x 512) float16 per tower, memory-
-data/txt_emb_f16.npy                mapped: chunked matrix @ vector, no BLOB decodes
+data/img_emb_f16.npy   the SCAN    - packed (690k x 512) float16 per tower, memory-
+data/txt_emb_f16.npy               mapped: chunked matrix @ vector, no BLOB decodes
 ```
 
-Three searches, all concepts the repo already taught: **brute** (`search.py`'s
-scan, chunked), **ivf** (`ann.py`'s index trained on a 100k sample), **int8**
-(`quantize.py` applied to the whole matrix). Fused search uses `fusion.py`'s
-identity — *(image·q + text·q) / 2* — so no 1024-d matrix ever exists.
+Four searches, each a concept the repo teaches: **brute** (`search.py`'s scan,
+chunked), **ivf** (`ann.py`'s index trained on a 100k sample), **int8**
+(`quantize.py`'s lesson, now with a *per-dimension* scale), and **OPQ**
+(`opq.py` — a learned rotation + product quantization, **64 bytes/vector**).
+The last two are compression: coarse on their own, but a short *exact re-rank*
+of their top few hundred candidates recovers the truth. Fused search uses
+`fusion.py`'s identity — *(image·q + text·q) / 2* — so no 1024-d matrix exists.
 
 ```bash
 python3 scale.py ingest                                  # data/part-*.parquet -> the DB
-python3 scale.py search "quattro formaggi pizza" --mode fused
-python3 scale.py search "ramen" --ann --probes 8         # scan ~1%, keep ~all of it
-python3 scale.py bench --ram --queries "sushi,burger,ramen"   # the honest table
-python3 scale.py serve                                   # live at localhost:8071
+python3 scale.py bench                                    # builds int8+OPQ+ivf, honest table
+python3 scale.py search "quattro formaggi pizza" --method opq   # 64B coarse -> exact re-rank
+python3 scale.py search "ramen" --method ivf --probes 16 # scan ~2%, keep ~all of it
+python3 scale.py serve                                    # live at localhost:8071
 ```
 
-`serve` is the storage-hierarchy lesson: the 868 ms scan was paging + casting a
-memory-mapped gigabyte, not math. Promote both towers to f32 RAM once and the
-same exact scan is one matmul — **27.7 ms for the truth, 4 ms with ivf** — behind
-a one-file UI (fused ranking, queries ensembled over two phrasings à la
-`ensemble.py`, and every answer prints what it cost and what it scanned).
+`serve` is the storage-hierarchy lesson: the memmap scan was paging + casting a
+gigabyte, not math. Promote both towers to f32 RAM once and the same exact scan
+is one matmul — **18.6 ms for the truth, 12.3 ms on the GPU, 2 ms with ivf** —
+behind a one-file UI (fused ranking, queries ensembled over two phrasings like
+`ensemble.py`, every answer printing what it cost and scanned).
 
-Measured on the full 1,000,000 rows (Apple silicon, warm cache, median over
-8 real text queries — records 288 MB, each f16 tower 1.02 GB, int8 512 MB,
-ivf index 10 MB):
+**Compression vs. accuracy** — recall@{1,10,100} against the exact top-k,
+self-queries (the hardest case), measured by `scale.py bench` on 690k:
 
-| search | ms / query | recall@10 | rows scanned |
-| --- | --- | --- | --- |
-| brute force, f16 → f32 | 868 | 1.00 — the truth | 100% |
-| brute force, int8 | 235 | 0.68 | 100% |
-| int8 top-100 → exact re-rank | 235 | **0.91** | 100% |
-| ivf, 8 probes | 11.0 | 0.90 | **1.0%** |
-| ivf, 16 probes | 19.7 | 0.95 | 1.9% |
-| brute force, f32 in RAM (`serve`) | **27.7** | 1.00 — the truth | 100% |
-| ivf-RAM, 8 probes (`serve`) | **4.0** | 0.90 | 1.0% |
+| method | bytes/vec | recall@1 | recall@10 | recall@100 |
+| --- | --- | --- | --- | --- |
+| brute force, f32 (the truth) | 2048 | 1.00 | 1.00 | 1.00 |
+| int8, per-dimension | 512 | 0.60 | 0.86 | 0.93 |
+| int8 -> exact re-rank | 512 | 0.66 | **0.91** | 0.93 |
+| OPQ, coarse | **64** | 0.62 | 0.59 | 0.62 |
+| **OPQ -> exact re-rank** | **64** | 0.68 | **0.92** | 0.92 |
 
-Two lessons the 14-image gallery could never teach: one shared int8 scale is
-too coarse for CLIP's outlier dimensions on a *packed* top-10 (0.68!), but the
-truth rarely leaves the top-100 — fetch cheap, score exactly, 0.91 at the same
-speed. And ivf recall *plateaus*: past 16 probes you pay ~2× the latency per
-+0.00 recall, because a few true neighbours live in cells no nearby probe visits.
+The bottom row is the headline: **64 bytes a vector — 32x smaller than float32 —
+and recall@10 of 0.92**. Two lessons the 14-image gallery could never teach: a
+*per-dimension* int8 scale beats one global scale on CLIP's outlier dimensions
+(0.86 vs 0.68), and **OPQ's learned rotation earns ~10 recall points over plain
+product quantization for free** (0.59 coarse vs 0.44) — same 64 bytes, a better
+split. Coarse codes are a filter; the exact re-rank of their shortlist is the
+answer.
+
+**Speed** is the other axis — the storage hierarchy, exact throughout, and ivf
+as the recall *dial*:
+
+| where the bytes live | ms / query | recall@10 |
+| --- | --- | --- |
+| f16 memmap (paged off disk) | ~110 | 1.00 — the truth |
+| f32 in RAM (`serve`) | **18.6** | 1.00 — the truth |
+| f32 on the GPU / MPS (`serve`) | **12.3** | 1.00 — the truth |
+| ivf, 8 probes | 2.0 | 0.86 (0.9% scanned) |
+| ivf, 16 probes | 4.8 | 0.90 (1.7% scanned) |
+
+ivf recall *plateaus* — a few true neighbours live in cells no nearby probe
+visits — so 16 probes keep 0.90 while touching under 2% of the rows.
 
 And the part you can touch: **[the scale page](https://sugeerth.github.io/clip-vlm-101/scale.html)
-searches a 100,000-dish slice live in your browser** — `pq.py` product-quantizes
-every vector to **64 bytes** (32× smaller than float32), so the whole index is a
-~7 MB pack on GitHub Pages, and `js/pq.js` scores it with pure table lookups
-(ADC) in a few milliseconds per keystroke, against a query embedded by the same
-in-browser text tower as the demo. Recall is measured and printed on the page,
-not promised.
+searches a 100,000-dish slice live in your browser** — `pq.py` OPQ-packs every
+vector to **64 bytes** (32x smaller than float32), so the base index is a ~7 MB
+pack on GitHub Pages, and `js/pq.js` scores it with pure table lookups (ADC, the
+query rotated by the shipped rotation) in a few ms per keystroke. Coarse recall
+is ~0.62; tap **+ precision** and it streams a 51 MB int8 tier and re-ranks on
+top for ~0.91 — the same two-stage architecture as the local engine, in a tab.
+Every number is measured and printed on the page, not promised.
 
 The 4 GB of parquet and the built database stay out of git; CI runs
-`scale.py selftest` and `pq.py selftest` — the same scan/ivf/int8/PQ machinery
-on synthetic clustered vectors, no model, no downloads — plus `test_pq.mjs`,
-which pins the JS twin to the Python math. The full story with the measured
-numbers: **[the scale report](https://sugeerth.github.io/clip-vlm-101/scale.html)**.
+`scale.py selftest`, `pq.py selftest` and `opq.py selftest` — the same
+scan/ivf/int8/OPQ machinery on synthetic clustered vectors, no model, no
+downloads — plus `test_pq.mjs`, which pins the JS twin (rotation + two-stage
+re-rank) to the Python math. The full story with the measured numbers:
+**[the scale report](https://sugeerth.github.io/clip-vlm-101/scale.html)**.
 
 ## Understanding CLIP — and squeezing more out of it
 
@@ -782,7 +803,8 @@ lesson runs on committed data — and CI re-runs all of them on every push:
 | `python3 drift.py --json docs/db.json --selftest` | the detectors escalate **stable → shift → drift → drift** as a growing fraction of the stream goes off-distribution; PSI is monotone in the contamination |
 | `python3 debate.py --json docs/db.json --eval` | the panel reaches **consensus on 12/14** top hits and stays **contested on 2** (the tag-fluke cases); ≥1 agent changes its mind on 8/14 |
 | `python3 reason.py --json docs/db.json --image images/004_cat.jpg` | every step passes (retrieve→…→trust) → **high trust → "show it as the answer"**; `--image .../000_apple.jpg` breaks at the council → **"show with a caveat"** |
-| `python3 scale.py selftest` | chunked scan == naive argsort; ivf probes=8 keeps ≥7/10 of the truth scanning <½ the rows |
+| `python3 scale.py selftest` | chunked scan == naive argsort; ivf keeps most of the truth scanning <½ the rows; int8/OPQ → exact re-rank recovers it |
+| `python3 opq.py selftest` | OPQ's learned rotation beats plain PQ on anisotropic data (the whole reason it exists) |
 
 (The numbers are pinned to the committed sample gallery; re-exporting your
 own gallery changes them — that's the point.)
