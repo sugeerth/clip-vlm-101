@@ -470,6 +470,22 @@ def test_flow():
     assert len(out["workers"]) == 1 and out["workers"][0]["worker"] == "good"
     assert out["dropped"] == ["rogue"]
 
+    # prototype-member names/keys must behave like ordinary strings — this is the
+    # reference the JS twin's own-key checks must match (in Python they just work).
+    proto = flow.Flow([
+        flow.Node("src", lambda i, c: {}, contract=("constructor",)),
+        flow.Node("sink", lambda i, c: {"ok": 1}, needs=("src",)),
+    ]).run()
+    assert proto["trace"][0]["status"] == "off-contract" and proto["quarantined"] == ["sink", "src"]
+    assert flow.Flow([flow.Node("toString", lambda i, c: {})]).order() == ["toString"]
+    try:
+        flow.Flow([flow.Node("a", lambda i, c: {}, needs=("toString",))])
+        assert False, "a need on an unknown node must raise"
+    except ValueError:
+        pass
+    pf = flow.fan_out("p", [("w", lambda i, c: {})], worker_contract=("toString",)).run({}, {})
+    assert pf["workers"] == [] and pf["dropped"] == ["w"]
+
     # the demo graph on the committed gallery, agreeing with the wired agents
     items = db.load_json_gallery("docs/db.json")
     by = lambda s: next(it for it in items if s in it["path"])

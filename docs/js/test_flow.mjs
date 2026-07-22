@@ -44,6 +44,25 @@ const foOut = fo.run({}, {});
 check(foOut.workers.length === 1 && foOut.workers[0].worker === 'good' && J(foOut.dropped) === J(['rogue']),
   'fanOut keeps contract-satisfying workers, drops the rest');
 
+// prototype-member names/keys must behave like plain strings (own-key checks,
+// not `in`) — otherwise 'constructor'/'toString' etc. silently fail OPEN in JS.
+const protoContract = new Flow([
+  { name: 'src', needs: [], contract: ['constructor'], run: () => ({}) },  // emits nothing
+  { name: 'sink', needs: ['src'], contract: [], run: () => ({ ok: 1 }) },
+]).run();
+check(protoContract.trace[0].status === 'off-contract' && protoContract.trace[1].status === 'skipped'
+  && J(protoContract.quarantined) === J(['sink', 'src']),
+  "a 'constructor' contract key still fails closed (own-key check, matches flow.py)");
+const protoNode = new Flow([{ name: 'toString', needs: [], contract: [], run: () => ({}) }]);
+check(J(protoNode.order()) === J(['toString']), "a node named 'toString' is a valid single-node graph");
+let protoNeed = false;
+try { new Flow([{ name: 'a', needs: ['toString'], contract: [], run: () => ({}) }]); }
+catch (e) { protoNeed = /unknown node/.test(e.message); }
+check(protoNeed, "a need on a prototype-member name is an unknown-node error, not a fake cycle");
+const protoFan = fanOut('p', [['w', () => ({})]], { workerContract: ['toString'] }).run({}, {});
+check(protoFan.workers.length === 0 && J(protoFan.dropped) === J(['w']),
+  "fanOut drops a worker missing a 'toString' contract key (own-key check)");
+
 // --- the demo graph, pinned to flow.py on the committed gallery ---
 const items = JSON.parse(readFileSync(new URL('../db.json', import.meta.url))).items;
 const by = s => items.find(it => (it.file || it.path || '').includes(s));

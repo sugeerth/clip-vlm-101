@@ -17,18 +17,32 @@ import { debate, fromCouncil } from './debate.js';
 
 export const RUBRICS = ['relevance', 'specificity', 'faithfulness'];
 
+// own-key membership: `k in obj` also consults Object.prototype, so 'constructor'
+// / 'toString' / '__proto__' would test true on any object and diverge from
+// Python's dict/set membership. hasOwnProperty matches flow.py exactly.
+const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+
+// Python sorted() orders by Unicode code point; JS default .sort()/`<` order by
+// UTF-16 code unit — they differ only for astral (> U+FFFF) chars. Compare by
+// code point so the trace's sorted key/name lists match flow.py byte for byte.
+const cp = (a, b) => {
+  const A = [...a], B = [...b], n = Math.min(A.length, B.length);
+  for (let i = 0; i < n; i++) { const d = A[i].codePointAt(0) - B[i].codePointAt(0); if (d) return d; }
+  return A.length - B.length;
+};
+
 export class Flow {
   // nodes: [{ name, run, needs?: string[], contract?: string[] }]
   constructor(nodes) {
     this.nodes = nodes.map(n => ({ needs: [], contract: [], ...n }));
-    this.by = {};
+    this.by = new Map();                       // Map, not {}, so prototype-member names are safe
     for (const n of this.nodes) {
-      if (this.by[n.name]) throw new Error('duplicate node names');
-      this.by[n.name] = n;
+      if (this.by.has(n.name)) throw new Error('duplicate node names');
+      this.by.set(n.name, n);
     }
     for (const n of this.nodes)
       for (const d of n.needs)
-        if (!this.by[d]) throw new Error(`node '${n.name}' needs unknown node '${d}'`);
+        if (!this.by.has(d)) throw new Error(`node '${n.name}' needs unknown node '${d}'`);
   }
 
   // Kahn's algorithm, tie-broken by insertion order → schedule is a pure function
@@ -55,25 +69,25 @@ export class Flow {
   run(context = {}) {
     const outputs = {}, trace = [], dead = new Set();
     for (const name of this.order()) {
-      const node = this.by[name];
-      const blocked = node.needs.filter(d => dead.has(d) || !(d in outputs));
+      const node = this.by.get(name);
+      const blocked = node.needs.filter(d => dead.has(d) || !has(outputs, d));
       if (blocked.length) {
         dead.add(name);
-        trace.push({ node: name, status: 'skipped', blocked_by: blocked.sort() });
+        trace.push({ node: name, status: 'skipped', blocked_by: blocked.sort(cp) });
         continue;
       }
       const inputs = Object.fromEntries(node.needs.map(d => [d, outputs[d]]));
       const result = node.run(inputs, context);
-      const missing = node.contract.filter(k => !(k in result));
+      const missing = node.contract.filter(k => !has(result, k));
       if (missing.length) {
         dead.add(name);
         trace.push({ node: name, status: 'off-contract', missing });
         continue;
       }
       outputs[name] = result;
-      trace.push({ node: name, status: 'ok', keys: Object.keys(result).sort() });
+      trace.push({ node: name, status: 'ok', keys: Object.keys(result).sort(cp) });
     }
-    return { outputs, trace, quarantined: [...dead].sort() };
+    return { outputs, trace, quarantined: [...dead].sort(cp) };
   }
 }
 
@@ -85,7 +99,7 @@ export function fanOut(name, workers, { needs = [], workerContract = [] } = {}) 
     const kept = [], dropped = [];
     for (const [wname, fn] of workers) {
       const out = fn(inputs, ctx);
-      if (workerContract.every(k => k in out)) kept.push({ worker: wname, ...out });
+      if (workerContract.every(k => has(out, k))) kept.push({ worker: wname, ...out });
       else dropped.push(wname);
     }
     return { workers: kept, dropped };
