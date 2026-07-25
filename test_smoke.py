@@ -509,6 +509,36 @@ def test_flow():
     assert wr["outputs"]["decide"]["decision"] == "abstain" and wr["quarantined"] == []
 
 
+def test_rankquality():
+    """rankquality.py: the answer belongs in the top 1-3 — the metrics reward
+    front-loading (P@3, MRR, nDCG) and penalize scrolling, into one 0-1 score."""
+    import rankquality as rq
+
+    # MRR / precision building blocks
+    assert abs(rq.reciprocal_rank([False, False, True]) - 1 / 3) < 1e-9
+    assert rq.reciprocal_rank([False, False]) == 0
+    assert abs(rq.precision_at_k([True, False, True, True], 3) - 2 / 3) < 1e-9
+
+    # nDCG: ideal order scores 1.0; worst-first scores lower
+    assert abs(rq.ndcg_at_k([1.0, 0.6, 0.5, 0.2, 0.1]) - 1.0) < 1e-9
+    assert rq.ndcg_at_k([0.1, 0.2, 0.3, 0.6, 1.0]) < 0.8
+
+    # scroll penalty: free within the top-3, linear past it, 1 at the bottom
+    assert rq.scroll_penalty(1, 10) == 0 and rq.scroll_penalty(3, 10) == 0
+    assert rq.scroll_penalty(10, 10) == 1 and rq.scroll_penalty(None, 10) == 1
+    assert rq.scroll_penalty(4, 5, 3) == 0.5
+
+    # the composite verdict: a perfect click-#1 ranking is quality 1.0 / top-3,
+    # a buried answer the user had to scroll to is penalized and "scrolled".
+    perfect = rq.ranking_quality([1.0, 0.6, 0.5, 0.2, 0.1], engaged_rank=1)
+    assert abs(perfect["quality"] - 1.0) < 1e-9 and perfect["verdict"] == "top-3"
+    buried = rq.ranking_quality([0.2, 0.2, 0.3, 0.4, 1.0], engaged_rank=5)
+    assert buried["verdict"] == "scrolled" and buried["quality"] < 0.5
+    assert abs(buried["mrr"] - 0.2) < 1e-9 and buried["precision_at_3"] == 0
+    # scrolling strictly lowers quality vs the same results engaged at the top
+    assert buried["quality"] < rq.ranking_quality([0.2, 0.2, 0.3, 0.4, 1.0], engaged_rank=1)["quality"]
+
+
 def test_softmax():
     from temperature import softmax
     scores = [0.3, 0.2, 0.1]

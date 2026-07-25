@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLIP VLM 101 — find, fast</title>
+<meta name="description" content="Real-time image search: type and the grid re-ranks instantly, the most relevant images render largest, edge-to-edge with no gaps — and a ranking-quality agent watches whether you have to scroll, because the answer belongs in the top 1-3.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="CLIP VLM 101 — find, fast">
+<meta property="og:description" content="Instant image search with a relevance-scaled, gap-free grid and a live ranking-quality agent that treats scrolling as failure.">
+<meta property="og:url" content="https://sugeerth.github.io/clip-vlm-101/find.html">
+<meta property="og:image" content="https://sugeerth.github.io/clip-vlm-101/images/004_cat.jpg">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
+<link rel="preload" href="db.json" as="fetch" crossorigin>
+<link rel="stylesheet" href="style.css">
+<script>
+  const saved = localStorage.getItem('theme');
+  if (saved) document.documentElement.dataset.theme = saved;
+</script>
+<style>
+  .searchbar { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg, #f7f7f5) 88%, transparent);
+    backdrop-filter: blur(8px); padding: 14px 0 12px; margin-bottom: 6px; }
+  .searchrow { display: flex; gap: 10px; align-items: center; }
+  #q {
+    flex: 1; font: inherit; font-size: 1.05rem; padding: 12px 16px; border-radius: 12px;
+    border: 1px solid var(--border); background: var(--surface); color: inherit; outline: none;
+  }
+  #q:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+  .qmeta { font-size: 0.76rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+  .chip { font-size: 0.76rem; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border);
+    background: var(--surface); cursor: pointer; color: inherit; }
+  .chip:hover { border-color: var(--accent); color: var(--accent-ink); }
+
+  /* the ranking-quality agent strip */
+  .rq { display: grid; grid-template-columns: 1fr auto; gap: 8px 18px; align-items: center;
+    border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 11px 15px; margin: 10px 0 16px; }
+  .rq .rql { font-family: var(--mono, ui-monospace, monospace); font-size: 0.72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .rqbar { height: 9px; border-radius: 5px; background: var(--hairline); overflow: hidden; margin-top: 5px; }
+  .rqbar > i { display: block; height: 100%; width: 0; border-radius: 5px; background: var(--good); transition: width .35s, background .35s; }
+  .rqverdict { font-family: var(--mono, ui-monospace, monospace); font-weight: 650; font-size: 0.86rem; white-space: nowrap; }
+  .rqverdict.good { color: var(--good); } .rqverdict.bad { color: var(--bad); } .rqverdict.warn { color: #b8860b; }
+  .rqmetrics { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 14px; font-family: var(--mono, ui-monospace, monospace);
+    font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .rqmetrics b { color: var(--ink, inherit); font-weight: 650; }
+  .rqnudge { grid-column: 1 / -1; font-size: 0.78rem; color: var(--bad); display: none; }
+  .rqnudge.on { display: block; }
+
+  /* the relevance-scaled, gap-free grid */
+  .rgrid { display: grid; grid-template-columns: repeat(var(--cols, 6), 1fr); grid-auto-rows: var(--cell, 92px);
+    grid-auto-flow: dense; gap: 0; border-radius: 14px; overflow: hidden; border: 1px solid var(--border); }
+  .rtile { position: relative; overflow: hidden; cursor: pointer; background: var(--hairline);
+    outline: none; border: 0.5px solid color-mix(in srgb, var(--bg, #000) 60%, transparent); }
+  .rtile img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .5s ease; }
+  .rtile:hover img, .rtile:focus img { transform: scale(1.06); }
+  .rtile.hero { grid-column: span 3; grid-row: span 3; }
+  .rtile.big  { grid-column: span 2; grid-row: span 2; }
+  .rtile.pending { opacity: .28; filter: grayscale(0.6); }     /* below the relevance threshold */
+  .rrank { position: absolute; top: 6px; left: 6px; font-family: var(--mono, ui-monospace, monospace);
+    font-size: 0.64rem; font-weight: 700; background: rgba(0,0,0,.62); color: #fff; padding: 2px 6px; border-radius: 6px; }
+  .rtile.top3 .rrank { background: var(--good); }
+  .rcap { position: absolute; inset: auto 0 0 0; padding: 22px 10px 8px 10px; color: #fff;
+    background: linear-gradient(transparent, rgba(0,0,0,.82)); opacity: 0; transition: opacity .2s;
+    font-size: 0.74rem; line-height: 1.35; }
+  .rtile:hover .rcap, .rtile:focus .rcap, .rtile:focus-within .rcap { opacity: 1; }
+  .rscore { position: absolute; top: 6px; right: 6px; font-family: var(--mono, ui-monospace, monospace);
+    font-size: 0.62rem; background: rgba(0,0,0,.55); color: #fff; padding: 2px 5px; border-radius: 5px; opacity: 0; transition: opacity .2s; }
+  .rtile:hover .rscore, .rtile:focus .rscore { opacity: 1; }
+  @media (max-width: 640px){ .rgrid { --cols: 4; --cell: 80px; } .rtile.hero { grid-column: span 2; grid-row: span 2; } }
+  @media (prefers-reduced-motion: reduce){ .rtile img, .rqbar > i { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header>
+  <nav class="nav" aria-label="Sections">
+    <a class="wordmark" href="./">CLIP&nbsp;VLM&nbsp;<span class="dim">101</span></a>
+    <div class="nav-links"><a href="#top" class="here">Find</a></div>
+    <a class="gh" href="./">← Simple search</a>
+    <a class="gh" href="flow.html">Watch the agents</a>
+    <a class="gh" href="scale.html">A million rows</a>
+    <a class="gh" href="https://github.com/sugeerth/clip-vlm-101">GitHub ↗</a>
+  </nav>
+</header>
+
+<main id="top">
+
+<div class="hero">
+  <h1>Find, <em>fast</em></h1>
+  <p class="lede">
+    Type and the grid <b>re-ranks as you type</b> — no button, no wait. The most
+    relevant images render <b>largest</b>, packed edge-to-edge with no gaps. And a
+    <b>ranking-quality agent</b> watches one thing: do you have to <b>scroll</b>? Because a
+    good ranker puts the answer in the <b>top 1-3</b> — if you're scrolling, it missed.
+  </p>
+</div>
+
+<div class="searchbar">
+  <div class="searchrow">
+    <input id="q" type="search" autocomplete="off" spellcheck="false"
+           placeholder="Search the gallery — try “cat”, “dessert”, “landmark”, “something blue”…" aria-label="Search images">
+    <span class="qmeta" id="qmeta">—</span>
+  </div>
+  <div class="chips" id="chips"></div>
+</div>
+
+<div class="rq" id="rq" aria-live="polite">
+  <div>
+    <div class="rql">ranking quality — the answer belongs in the top 1-3</div>
+    <div class="rqbar"><i id="rqfill"></i></div>
+  </div>
+  <div class="rqverdict warn" id="rqverdict">type to search</div>
+  <div class="rqmetrics" id="rqmetrics"></div>
+  <div class="rqnudge" id="rqnudge">↑ you're scrolling past the top results — a good ranking shouldn't need it.</div>
+</div>
+
+<div class="rgrid" id="grid" aria-label="Results"></div>
+
+<p class="fine" style="margin-top:18px">
+  Ranking is instant and lexical by default (matches your words against each image's caption and
+  tags); when the on-device CLIP encoder finishes loading it blends in <b>semantic</b> similarity and
+  re-ranks — progressive enhancement, so results never wait on a download. The quality gauge is
+  <code>rankquality.js</code> (the byte-identical twin of <code>rankquality.py</code>): precision@3,
+  MRR, nDCG@5 and a scroll penalty, combined into one score.
+</p>
+
+</main>
+
+<script type="module" src="./js/find.js"></script>
+
+</body>
+</html>
