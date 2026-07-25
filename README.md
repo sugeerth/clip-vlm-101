@@ -811,6 +811,16 @@ The smoke test stubs the CLIP encoder, so it runs without torch/transformers
 installed (`pip install numpy` is enough) — that's also exactly what CI does
 on every push (`.github/workflows/test.yml`).
 
+### Automated PR agents
+
+`.github/workflows/pr-agents.yml` runs three Claude passes on every pull request:
+a **peer reviewer** (the few findings that matter), a **distiller** that reads the
+semantics and boils a big diff down to one line per file plus where it could be
+shorter, and a **meta-judge** that verifies the distillation is faithful and clear.
+The three land as one PR comment, so a reviewer reads the summary instead of 2,700
+raw lines. It needs one repository secret — `ANTHROPIC_API_KEY`; without it the
+workflow skips cleanly (it never fails a PR), and forked PRs skip it by design.
+
 ## Sample image credits
 
 Sample photos are downloaded from [Wikimedia Commons](https://commons.wikimedia.org)

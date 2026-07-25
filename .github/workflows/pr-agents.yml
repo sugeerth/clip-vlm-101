@@ -1,0 +1,113 @@
+# PR agents — three Claude passes on every pull request:
+#
+#   1. PEER REVIEWER   reads the diff, flags the few correctness/clarity issues
+#                      that actually matter (this is the automated sibling of the
+#                      adversarial review already run by hand before each push).
+#   2. DISTILLER       understands the SEMANTICS of the change and boils a big
+#                      diff (2,000+ lines) down to a few lines a human can grasp
+#                      in a minute — one line per file, the key idea, plus concrete
+#                      suggestions to cut length without changing behavior.
+#   3. META-JUDGE      verifies the distillation is FAITHFUL to the diff (nothing
+#                      invented, nothing important dropped) and rates its
+#                      understandability; if it isn't clear enough, it rewrites it.
+#
+# The three results are posted as ONE structured PR comment, so a reviewer reads
+# the distilled summary instead of 2,700 raw lines.
+#
+# SETUP (one time): add an `ANTHROPIC_API_KEY` repository secret
+#   (Settings → Secrets and variables → Actions → New repository secret).
+# Without it the workflow SKIPS cleanly — it never fails a PR for a missing key.
+# Forked-PR runs don't receive the secret (GitHub security), so they also skip.
+name: pr-agents
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# cancel a superseded run when new commits land on the same PR
+concurrency:
+  group: pr-agents-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  agents:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      BASE: ${{ github.event.pull_request.base.ref }}
+    steps:
+      - name: Note if the key is missing
+        if: ${{ env.ANTHROPIC_API_KEY == '' }}
+        run: |
+          echo "::notice::No ANTHROPIC_API_KEY secret set — the PR agents are idle."
+          echo "Add the secret to enable automated peer-review + distillation on every PR."
+
+      - name: Checkout
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Claude Code
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Build the PR diff
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        run: |
+          git fetch origin "$BASE" --depth=1
+          # the diff of this PR against its base; cap the size so a giant PR can't
+          # blow the context budget (the distiller only needs to see the shape).
+          git diff "origin/$BASE...HEAD" > full.diff || true
+          head -c 220000 full.diff > pr.diff
+          echo "diff is $(wc -l < full.diff) lines ($(wc -c < full.diff) bytes)"
+
+      # ---- agent 1: peer reviewer ----
+      - name: Peer review
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        run: |
+          cat pr.diff | claude -p 'You are a senior code PEER REVIEWER. A pull-request unified diff is on stdin. Report ONLY the few findings that genuinely matter, most severe first: correctness bugs, unsafe or behavior-changing edits, and real clarity problems — each as one bullet with `file:line` and a one-line why. Ignore nits and style. If the diff is clean, say so in one sentence. Output tight GitHub-flavored markdown, no preamble.' \
+            --output-format text > review.md 2>review.err || { echo "_peer-review agent failed to run (see logs)._" > review.md; cat review.err; }
+
+      # ---- agent 2: distiller / refactor ----
+      - name: Distill the diff
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        run: |
+          cat pr.diff | claude -p 'You are a DISTILLER / refactor agent. A pull-request unified diff is on stdin. First understand the SEMANTICS — what each changed file does and why. Then output two short sections in markdown, no preamble: (1) "**What this PR does**" — at most one line per changed file/module: the file name in code font, then its single key idea, so a reviewer grasps the whole PR in under a minute no matter how many lines it is; (2) "**Could be shorter**" — up to 5 concrete, specific suggestions to REDUCE line count or complexity WITHOUT changing behavior (duplication to fold, dead code, over-abstraction, a helper that would collapse repetition), each with `file:line`. If nothing can be cut, say so honestly. Be terse.' \
+            --output-format text > distill.md 2>distill.err || { echo "_distiller agent failed to run (see logs)._" > distill.md; cat distill.err; }
+
+      # ---- agent 3: meta-judge (verifies the distillation) ----
+      - name: Meta-judge
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        run: |
+          { echo "=== PR DIFF ==="; cat pr.diff; echo; echo "=== PROPOSED DISTILLED SUMMARY ==="; cat distill.md; } \
+            | claude -p 'You are a META-JUDGE. On stdin: a PR diff, then a proposed DISTILLED SUMMARY of it. Do two things. (a) VERIFY the summary is FAITHFUL to the diff — every claim is supported, nothing important is omitted, nothing is invented. (b) RATE understandability 1-5: could a new engineer understand this PR from the summary alone? Output, in markdown with no preamble: a first line exactly like `**Faithful: yes/no · Clear: N/5**`, then — if your score is below 4 — a tightened rewrite of the summary under a heading "**Distilled (revised)**"; otherwise a one-line confirmation. Be strict and brief.' \
+            --output-format text > judge.md 2>judge.err || { echo "**Faithful: n/a** — _meta-judge failed to run._" > judge.md; cat judge.err; }
+
+      - name: Post the combined comment
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        run: |
+          LINES=$(wc -l < full.diff)
+          {
+            echo "## 🤖 PR agents — review · distill · judge"
+            echo "_Automated on this PR (${LINES} changed lines). Three Claude passes; the distilled summary is meant to be read instead of the raw diff._"
+            echo
+            echo "### 1 · Peer review"
+            cat review.md
+            echo
+            echo "### 2 · Distilled summary & where it could be shorter"
+            cat distill.md
+            echo
+            echo "### 3 · Meta-judge (is the summary faithful & clear?)"
+            cat judge.md
+            echo
+            echo "<sub>Set the \`ANTHROPIC_API_KEY\` secret to run this; forked PRs skip it by design.</sub>"
+          } > comment.md
+          gh pr comment "$PR" --body-file comment.md
