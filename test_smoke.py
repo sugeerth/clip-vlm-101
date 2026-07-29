@@ -539,6 +539,39 @@ def test_rankquality():
     assert buried["quality"] < rq.ranking_quality([0.2, 0.2, 0.3, 0.4, 1.0], engaged_rank=1)["quality"]
 
 
+def test_web():
+    """web.py: the internet-scale clip-retrieval client — parse + dedup + sort +
+    retry — exercised end to end against a canned backend, no network."""
+    import json
+    import web
+
+    # the whole path against the fake backend: dedup by url, sort by similarity,
+    # drop blank-url hits (this IS web.py's own selftest assertion set).
+    got = web.search("cat", n=10, opener=web._fake_backend)
+    assert [r["url"] for r in got] == ["https://ex.com/b.jpg", "https://ex.com/c.jpg", "https://ex.com/a.jpg"]
+    assert all(r["url"] for r in got) and got[0]["similarity"] >= got[-1]["similarity"]
+
+    # dedup keeps the first occurrence of each url
+    assert len(web.dedup([{"url": "x"}, {"url": "x"}, {"url": "y"}])) == 2
+
+    # retries: a backend that fails twice then succeeds still returns
+    calls = {"n": 0}
+    def flaky(url, body, headers, timeout):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise OSError("connection reset")
+        return web._fake_backend(url, body, headers, timeout)
+    assert len(web.search("dog", opener=flaky)) == 3 and calls["n"] == 3
+
+    # an image_url routes as image→image (no text field)
+    seen = {}
+    def capture(url, body, headers, timeout):
+        seen.update(json.loads(body))
+        return web._fake_backend(url, body, headers, timeout)
+    web.search("", image_url="https://ex.com/q.jpg", opener=capture)
+    assert seen.get("image_url") == "https://ex.com/q.jpg" and "text" not in seen
+
+
 def test_softmax():
     from temperature import softmax
     scores = [0.3, 0.2, 0.1]
