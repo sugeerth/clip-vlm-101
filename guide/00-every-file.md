@@ -7,15 +7,13 @@
 The layout is deliberately flat: every file sits at the repo root and imports
 its neighbours directly — no packaging, no `src/` tree, no import graph to
 unpick before you can execute one concept. Most files are runnable on their own
-as `python3 <file>.py`. Seventeen are not: `templates.py`, `embedder.py`,
-`tagger.py`, `fusion.py`, `labels.py`, `models.py`, `ensemble.py`, `db.py`,
-`agent.py`, `store.py`, `scan.py`, `ivf.py`, `intq.py`, `binary.py`,
-`engine.py`, `bench.py` and `serve.py` are pure libraries — they have no
-`__main__` block and do nothing when run directly; you import them, or reach
-them through a CLI that does (`bench.py` and `serve.py` run as
-`scale.py bench` / `scale.py serve`). Most files' docstrings start with a
-`pipeline:` line showing where they sit (`bench.py`, `download_samples.py` and
-`test_smoke.py` are the exceptions).
+as `python3 <file>.py`. Nine are not: `templates.py`, `embedder.py`,
+`tagger.py`, `fusion.py`, `labels.py`, `models.py`, `ensemble.py`, `db.py`
+and `agent.py` are pure libraries — they have no `__main__` block and do
+nothing when run directly; you import them, or reach them through a CLI
+that does. Most files' docstrings start with a `pipeline:` line showing
+where they sit (`download_samples.py` and `test_smoke.py` are the
+exceptions).
 
 Flat is easy to read one file at a time and hard to start on, so the inventory
 is tiered below. Read tier 1 in order. After that, jump to the tier that
@@ -96,24 +94,16 @@ The same vectors, used to rank items for a person instead of for a query.
 ## Tier 6 — scale and quantization
 
 `scaling.py` and `cascade.py` are the paper-and-envelope versions. `scale.py`
-is the conductor of the real engine, and the files under it are that engine —
-one concept per file. `pq.py` is the same quantization, shipped to a browser.
+is the real engine — storage, scan, IVF, int8 and OPQ all in one file, under
+one CLI. `pq.py` is the same quantization, shipped to a browser.
 → [A million rows — where the database's shape starts to matter](06-a-million-rows.md)
 
 | file | lines | the one concept it teaches |
 |---|---|---|
 | `scaling.py` | 185 | **two-billion, on an envelope**: memory · O(√N) · shards · latency · cascade |
 | `cascade.py` | 192 | **approximate at every level**: binary → PQ → int8 → exact, recall kept |
-| `scale.py` | 228 | **at scale** — the conductor: one CLI over the engine below (`ingest`, `search`, `bench`, `serve`, `selftest`) |
-| `store.py` | 143 | records in SQLite + packed f16 memmaps; the ingest — row id i is row i of every matrix |
-| `scan.py` | 90 | the exact answer at three rungs of the storage hierarchy: memmap → RAM → GPU |
-| `ivf.py` | 77 | the inverted-file index, industrial size: scan a few cells, not all rows |
-| `intq.py` | 68 | **int8, per dimension** — half the bytes, CLIP's outlier dims tamed (0.68 → 0.86) |
-| `opq.py` | 217 | **optimised PQ**: a learned rotation before the split — same 64 bytes, ~10 recall points more |
-| `binary.py` | 86 | **1 bit/dimension** — the cheapest distance a CPU has (popcount); the cascade's widest net |
-| `engine.py` | 87 | **the approximation cascade**: binary → OPQ → int8 → exact, + the self-healing index build |
-| `bench.py` | 137 | the honest recall/latency table — every method measured, never claimed |
-| `serve.py` | 313 | the corpus live at localhost — **low-memory via the cascade**, click-to-zoom, reverse image search |
+| `scale.py` | 903 | **at scale** — records in SQLite + packed f16 memmaps, the exact scan at three rungs of the storage hierarchy (memmap → RAM → GPU), the inverted-file index, int8 per dimension, and the OPQ re-rank; one CLI over all of it (`ingest`, `search`, `bench`, `serve`, `selftest`) |
+| `opq.py` | 168 | **optimised PQ**: a learned rotation before the split — same 64 bytes, ~10 recall points more |
 | `pq.py` | 256 | **product quantization for the BROWSER**: 64 bytes/vector + ADC lookups (`js/pq.js` twin), lazy int8 refine tier |
 
 ## Tier 7 — growing the gallery

@@ -145,7 +145,7 @@ Same algorithm, an order of magnitude apart — the win came from moving the byt
 | `features.py` | the one-call API: `fx.extract("photo.jpg")` → tags, caption, all three vectors |
 | `templates.py`, `embedder.py`, `tagger.py`, `fusion.py`, `db.py`, `ingest.py`, `search.py` | the other seven files of the 592-line core |
 | `scale.py` | the 690k engine — `ingest`, `search`, `bench`, `serve`, `selftest` |
-| `opq.py`, `pq.py`, `ivf.py`, `intq.py`, `binary.py` | one compression idea per file |
+| `opq.py`, `pq.py` | product quantization to 64 bytes/vector — the learned rotation, and the browser twin. IVF (`ivf_train`/`ivf_search`) and per-dimension int8 (`build_i8`) live inside `scale.py`; 1-bit binary (`binary_encode`) inside `cascade.py` |
 | `judge.py`, `conformal.py`, `trust.py`, `drift.py` | the evaluation layer: judges, coverage guarantees, drift gates |
 | `docs/` | the GitHub Pages demo (`main:/docs`) + 12 JS twin test suites |
 | `test_smoke.py` | 40 model-free tests; stubs the CLIP encoder so CI never installs torch |
