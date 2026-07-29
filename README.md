@@ -161,6 +161,7 @@ Suggested reading order:
 | `orchestrate.py` | ~140 | **the supervisor**: routes each case up an escalation ladder (glance ▸ panel ▸ debate ▸ abstain), spending compute only on doubt — an adaptive-compute agent cascade over the four agents above |
 | `flow.py` | ~230 | **structured orchestration**: a typed DAG of agents — fan-out to parallel sub-agents, fan-in, every handoff a schema-checked CONTRACT so an off-spec agent is quarantined, not trusted (orchestrator-worker, fails closed) |
 | `rankquality.py` | ~130 | **the ranking-quality agent**: the answer belongs in the top 1-3 — P@3, MRR, nDCG@k and a scroll penalty into one 0-1 score (scrolling = the ranker missed) |
+| `web.py` | ~180 | **search the internet, free**: a client for the already-free billion-scale CLIP index (Re-LAION-5B via clip-retrieval) — a query, not a crawler; same record shape as the local gallery |
 | `hermes.py` | ~180 | **the agentic searcher**: propose ⇄ evaluate ⇄ refine, to convergence |
 | `scaling.py` | ~180 | **two-billion, on an envelope**: memory · O(√N) · shards · latency · cascade |
 | `cascade.py` | ~170 | **approximate at every level**: binary → PQ → int8 → exact, recall kept |
@@ -196,7 +197,7 @@ module names**: `templates.js` ↔ `templates.py`, `clip.js` ↔ `embedder.py`,
 `learn2rank.py`, `conformal.js` ↔ `conformal.py`, `judge.js` ↔ `judge.py`,
 `trust.js` ↔ `trust.py`, `drift.js` ↔ `drift.py`, `debate.js` ↔ `debate.py`,
 `reason.js` ↔ `reason.py`, `orchestrate.js` ↔ `orchestrate.py`, `flow.js` ↔ `flow.py`,
-`rankquality.js` ↔ `rankquality.py`; `viz.js`, `motion.js`,
+`rankquality.js` ↔ `rankquality.py`, `web.js` ↔ `web.py`; `viz.js`, `motion.js`,
 `tour.js`, `trace.js`, `flowviz.js`, and `find.js` are page-only (the matrix, map
 and strips, the animation helpers, the guided tour, the live agent trace, the
 [live structured-graph visualization](https://sugeerth.github.io/clip-vlm-101/flow.html),

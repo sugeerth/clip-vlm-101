@@ -13,8 +13,12 @@
 // 14 images or 5 billion. The backend encodes the query, so the client is space-
 // agnostic; point it at a ViT-B/32 index to match this repo. fetchFn is injectable
 // so tests exercise the whole path with a mock — no network.
+// The public LAION backend has been intermittent-to-down since the Dec-2023
+// takedown — best-effort only; self-host clip-retrieval for reliability. The
+// server encodes your text, so the client is embedding-space-agnostic (the 5B
+// index is ViT-L/14; a LAION-400M B/32 index matches this repo's space exactly).
 export const DEFAULT_BACKEND = 'https://knn.laion.ai/knn-service';
-export const DEFAULT_INDEX = 'laion5B-L-14';     // 'laion5B-B-32' matches this repo
+export const DEFAULT_INDEX = 'laion5B-L-14';     // clip-retrieval's public 5B index (ViT-L/14)
 const RETRIES = 3;
 
 async function jpost(url, payload, fetchFn) {

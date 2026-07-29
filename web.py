@@ -30,9 +30,16 @@ import argparse
 import json
 import urllib.request
 
-# a clip-retrieval backend (the public LAION one by default; swap for your own).
+# A clip-retrieval backend. The public LAION one (knn.laion.ai) has been
+# intermittent-to-DOWN since the Dec-2023 takedown, so treat it as best-effort and
+# self-host for anything reliable (see the recipe above). The client is written to
+# clip-retrieval's documented POST /knn-service contract, so it works against your
+# own backend unchanged.  The 5B index is ViT-L/14 (768-d); because the SERVER
+# encodes your text, the client is embedding-space-agnostic for text queries — you
+# don't need to match dimensions. (To match this repo's ViT-B/32 space exactly, run
+# a LAION-400M B/32 index; the 5B set is L/14.)
 DEFAULT_BACKEND = "https://knn.laion.ai/knn-service"
-DEFAULT_INDEX = "laion5B-L-14"        # the public index; "laion5B-B-32" matches this repo
+DEFAULT_INDEX = "laion5B-L-14"        # clip-retrieval's public 5B index name (ViT-L/14)
 UA = "clip-vlm-101-web/1.0 (https://github.com/sugeerth/clip-vlm-101)"
 RETRIES = 3
 

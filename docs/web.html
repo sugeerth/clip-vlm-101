@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLIP VLM 101 — search the internet, free</title>
+<meta name="description" content="The internet's images are already CLIP-indexed for free at billion scale (Re-LAION-5B via clip-retrieval). This page queries that index in the same CLIP space, renders results in the relevance grid, and shows the $0 recipe to run your own.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="CLIP VLM 101 — search the internet, free">
+<meta property="og:description" content="Ride the free billion-scale CLIP index: search the internet's images with a query, not a crawler.">
+<meta property="og:url" content="https://sugeerth.github.io/clip-vlm-101/web.html">
+<meta property="og:image" content="https://sugeerth.github.io/clip-vlm-101/images/004_cat.jpg">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌐</text></svg>">
+<link rel="stylesheet" href="style.css">
+<script>
+  const saved = localStorage.getItem('theme');
+  if (saved) document.documentElement.dataset.theme = saved;
+</script>
+<style>
+  .searchbar { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg, #f7f7f5) 88%, transparent);
+    backdrop-filter: blur(8px); padding: 14px 0 12px; margin-bottom: 6px; }
+  .searchrow { display: flex; gap: 10px; align-items: center; }
+  #q { flex: 1; font: inherit; font-size: 1.05rem; padding: 12px 16px; border-radius: 12px;
+    border: 1px solid var(--border); background: var(--surface); color: inherit; outline: none; }
+  #q:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+  #go { font: inherit; font-weight: 600; padding: 12px 18px; border-radius: 12px; border: 1px solid var(--accent);
+    background: var(--accent); color: #fff; cursor: pointer; }
+  #go:disabled { opacity: .5; cursor: default; }
+  .adv { display: flex; gap: 8px; align-items: center; margin-top: 9px; font-size: 0.78rem; color: var(--muted); flex-wrap: wrap; }
+  #backend { flex: 1; min-width: 220px; font: inherit; font-size: 0.78rem; padding: 6px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface); color: inherit; font-family: var(--mono, monospace); }
+  .status { font-size: 0.85rem; margin: 4px 2px 14px; min-height: 1.2em; }
+  .status.err { color: var(--bad); }
+
+  .rq { display: grid; grid-template-columns: 1fr auto; gap: 8px 18px; align-items: center;
+    border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 11px 15px; margin: 6px 0 16px; }
+  .rq .rql { font-family: var(--mono, monospace); font-size: 0.72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .rqbar { height: 9px; border-radius: 5px; background: var(--hairline); overflow: hidden; margin-top: 5px; }
+  .rqbar > i { display: block; height: 100%; width: 0; border-radius: 5px; background: var(--good); transition: width .35s, background .35s; }
+  .rqverdict { font-family: var(--mono, monospace); font-weight: 650; font-size: 0.86rem; white-space: nowrap; }
+  .rqverdict.good { color: var(--good); } .rqverdict.bad { color: var(--bad); } .rqverdict.warn { color: #b8860b; }
+  .rqmetrics { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 14px; font-family: var(--mono, monospace);
+    font-size: 0.72rem; color: var(--muted); }
+  .rqmetrics b { color: var(--ink, inherit); font-weight: 650; }
+
+  .rgrid { display: grid; grid-template-columns: repeat(var(--cols, 6), 1fr); grid-auto-rows: var(--cell, 96px);
+    grid-auto-flow: dense; gap: 0; border-radius: 14px; overflow: hidden; border: 1px solid var(--border); min-height: 40px; }
+  .rtile { position: relative; overflow: hidden; cursor: pointer; background: var(--hairline);
+    border: 0.5px solid color-mix(in srgb, var(--bg, #000) 60%, transparent); }
+  .rtile img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .5s ease; }
+  .rtile:hover img, .rtile:focus img { transform: scale(1.06); }
+  .rtile.hero { grid-column: span 3; grid-row: span 3; }
+  .rtile.big { grid-column: span 2; grid-row: span 2; }
+  .rrank { position: absolute; top: 6px; left: 6px; font-family: var(--mono, monospace); font-size: 0.64rem; font-weight: 700;
+    background: rgba(0,0,0,.62); color: #fff; padding: 2px 6px; border-radius: 6px; }
+  .rtile.top3 .rrank { background: var(--good); }
+  .rcap { position: absolute; inset: auto 0 0 0; padding: 22px 10px 8px; color: #fff;
+    background: linear-gradient(transparent, rgba(0,0,0,.82)); opacity: 0; transition: opacity .2s; font-size: 0.72rem; line-height: 1.3; }
+  .rtile:hover .rcap, .rtile:focus .rcap { opacity: 1; }
+  @media (max-width: 640px){ .rgrid { --cols: 4; --cell: 84px; } .rtile.hero { grid-column: span 2; grid-row: span 2; } }
+  @media (prefers-reduced-motion: reduce){ .rtile img, .rqbar > i { transition: none !important; } }
+
+  .recipe { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); padding: 20px 22px; margin-top: 22px; }
+  .recipe h3 { margin: 0 0 6px; }
+  .recipe ol { margin: 10px 0 0; padding-left: 20px; }
+  .recipe li { margin: 7px 0; }
+  .recipe code { font-family: var(--mono, monospace); font-size: 0.86em; background: var(--accent-wash); padding: 1px 5px; border-radius: 5px; }
+  .recipe .free { font-family: var(--mono, monospace); color: var(--good); font-weight: 650; }
+</style>
+</head>
+<body>
+
+<header>
+  <nav class="nav" aria-label="Sections">
+    <a class="wordmark" href="./">CLIP&nbsp;VLM&nbsp;<span class="dim">101</span></a>
+    <div class="nav-links"><a href="#top" class="here">Search the web</a></div>
+    <a class="gh" href="find.html">← Fast local search</a>
+    <a class="gh" href="scale.html">A million rows</a>
+    <a class="gh" href="https://github.com/sugeerth/clip-vlm-101">GitHub ↗</a>
+  </nav>
+</header>
+
+<main id="top">
+
+<div class="hero">
+  <h1>Search the <em>internet's</em> images — free</h1>
+  <p class="lede">
+    This gallery has 14 images because <i>we</i> didn't index more. But the internet's
+    images are <b>already indexed</b> — free, at <b>billion scale</b>, in the same CLIP
+    space this repo teaches. LAION crawled ~5.5&nbsp;billion image-text pairs from Common
+    Crawl and released them CLIP-embedded (the safety-cleaned <b>Re-LAION-5B</b>);
+    <b>clip-retrieval</b> serves nearest-neighbour search over them. So searching the web
+    isn't a crawl you run — it's a <b>query you send</b>, and the index cost is
+    <b>$0</b> because someone already paid it and gave it away.
+  </p>
+  <p class="fine">Results render in the same relevance grid and are watched by the same
+    ranking-quality agent as the local search — 14 images or 5 billion, identical machinery.</p>
+</div>
+
+<div class="searchbar">
+  <div class="searchrow">
+    <input id="q" type="search" autocomplete="off" placeholder="Search 5 billion web images — “a red panda in snow”, “brutalist architecture”…" aria-label="Search the web">
+    <button id="go">Search</button>
+  </div>
+  <div class="adv">
+    <label for="backend">clip-retrieval backend:</label>
+    <input id="backend" spellcheck="false" aria-label="KNN backend URL">
+    <span>— the public one is often down; point this at your own for reliability.</span>
+  </div>
+</div>
+
+<div class="status" id="status"></div>
+
+<div class="rq" id="rq" aria-live="polite" hidden>
+  <div>
+    <div class="rql">ranking quality — the answer belongs in the top 1-3</div>
+    <div class="rqbar"><i id="rqfill"></i></div>
+  </div>
+  <div class="rqverdict warn" id="rqverdict">—</div>
+  <div class="rqmetrics" id="rqmetrics"></div>
+</div>
+
+<div class="rgrid" id="grid" aria-label="Results" hidden></div>
+
+<section class="recipe">
+  <h3>How it's <span class="free">free</span> — and how to run your own</h3>
+  <p>Every piece is open-source and the dataset is metadata only (image <em>URLs</em> + captions +
+    CLIP embeddings — the images are never redistributed, which is what keeps it lawful). To index
+    the internet's images yourself, at your own scale, for the cost of compute and an SSD:</p>
+  <ol>
+    <li><code>img2dataset</code> — download &amp; resize the Re-LAION-5B image-text pairs from their URLs.</li>
+    <li><code>open_clip</code> — embed them (the same CLIP family; ~1,500 img/s on one consumer GPU).</li>
+    <li><code>autofaiss</code> — build a <b>memory-mapped</b> FAISS index that fits one machine (the full
+      5-billion-vector index serves from SSD in ~4&nbsp;GB of RAM).</li>
+    <li><code>clip-retrieval</code> — serve KNN at <code>POST /knn-service</code>; paste its URL above.</li>
+  </ol>
+  <p class="fine">Notes: use <b>Re-LAION-5B</b> (the 2024 safety-cleaned re-release), keep the NSFW/violence
+    filters on, and match your query encoder to the index's CLIP model — the 5B index is ViT-L/14, so
+    for this repo's ViT-B/32 space use a LAION-400M B/32 index (or self-host a B/32 index of Re-LAION).
+    The client (<code>web.js</code>, the twin of <code>web.py</code>) is written to clip-retrieval's
+    documented contract, so it talks to any of these unchanged.</p>
+</section>
+
+</main>
+
+<script type="module">
+import { search, reachError, DEFAULT_BACKEND, DEFAULT_INDEX } from './js/web.js';
+import { rankingQuality, FREE } from './js/rankquality.js';
+
+const $ = id => document.getElementById(id);
+const q = $('q'), go = $('go'), backend = $('backend'), status = $('status');
+const grid = $('grid'), rq = $('rq'), rqFill = $('rqfill'), rqVerdict = $('rqverdict'), rqMetrics = $('rqmetrics');
+backend.value = DEFAULT_BACKEND;
+let engagedRank = null, results = [];
+
+async function run() {
+  const query = q.value.trim();
+  if (!query) return;
+  go.disabled = true; status.className = 'status'; status.textContent = `searching ~5 billion images for “${query}”…`;
+  grid.hidden = true; rq.hidden = true; engagedRank = null;
+  try {
+    results = await search(query, { n: 24, backend: backend.value.trim() || DEFAULT_BACKEND, index: DEFAULT_INDEX });
+    if (!results.length) { status.textContent = 'no results (the backend responded, but empty).'; go.disabled = false; return; }
+    status.textContent = `${results.length} of ~5,000,000,000 images, ranked by CLIP similarity.`;
+    renderGrid(); updateQuality(); grid.hidden = false; rq.hidden = false;
+  } catch (e) {
+    status.className = 'status err';
+    status.innerHTML = `couldn't reach the index: ${reachError(e)} <br>The client works — see the recipe below to point it at a live backend.`;
+  }
+  go.disabled = false;
+}
+
+function renderGrid() {
+  grid.replaceChildren();
+  const max = results[0]?.similarity || 1;
+  results.forEach((r, i) => {
+    const rank = i + 1, gain = Math.min(1, r.similarity / (max || 1));
+    const size = rank === 1 ? 'hero' : rank <= FREE ? 'big' : '';
+    const top3 = rank <= FREE ? ' top3' : '';
+    const a = document.createElement('a');
+    a.className = `rtile ${size}${top3}`; a.href = r.url; a.target = '_blank'; a.rel = 'noopener'; a.dataset.rank = rank;
+    a.innerHTML = `<img src="${r.url}" alt="${(r.caption || 'result').slice(0, 120)}" loading="lazy" referrerpolicy="no-referrer">`
+      + `<span class="rrank">#${rank}</span><span class="rcap">${(r.caption || '').slice(0, 140)}</span>`;
+    a.addEventListener('click', () => { engagedRank = rank; updateQuality(); });
+    grid.append(a);
+  });
+}
+
+function updateQuality() {
+  const max = results[0]?.similarity || 1;
+  const gains = results.map(r => Math.min(1, r.similarity / (max || 1)));
+  const relevant = gains.map(g => g >= 0.5);
+  const rqr = rankingQuality(gains, relevant, engagedRank ?? 1);
+  rqFill.style.width = `${Math.round(rqr.quality * 100)}%`;
+  rqFill.style.background = rqr.quality >= 0.66 ? 'var(--good)' : rqr.quality >= 0.33 ? '#b8860b' : 'var(--bad)';
+  let cls = 'warn', text;
+  if (engagedRank !== null) { cls = engagedRank <= FREE ? 'good' : 'bad'; text = engagedRank <= FREE ? `opened #${engagedRank} · top-3 ✓` : `opened #${engagedRank} · you scrolled`; }
+  else { const rel3 = relevant.slice(0, FREE).filter(Boolean).length; cls = rel3 ? 'good' : 'warn'; text = rel3 ? `${rel3} strong in the top 3` : 'nothing strong up top'; }
+  rqVerdict.className = `rqverdict ${cls}`; rqVerdict.textContent = text;
+  rqMetrics.innerHTML = `P@3 <b>${rqr.precision_at_3.toFixed(2)}</b>&nbsp;&nbsp;MRR <b>${rqr.mrr.toFixed(2)}</b>`
+    + `&nbsp;&nbsp;nDCG@5 <b>${rqr.ndcg.toFixed(2)}</b>&nbsp;&nbsp;quality <b>${rqr.quality.toFixed(2)}</b>`;
+}
+
+go.addEventListener('click', run);
+q.addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+</script>
+
+</body>
+</html>
