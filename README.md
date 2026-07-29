@@ -81,7 +81,7 @@ flowchart LR
   Q(["query: text or image"]) --> SEARCH["search.py<br/>dot products"]
   DB --> SEARCH
   SEARCH --> TOPK["ranked top-k"]
-  DB -.->|"690k rows"| SCALE["scale.py<br/>OPQ 64B, IVF, cascade"]
+  DB -.->|"690k rows"| SCALE["scale.py<br/>OPQ 64B, IVF, int8"]
   SCALE -.-> TOPK
 ```
 

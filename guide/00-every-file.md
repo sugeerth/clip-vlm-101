@@ -153,7 +153,7 @@ One Python file exports the gallery; the rest of the demo lives in `docs/js/`.
 | `export_web.py` | 89 | dump the DB to `docs/db.json` + the 2-D PCA map coords |
 
 The browser demo mirrors the same pipeline in `docs/js/` with **matching
-module names**. Twenty have a Python twin:
+module names**. Nineteen have a Python twin:
 
 | JS module | Python twin |
 |---|---|
