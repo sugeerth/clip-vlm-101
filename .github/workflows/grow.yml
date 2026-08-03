@@ -1,0 +1,108 @@
+# The self-growing gallery — a multi-step, fully automated database-expansion PR.
+#
+#   step 1  CRAWL     a rotating slice of grow.py's 114 topics (this week's 8),
+#                     freely-licensed images from Wikimedia Commons, with receipts.
+#   step 2  EMBED     the real CLIP ViT-B/32, downloaded onto the runner (CPU).
+#   step 3  MERGE     cumulatively on top of docs/db_grown.json — every run grows
+#                     the gallery further; near-duplicates are dropped at 0.985.
+#   step 4  VALIDATE  validate_db.py gates the export (schema, unit norms, dups,
+#                     map bounds, attribution receipts). A bad grow cannot ship.
+#   step 5  PR        the grown db lands as a pull request, never a direct push —
+#                     reviewable, revertable, and CI-checked like any other change.
+#   step 6  DEPLOY    merging the PR updates docs/, and GitHub Pages serves it:
+#                     find.html prefers db_grown.json automatically.
+#
+# The teaching gallery (docs/db.json, 14 images) stays FROZEN — every pinned test
+# and lesson references it. Growth lands in docs/db_grown.json, so the demo can
+# scale without ever breaking the numbers the site teaches.
+#
+# Note: PRs opened with the default GITHUB_TOKEN don't retrigger other workflows,
+# so this workflow runs the validation gate itself before opening the PR; pushing
+# any commit to the PR (or close/reopen) runs the full test suite on it too.
+name: grow
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"          # weekly, Monday 05:23 UTC
+  workflow_dispatch:
+    inputs:
+      topics:
+        description: "topics per run (rotating slice size)"
+        default: "8"
+      per:
+        description: "images to fetch per topic"
+        default: "6"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: grow
+  cancel-in-progress: false        # let a running grow finish; don't interleave
+
+jobs:
+  grow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the embedding stack (CPU)
+        run: |
+          pip install numpy pillow
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install transformers
+
+      - name: "Step 1-3 · crawl, embed, merge (cumulative)"
+        env:
+          TOPICS_N: ${{ github.event.inputs.topics || '8' }}
+          PER: ${{ github.event.inputs.per || '6' }}
+        run: |
+          # rotating slice: week number picks this run's topics, so successive
+          # runs sweep all 114 and the gallery grows evenly, not lopsidedly.
+          SLICE=$(python3 - <<'PY'
+          import datetime, os, grow
+          n = int(os.environ.get("TOPICS_N", "8"))
+          week = datetime.date.today().isocalendar().week + 52 * (datetime.date.today().year % 4)
+          start = (week * n) % len(grow.DEFAULT_TOPICS)
+          print("\n".join((grow.DEFAULT_TOPICS + grow.DEFAULT_TOPICS)[start:start + n]))
+          PY
+          )
+          echo "this run's topics:"; echo "$SLICE"
+          BASE=docs/db.json
+          [ -f docs/db_grown.json ] && BASE=docs/db_grown.json
+          echo "$SLICE" | xargs -d '\n' python3 grow.py --per "$PER" --merge \
+            --base "$BASE" --out docs/db_grown.json --topics
+
+      - name: "Step 4 · validate — the gate"
+        run: |
+          python3 validate_db.py --json docs/db_grown.json
+          python3 validate_db.py                     # the frozen gallery is untouched
+          git diff --stat --exit-code docs/db.json   # …provably untouched
+
+      - name: "Step 5 · open the PR"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet docs/db_grown.json 2>/dev/null && [ -n "$(git ls-files docs/db_grown.json)" ]; then
+            echo "no new images survived dedup — nothing to PR"; exit 0
+          fi
+          COUNT=$(python3 -c "import json;print(len(json.load(open('docs/db_grown.json'))['items']))")
+          BRANCH="grow/db-$(date -u +%Y%m%d)"
+          git config user.name "grow-bot"
+          git config user.email "actions@github.com"
+          git checkout -B "$BRANCH"
+          git add docs/db_grown.json
+          git commit -m "grow: the gallery is now ${COUNT} images (automated weekly crawl)"
+          git push -f -u origin "$BRANCH"
+          gh pr create --draft \
+            --title "grow: ${COUNT}-image gallery (automated)" \
+            --body "$(printf 'Automated multi-step gallery growth: crawl (rotating topic slice) → CLIP-embed on the runner → cumulative merge + dedup at 0.985 → **validate_db.py gate passed** (schema · unit norms · no near-dups · map bounds · attribution receipts).\n\nThe frozen 14-image teaching gallery (docs/db.json) is untouched — growth lands in docs/db_grown.json, which find.html prefers automatically. Merging deploys via GitHub Pages.\n\nGallery size after this run: **%s images**.' "$COUNT")" \
+            || gh pr edit "$BRANCH" --title "grow: ${COUNT}-image gallery (automated)" \
+            || true

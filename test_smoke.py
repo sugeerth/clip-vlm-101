@@ -572,6 +572,59 @@ def test_web():
     assert seen.get("image_url") == "https://ex.com/q.jpg" and "text" not in seen
 
 
+def test_validate_db():
+    """validate_db.py: the automated grow pipeline's gate — passes the committed
+    gallery, catches every corruption class, and gates the cumulative merge path
+    (grow --base) end to end, model-free."""
+    import copy
+    import json as _json
+    import tempfile
+    import pathlib
+
+    import grow
+    import validate_db as v
+
+    db = _json.loads(pathlib.Path("docs/db.json").read_text())
+    assert v.validate(db, verbose=False) == []          # the committed gallery passes
+
+    def probs(mut):
+        d = copy.deepcopy(db)
+        mut(d)
+        return v.validate(d, verbose=False)
+
+    # each corruption class is caught, by name
+    assert any("norm" in p for p in probs(
+        lambda d: d["items"][0]["image_emb"].__setitem__(slice(0, 256), [0.0] * 256)))
+    assert any("duplicate file" in p for p in probs(
+        lambda d: d["items"].__setitem__(1, dict(d["items"][0]))))
+    def neardup(d): d["items"][1]["image_emb"] = list(d["items"][0]["image_emb"])
+    assert any("near-duplicate" in p for p in probs(neardup))
+    def remote(d): d["items"][0]["file"] = "https://x.com/a.jpg"; d["items"][0].pop("attr", None)
+    assert any("attribution" in p for p in probs(remote))
+    assert any("map" in p for p in probs(lambda d: d["items"][0].__setitem__("map", [2.0, 0.5])))
+    assert any("seed" in p for p in probs(lambda d: d.__setitem__("items", d["items"][:5])))
+
+    # the cumulative path grow.yml runs, rehearsed offline: seed → payload →
+    # written as db_grown.json → merged on top of ITSELF via --base → still valid.
+    seed = grow._seed_records()
+    with tempfile.TemporaryDirectory() as td:
+        grown = pathlib.Path(td) / "db_grown.json"
+        grown.write_text(_json.dumps(grow.build_payload(seed)))
+        again = grow._seed_records(base=str(grown))     # next run's --base load
+        assert len(again) == len(seed)
+        payload2 = grow.build_payload(grow.dedup(again))
+        assert v.validate(payload2, verbose=False) == []
+        # a remote crawled record that duplicates an existing embedding must be
+        # DROPPED by dedup (keeping the gate green), receipts and all
+        fake = dict(seed[0])
+        fake["file"] = "https://commons.example/thumb.jpg"
+        fake["image_emb"] = list(seed[0]["image_emb"])
+        fake["attr"] = {"author": "a", "license": "cc-by", "source": "https://commons.example/p"}
+        merged = grow.dedup(again + [fake])
+        assert len(merged) == len(seed)
+        assert v.validate(grow.build_payload(merged), verbose=False) == []
+
+
 def test_softmax():
     from temperature import softmax
     scores = [0.3, 0.2, 0.1]

@@ -163,7 +163,11 @@ function onInput() {
 }
 
 async function main() {
-  DB = await fetch('db.json').then(r => r.json());
+  // prefer the grown gallery (written by the automated grow pipeline; hundreds of
+  // crawled images with remote thumbnails) and fall back to the frozen 14-image
+  // teaching gallery — the pinned lessons always reference db.json, search grows.
+  DB = await fetch('db_grown.json').then(r => r.ok ? r.json() : null).catch(() => null)
+    || await fetch('db.json').then(r => r.json());
   $('chips').replaceChildren(...CHIPS.map(c => {
     const b = document.createElement('button'); b.className = 'chip'; b.textContent = c;
     b.addEventListener('click', () => { qInput.value = c; onInput(); qInput.focus(); });

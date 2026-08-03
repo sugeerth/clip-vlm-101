@@ -54,6 +54,8 @@ jobs:
       - run: python cascade.py             # the approximation cascade: recall retained at every level
       - run: python reason.py --json docs/db.json --image images/004_cat.jpg  # end-to-end reasoning trace → consequence
       - run: python grow.py --selftest     # bulk gallery-growth: dedup + db.json export, model-free
+      - run: python validate_db.py         # the grow pipeline's gate: schema/norms/dups/receipts on the frozen gallery
+      - run: test ! -f docs/db_grown.json || python validate_db.py --json docs/db_grown.json  # …and on the grown one when present
       - run: python scale.py selftest       # the million-row machinery, synthetic + model-free
       - run: python pq.py selftest          # product quantization: the browser index's math
       - run: node docs/js/test_pq.mjs       # …and its JS twin agrees, lookup for lookup

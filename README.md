@@ -812,6 +812,18 @@ The smoke test stubs the CLIP encoder, so it runs without torch/transformers
 installed (`pip install numpy` is enough) — that's also exactly what CI does
 on every push (`.github/workflows/test.yml`).
 
+### The self-growing gallery
+
+`.github/workflows/grow.yml` expands the database **automatically, as a multi-step
+PR**: every week it crawls a rotating slice of `grow.py`'s 114 topics from Wikimedia
+Commons, CLIP-embeds them on the runner, merges cumulatively into
+`docs/db_grown.json` (dedup at 0.985), runs the **`validate_db.py` gate** (schema ·
+unit norms · no near-dups · map bounds · attribution receipts — a bad grow cannot
+ship), and opens a draft PR. Merging deploys via GitHub Pages, and
+[find.html](https://sugeerth.github.io/clip-vlm-101/find.html) prefers the grown
+gallery automatically. The 14-image teaching gallery stays **frozen** so every
+pinned lesson and test keeps its numbers.
+
 ### Automated PR agents
 
 `.github/workflows/pr-agents.yml` runs three Claude passes on every pull request:
