@@ -1,0 +1,154 @@
+{
+ "passages": [
+  {
+   "text": "The sky is blue because air molecules scatter short blue wavelengths of sunlight far more than red ones, an effect called Rayleigh scattering. Scattering strength rises with the inverse fourth power of wavelength.",
+   "src": "https://a",
+   "title": "A"
+  },
+  {
+   "text": "At sunset light crosses more air, so the blue is scattered away and the horizon glows red. The sky can look orange too.",
+   "src": "https://b",
+   "title": "B"
+  },
+  {
+   "text": "Blue sky on Mars is not blue: dust makes the daytime sky butterscotch while sunsets there look blue.",
+   "src": "https://c",
+   "title": "C"
+  },
+  {
+   "text": "Neapolitan pizza is baked in a wood fired oven at very high temperature for about ninety seconds.",
+   "src": "https://d",
+   "title": "D"
+  },
+  {
+   "text": "Rayleigh scattering also explains why the sky is blue at noon; blue light is scattered in every direction by tiny molecules of nitrogen and oxygen.",
+   "src": "https://a",
+   "title": "A"
+  },
+  {
+   "text": "Why is the sky blue? Short wavelengths scatter more. Why is the sky blue? Short wavelengths scatter more.",
+   "src": "https://a",
+   "title": "A"
+  }
+ ],
+ "cases": [
+  {
+   "q": "why is the sky blue",
+   "bm25": [
+    0.47626872,
+    0.484366898,
+    0.723388835,
+    0.0,
+    0.574745536,
+    0.715025813
+   ],
+   "rank": [
+    [
+     "https://c",
+     1,
+     0.7234
+    ],
+    [
+     "https://a",
+     2,
+     0.715
+    ],
+    [
+     "https://a",
+     2,
+     0.5747
+    ],
+    [
+     "https://b",
+     3,
+     0.4844
+    ]
+   ],
+   "extractive": "Blue sky on Mars is not blue: dust makes the daytime sky butterscotch while sunsets there look blue. [1] The sky can look orange too. [3]"
+  },
+  {
+   "q": "rayleigh scattering wavelength",
+   "bm25": [
+    3.266897974,
+    0.0,
+    0.0,
+    0.0,
+    2.067960316,
+    0.0
+   ],
+   "rank": [
+    [
+     "https://a",
+     1,
+     3.2669
+    ],
+    [
+     "https://a",
+     1,
+     2.068
+    ]
+   ],
+   "extractive": "Scattering strength rises with the inverse fourth power of wavelength. [1]"
+  },
+  {
+   "q": "pizza oven temperature",
+   "bm25": [
+    0.0,
+    0.0,
+    0.0,
+    5.166018414,
+    0.0,
+    0.0
+   ],
+   "rank": [
+    [
+     "https://d",
+     1,
+     5.166
+    ]
+   ],
+   "extractive": "Neapolitan pizza is baked in a wood fired oven at very high temperature for about ninety seconds. [1]"
+  },
+  {
+   "q": "mars sunset",
+   "bm25": [
+    0.0,
+    1.546969279,
+    1.587305513,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rank": [
+    [
+     "https://c",
+     1,
+     1.5873
+    ],
+    [
+     "https://b",
+     2,
+     1.547
+    ]
+   ],
+   "extractive": "At sunset light crosses more air, so the blue is scattered away and the horizon glows red. [2]"
+  }
+ ],
+ "chunk_text": "The sky is blue because air molecules scatter short blue wavelengths of sunlight far more than red ones, an effect called Rayleigh scattering. Scattering strength rises with the inverse fourth power of wavelength. At sunset light crosses more air, so the blue is scattered away and the horizon glows red. The sky can look orange too. Blue sky on Mars is not blue: dust makes the daytime sky butterscotch while sunsets there look blue. Neapolitan pizza is baked in a wood fired oven at very high temperature for about ninety seconds. Rayleigh scattering also explains why the sky is blue at noon; blue light is scattered in every direction by tiny molecules of nitrogen and oxygen. Why is the sky blue? Short wavelengths scatter more. Why is the sky blue? Short wavelengths scatter more.",
+ "chunk": [
+  "The sky is blue because air molecules scatter short blue wavelengths of sunlight far more than red ones, an effect called Rayleigh scattering.",
+  "Scattering strength rises with the inverse fourth power of wavelength. At sunset light crosses more air, so the blue is scattered away and the horizon glows red.",
+  "The sky can look orange too. Blue sky on Mars is not blue: dust makes the daytime sky butterscotch while sunsets there look blue.",
+  "Neapolitan pizza is baked in a wood fired oven at very high temperature for about ninety seconds. Rayleigh scattering also explains why the sky is blue at noon; blue light is scattered in every direction by tiny molecules of nitrogen and oxygen.",
+  "Why is the sky blue? Short wavelengths scatter more. Why is the sky blue? Short wavelengths scatter more."
+ ],
+ "tokens": [
+  "sky",
+  "blue",
+  "s",
+  "rayleigh",
+  "scattering",
+  "4th",
+  "power"
+ ]
+}
