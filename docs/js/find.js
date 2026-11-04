@@ -9,10 +9,23 @@
 import { dot } from './rank.js';
 import { getTextEncoder } from './clip.js';
 import { rankingQuality, FREE } from './rankquality.js';
+import { OnlineRanker } from './learn.js';
 
 const $ = id => document.getElementById(id);
 const grid = $('grid'), qInput = $('q'), qmeta = $('qmeta');
 const rqFill = $('rqfill'), rqVerdict = $('rqverdict'), rqMetrics = $('rqmetrics'), rqNudge = $('rqnudge');
+const rqLearn = $('rqlearn');
+
+// the on-device personal ranker: four floats in localStorage, trained by your
+// 👍/👎 AND by the ranking-quality agent's failure case — clicking a result you
+// had to scroll to teaches the ranker to put it higher next time. The quality
+// agent grades the ranker; your behavior teaches it. (Own key: find's features
+// are its own, so weights are not shared with the simple-search ranker.)
+const RANK_KEY = 'clipvlm.find.ranker';
+const ranker = new OnlineRanker();
+try { const st = JSON.parse(localStorage.getItem(RANK_KEY)); if (st) ranker.loadState(st); } catch { /* fresh */ }
+const persistRanker = () => { try { localStorage.setItem(RANK_KEY, JSON.stringify(ranker.toState())); } catch { /* private mode */ } };
+let taughtNote = '';            // one-shot "learned from that" note for the status line
 
 let DB = { items: [] };
 let encodeText = null;          // resolves once CLIP loads; null → lexical only
@@ -43,24 +56,40 @@ function rankNow() {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const scored = DB.items.map(item => {
     let s = lexical(item, words);
+    let cosI = 0, cosT = 0;
     if (qEmb && words.length) {
-      const cos = dot(qEmb, item.image_emb);             // text→image cosine (~0.15–0.30)
-      s += 1.4 * Math.max(0, (cos - 0.15) / 0.15);       // normalize the modality band, blend in
+      cosI = Math.max(0, dot(qEmb, item.image_emb));     // text→image cosine (~0.15–0.30)
+      cosT = Math.max(0, dot(qEmb, item.text_emb));
+      s += 1.4 * Math.max(0, (cosI - 0.15) / 0.15);      // normalize the modality band, blend in
     }
-    return { item, score: s };
+    return { item, score: s, cosI, cosT };
   });
   scored.sort((a, b) => b.score - a.score || a.item.file.localeCompare(b.item.file));
-  const max = scored[0]?.score || 1;
-  results = scored.map(r => {
-    const gain = words.length ? Math.min(1, r.score / (max || 1)) : 0;
-    return { ...r, gain, relevant: r.score > 0 && gain >= REL };
+
+  // the learner's four features — [cos_image, cos_text, tag_overlap, rank_prior],
+  // the same shape learn.js was trained for. rank_prior comes from the BASE order,
+  // so the learned preference argues with the base ranking, not with itself.
+  let ordered = scored.map((r, i) => ({
+    ...r,
+    base_score: r.score,
+    features: [r.cosI || Math.min(1, r.score), r.cosT,
+               words.filter(w => r.item.tags.some(t => t.includes(w))).length,
+               1 / (1 + i)],
+  }));
+  // your personal ranker re-orders: final = (1−β)·base + β·learned, β capped at 50%
+  if (words.length && ranker.n) ordered = ranker.rank(ordered, { baseKey: 'base_score' });
+
+  const max = ordered[0]?.score || 1;
+  results = ordered.map(r => {
+    const gain = words.length ? Math.min(1, (r.score || 0) / (max || 1)) : 0;
+    return { ...r, gain, relevant: r.base_score > 0 && gain >= REL };
   });
 
   engagedRank = null; maxSeenRank = 0;                   // a new query is a fresh ranking to judge
   render(words.length > 0);
   updateQuality(words.length > 0);
   qmeta.textContent = words.length
-    ? `${results.filter(r => r.score > 0).length} match${results.filter(r => r.score > 0).length === 1 ? '' : 'es'}`
+    ? `${results.filter(r => r.base_score > 0).length} match${results.filter(r => r.base_score > 0).length === 1 ? '' : 'es'}`
     : `${DB.items.length} images`;
 }
 
@@ -90,8 +119,8 @@ function render(hasQuery) {
     const tile = document.createElement('a');
     // top-aligned size tiers: rank 1 = hero, 2–3 = big, rest = normal (biggest = first,
     // never mid-grid — the only way relevance-size encoding helps rather than clutters)
-    const size = hasQuery && r.score > 0 ? (rank === 1 ? 'hero' : rank <= FREE ? 'big' : '') : '';
-    const pending = hasQuery && r.score <= 0 ? ' pending' : '';
+    const size = hasQuery && r.base_score > 0 ? (rank === 1 ? 'hero' : rank <= FREE ? 'big' : '') : '';
+    const pending = hasQuery && r.base_score <= 0 ? ' pending' : '';
     const top3 = hasQuery && rank <= FREE && r.relevant ? ' top3' : '';
     tile.className = `rtile ${size}${pending}${top3}`;
     tile.href = r.item.file; tile.tabIndex = 0; tile.dataset.rank = rank;
@@ -99,9 +128,40 @@ function render(hasQuery) {
     tile.innerHTML =
       `<img src="${r.item.file}" alt="${desc}" loading="lazy">`
       + (hasQuery ? `<span class="rrank">#${rank}</span>` : '')
-      + (hasQuery && r.score > 0 ? `<span class="rscore">${r.gain.toFixed(2)}</span>` : '')
+      + (hasQuery && r.base_score > 0 ? `<span class="rscore">${r.gain.toFixed(2)}</span>` : '')
       + `<span class="rcap">${desc}</span>`;
-    const engage = e => { e.preventDefault(); engagedRank = rank; updateQuality(true); };
+    // the closed loop, explicit: 👍/👎 trains the on-device ranker and re-ranks live
+    if (hasQuery) {
+      const votes = document.createElement('span');
+      votes.className = 'rvotes';
+      for (const [glyph, label] of [['👍', 1], ['👎', 0]]) {
+        const b = document.createElement('button');
+        b.textContent = glyph;
+        b.title = label ? 'more like this — teach the ranker' : 'less like this — teach the ranker';
+        b.addEventListener('click', e => {
+          e.preventDefault(); e.stopPropagation();
+          ranker.feedback(r.features, label);
+          persistRanker();
+          rankNow();                                     // re-rank with the new weights, live
+          taughtNote = `learned ${glyph} “${desc.split(',')[0]}” — re-ranked`;
+          renderLearn();
+        });
+        votes.append(b);
+      }
+      tile.append(votes);
+    }
+    // the closed loop, implicit: clicking a result you had to SCROLL to is the
+    // quality agent's failure case — so it becomes a training example, automatically.
+    const engage = e => {
+      e.preventDefault();
+      engagedRank = rank;
+      if (hasQuery && rank > FREE && r.base_score > 0) {
+        ranker.feedback(r.features, 1);
+        persistRanker();
+        taughtNote = `learned from the miss — “${desc.split(',')[0]}” will rank higher next time`;
+      }
+      updateQuality(true);
+    };
     tile.addEventListener('click', engage);
     tile.addEventListener('keydown', e => { if (e.key === 'Enter') engage(e); });
     grid.append(tile);
@@ -114,6 +174,7 @@ function updateQuality(hasQuery) {
   if (!hasQuery) {
     rqFill.style.width = '0%'; rqVerdict.className = 'rqverdict warn';
     rqVerdict.textContent = 'type to search'; rqMetrics.textContent = ''; rqNudge.classList.remove('on');
+    renderLearn();
     return;
   }
   const gains = results.map(r => r.gain);
@@ -147,6 +208,28 @@ function updateQuality(hasQuery) {
     + `&nbsp;&nbsp;scroll penalty <b>${rq.scroll_penalty.toFixed(2)}</b>`
     + `&nbsp;&nbsp;quality <b>${rq.quality.toFixed(2)}</b>`;
   rqNudge.classList.toggle('on', scrolling && engagedRank === null);
+  renderLearn();
+}
+
+// --- the loop made visible: what your feedback has taught the on-device ranker ---
+function renderLearn() {
+  if (!ranker.n) {
+    rqLearn.innerHTML = 'personal ranker: <b>untrained</b> — 👍/👎 a tile, or click a result you '
+      + 'had to scroll to, and it learns (four floats, your browser only)';
+    taughtNote = '';
+    return;
+  }
+  const beta = Math.round(100 * 0.5 * ranker.n / (ranker.n + 3));   // learn.js's blend cap
+  rqLearn.innerHTML =
+    `personal ranker: <b>${ranker.n}</b> signal${ranker.n === 1 ? '' : 's'} (${ranker.nPairs()} pairs)`
+    + ` · personal weight <b>${beta}%</b>`
+    + (taughtNote ? ` · <span class="taught">${taughtNote}</span>` : '')
+    + ` <button id="rqreset" type="button">reset</button>`;
+  $('rqreset').addEventListener('click', () => {
+    ranker.buffer.length = 0; ranker._refit();          // back to untrained w=[1,0,0,0]
+    persistRanker(); taughtNote = '';
+    rankNow();
+  });
 }
 
 // --- wiring: instant lexical on every keystroke, debounce the CLIP encode ---

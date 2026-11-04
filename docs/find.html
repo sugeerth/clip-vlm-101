@@ -46,6 +46,12 @@
   .rqmetrics b { color: var(--ink, inherit); font-weight: 650; }
   .rqnudge { grid-column: 1 / -1; font-size: 0.78rem; color: var(--bad); display: none; }
   .rqnudge.on { display: block; }
+  .rqlearn { grid-column: 1 / -1; font-size: 0.74rem; color: var(--muted); font-family: var(--mono, ui-monospace, monospace); }
+  .rqlearn b { color: var(--accent-ink); }
+  .rqlearn .taught { color: var(--good); font-weight: 650; }
+  .rqlearn button { font: inherit; font-size: 0.7rem; color: var(--muted); background: none; border: 1px solid var(--border);
+    border-radius: 6px; padding: 1px 7px; cursor: pointer; margin-left: 8px; }
+  .rqlearn button:hover { border-color: var(--accent); color: var(--accent-ink); }
 
   /* the relevance-scaled, gap-free grid */
   .rgrid { display: grid; grid-template-columns: repeat(var(--cols, 6), 1fr); grid-auto-rows: var(--cell, 92px);
@@ -67,6 +73,11 @@
   .rscore { position: absolute; top: 6px; right: 6px; font-family: var(--mono, ui-monospace, monospace);
     font-size: 0.62rem; background: rgba(0,0,0,.55); color: #fff; padding: 2px 5px; border-radius: 5px; opacity: 0; transition: opacity .2s; }
   .rtile:hover .rscore, .rtile:focus .rscore { opacity: 1; }
+  .rvotes { position: absolute; bottom: 6px; right: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity .2s; z-index: 2; }
+  .rtile:hover .rvotes, .rtile:focus-within .rvotes { opacity: 1; }
+  .rvotes button { font-size: 0.78rem; line-height: 1; padding: 4px 6px; border-radius: 7px; border: none;
+    background: rgba(0,0,0,.6); color: #fff; cursor: pointer; }
+  .rvotes button:hover { background: var(--accent); }
   @media (max-width: 640px){ .rgrid { --cols: 4; --cell: 80px; } .rtile.hero { grid-column: span 2; grid-row: span 2; } }
   @media (prefers-reduced-motion: reduce){ .rtile img, .rqbar > i { transition: none !important; } }
 </style>
@@ -113,6 +124,7 @@
   <div class="rqverdict warn" id="rqverdict">type to search</div>
   <div class="rqmetrics" id="rqmetrics"></div>
   <div class="rqnudge" id="rqnudge">↑ you're scrolling past the top results — a good ranking shouldn't need it.</div>
+  <div class="rqlearn" id="rqlearn"></div>
 </div>
 
 <div class="rgrid" id="grid" aria-label="Results"></div>
@@ -122,7 +134,10 @@
   tags); when the on-device CLIP encoder finishes loading it blends in <b>semantic</b> similarity and
   re-ranks — progressive enhancement, so results never wait on a download. The quality gauge is
   <code>rankquality.js</code> (the byte-identical twin of <code>rankquality.py</code>): precision@3,
-  MRR, nDCG@5 and a scroll penalty, combined into one score.
+  MRR, nDCG@5 and a scroll penalty, combined into one score. And the loop <b>closes</b>: 👍/👎 any
+  tile — or click a result you had to scroll to — and the on-device learner (<code>learn.js</code>,
+  pairwise RankNet, four floats in your localStorage) re-weights the ranking so next time the answer
+  sits higher. The quality agent grades the ranker; your feedback teaches it.
 </p>
 
 </main>
