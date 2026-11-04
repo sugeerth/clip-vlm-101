@@ -4,7 +4,7 @@
 
 [![python](https://img.shields.io/badge/python-3.12-blue)](.github/workflows/test.yml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-40%20python%20%2B%2012%20JS%20twins-brightgreen)](test_smoke.py)
+[![tests](https://img.shields.io/badge/tests-41%20python%20%2B%2013%20JS%20twins-brightgreen)](test_smoke.py)
 [![demo](https://img.shields.io/badge/demo-live%20in%20your%20browser-orange)](https://sugeerth.github.io/clip-vlm-101/)
 
 **Live demo → [sugeerth.github.io/clip-vlm-101](https://sugeerth.github.io/clip-vlm-101/)**
@@ -30,7 +30,7 @@ git clone https://github.com/sugeerth/clip-vlm-101 && cd clip-vlm-101
 pip install numpy pillow    # numpy does the math; pillow is for one crawler test
 
 python3 similarity.py --json docs/db.json      # the modality gap, measured
-python3 test_smoke.py                          # 40 tests, ~2 seconds
+python3 test_smoke.py                          # 41 tests, ~2 seconds
 ```
 
 Tail of the first command, verbatim:
@@ -64,6 +64,34 @@ Budget ~1.6 GB of disk, measured with `du` on this machine: the venv comes to 98
 (torch alone is 529 MB), and the first run pulls the 577 MB
 `openai/clip-vit-base-patch32` checkpoint into `~/.cache/huggingface`. Device
 auto-detects CUDA → Apple Silicon MPS → CPU (`embedder.best_device`).
+
+---
+
+## Ask the web — read 200 sources, answer in one line
+
+**[sugeerth.github.io/clip-vlm-101/ask.html](https://sugeerth.github.io/clip-vlm-101/ask.html)** —
+the same retrieval idea pointed at the web: fan out wide, rank passages, say very little.
+
+```bash
+pip install "scrapling[fetchers]" anthropic
+python3 answer.py "why is the sky blue"            # ≤45 words, every claim cited [n]
+python3 answer.py "what is OPQ" --pages 200 --words 25 --json
+python3 answer.py --selftest                       # a real Scrapling crawl of a local fixture web
+```
+
+`answer.py` sends each question (plus up to 3 rewrites) to DuckDuckGo, Bing, Wikipedia and
+Mojeek at once, fetches up to 200 result pages concurrently with
+[Scrapling](https://github.com/D4Vinci/Scrapling) (Chrome-fingerprinted `AsyncFetcher`),
+strips nav/header/footer with Scrapling selectors, chunks the text into ~80-word passages,
+keeps the BM25 top 10 (at most 2 per page), and has Claude (`claude-opus-5-5`, low effort)
+write the answer from those passages only. With no API key it answers *extractively*: the
+best-scoring sentences, verbatim, with their citations.
+
+The browser page cannot scrape arbitrary sites (CORS), so it reads the sources that allow
+cross-origin reads — Wikipedia (full text of the top articles), Hacker News, Stack Overflow
+and OpenAlex abstracts — up to 200 documents, with the same BM25 and extractive answer
+(`docs/js/ask.js`, pinned to `answer.py` by `docs/js/test_ask.mjs`). Paste an Anthropic key
+in the page's settings to get Claude-written answers; the key stays in your browser.
 
 ---
 
@@ -144,15 +172,16 @@ Same algorithm, an order of magnitude apart — the win came from moving the byt
 | [`guide/`](guide/README.md) | **start here after the quickstart** — 9 chapters, each runnable |
 | `features.py` | the one-call API: `fx.extract("photo.jpg")` → tags, caption, all three vectors |
 | `templates.py`, `embedder.py`, `tagger.py`, `fusion.py`, `db.py`, `ingest.py`, `search.py` | the other seven files of the 592-line core |
+| `answer.py` | ask the web: Scrapling fan-out to ≤200 pages → BM25 → one cited line (browser twin: `docs/ask.html`) |
 | `scale.py` | the 690k engine — `ingest`, `search`, `bench`, `serve`, `selftest` |
 | `opq.py`, `pq.py` | product quantization to 64 bytes/vector — the learned rotation, and the browser twin. IVF (`ivf_train`/`ivf_search`) and per-dimension int8 (`build_i8`) live inside `scale.py`; 1-bit binary (`binary_encode`) inside `cascade.py` |
 | `judge.py`, `conformal.py`, `trust.py`, `drift.py` | the evaluation layer: judges, coverage guarantees, drift gates |
-| `docs/` | the GitHub Pages demo (`main:/docs`) + 12 JS twin test suites |
-| `test_smoke.py` | 40 model-free tests; stubs the CLIP encoder so CI never installs torch |
+| `docs/` | the GitHub Pages demo (`main:/docs`) + 13 JS twin test suites |
+| `test_smoke.py` | 41 model-free tests; stubs the CLIP encoder so CI never installs torch |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | the four stages of billion-scale visual search, and which file shows each |
 
 CI ([`.github/workflows/test.yml`](.github/workflows/test.yml)) runs the smoke suite,
-12 Node twin suites that pin the browser JS to the Python math, and 21 model-free CLI
+13 Node twin suites that pin the browser JS to the Python math, and 21 model-free CLI
 demos on the committed gallery — on numpy and pillow alone.
 
 ---

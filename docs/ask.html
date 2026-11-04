@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask — read 200 sources, answer in one line</title>
+<meta name="description" content="A Perplexity-style answer engine: fans out to ~200 documents, ranks passages with BM25, and answers in one cited line. Scrapling-powered on the CLI, keyless in your browser.">
+<meta property="og:title" content="Ask — read 200 sources, answer in one line">
+<meta property="og:description" content="Reads a lot, says a little: ~200 documents in, one cited sentence out.">
+<meta property="og:url" content="https://sugeerth.github.io/clip-vlm-101/ask.html">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+<link rel="stylesheet" href="simple.css">
+<script>
+  try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+</script>
+<style>
+  .stage { width: min(760px, 100% - 32px); }
+  .chips button { font: inherit; font-size: 0.84rem; }
+  .answer {
+    width: 100%; margin: 26px 0 0; font-size: 1.22rem; line-height: 1.55; letter-spacing: -0.005em;
+    color: var(--ink); min-height: 1.5em;
+  }
+  .answer.empty { display: none; }
+  .answer .cite {
+    display: inline-block; min-width: 1.35em; padding: 0 5px; margin: 0 1px; border-radius: 6px;
+    font-size: 0.68em; line-height: 1.6; vertical-align: 0.25em; text-align: center; text-decoration: none;
+    background: var(--hairline); color: var(--ink-2); font-variant-numeric: tabular-nums;
+  }
+  .answer .cite:hover { background: var(--accent); color: #fff; }
+  .answer.streaming::after { content: '▍'; color: var(--accent); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .meta { width: 100%; margin: 10px 0 0; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .meta b { color: var(--ink-2); font-weight: 600; }
+  .srcs { width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin: 18px 0 0; }
+  .src {
+    display: block; padding: 9px 12px; border: 1px solid var(--hairline); border-radius: 12px;
+    background: var(--surface); text-decoration: none; color: var(--ink); font-size: 0.82rem; line-height: 1.35;
+    min-width: 0;
+  }
+  .src:hover { border-color: var(--accent); }
+  .src .host { color: var(--muted); font-size: 0.72rem; display: flex; gap: 6px; }
+  .src .host b { color: var(--accent-ink); font-weight: 600; }
+  .src .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+  details.key { width: 100%; margin: 26px 0 0; font-size: 0.82rem; color: var(--muted); }
+  details.key summary { cursor: pointer; }
+  details.key .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  details.key input, details.key select {
+    flex: 1 1 220px; min-width: 0; font: inherit; padding: 7px 10px; border-radius: 9px;
+    border: 1px solid var(--hairline); background: var(--surface); color: var(--ink);
+  }
+  details.key p { margin: 8px 0 0; }
+  .ledger { width: 100%; margin: 12px 0 0; font-size: 0.74rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .ledger .bad { color: #c2410c; }
+  footer { text-align: center; font-size: 0.78rem; color: var(--muted); padding: 28px 16px; }
+</style>
+</head>
+<body>
+<main class="stage">
+  <h1 class="logo">ask<span>·200</span></h1>
+  <p class="tag">reads ~200 sources, answers in one cited line</p>
+
+  <form class="pill" id="form" role="search">
+    <span class="mag" aria-hidden="true">⌕</span>
+    <input id="q" type="search" placeholder="Ask anything" autocomplete="off" aria-label="Question" autofocus>
+  </form>
+  <div class="chips" id="chips">
+    <button type="button">why is the sky blue</button>
+    <button type="button">what is product quantization</button>
+    <button type="button">rust vs go for web servers</button>
+    <button type="button">how do mRNA vaccines work</button>
+  </div>
+
+  <p class="status" id="status" aria-live="polite"></p>
+  <div class="answer empty" id="answer" aria-live="polite"></div>
+  <p class="meta" id="meta"></p>
+  <div class="srcs" id="srcs"></div>
+  <div class="ledger" id="ledger"></div>
+
+  <details class="key" id="keyBox">
+    <summary>answers are extractive — add an Anthropic key for Claude-written ones</summary>
+    <div class="row">
+      <input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" aria-label="Anthropic API key">
+      <select id="model" aria-label="Model">
+        <option value="claude-opus-5-5">claude-opus-5-5</option>
+        <option value="claude-sonnet-5-5">claude-sonnet-5-5</option>
+        <option value="claude-haiku-5-5">claude-haiku-5-5</option>
+      </select>
+      <select id="words" aria-label="Length">
+        <option value="25">one line (≤25 words)</option>
+        <option value="45" selected>short (≤45 words)</option>
+        <option value="90">paragraph (≤90 words)</option>
+      </select>
+    </div>
+    <p>The key stays in this browser (localStorage) and goes only to api.anthropic.com. Without one,
+      the answer is the best sentences, verbatim, from the ranked passages.</p>
+  </details>
+</main>
+
+<footer>
+  the browser reads CORS-open sources (Wikipedia, Hacker News, Stack Overflow, OpenAlex);
+  <a href="https://github.com/sugeerth/clip-vlm-101/blob/main/answer.py">answer.py</a> scrapes the whole web with
+  <a href="https://github.com/D4Vinci/Scrapling">Scrapling</a>
+  &nbsp;·&nbsp; <a href="index.html">image search</a>
+  &nbsp;·&nbsp; <a href="https://github.com/sugeerth/clip-vlm-101">github</a>
+</footer>
+
+<script type="module">
+import { gather, retrieve, extractive, claudeAnswer } from './js/ask.js';
+
+const $ = id => document.getElementById(id);
+const store = {
+  get: k => { try { return localStorage.getItem(k) ?? ''; } catch { return ''; } },
+  set: (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch {} },
+};
+$('key').value = store.get('ask_key');
+$('model').value = store.get('ask_model') || 'claude-opus-5-5';
+$('words').value = store.get('ask_words') || '45';
+for (const id of ['key', 'model', 'words']) $(id).addEventListener('change', e => store.set('ask_' + id, e.target.value.trim()));
+
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const host = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };
+function paint(text, sources) {
+  const by = new Map(sources.map(s => [s.n, s]));
+  $('answer').innerHTML = esc(text).replace(/\[(\d+)\]/g, (m, n) => {
+    const s = by.get(+n);
+    return s ? `<a class="cite" href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(s.title)}">${n}</a>` : m;
+  });
+}
+
+let run = 0;
+async function ask(question) {
+  question = question.trim();
+  if (!question) return;
+  const me = ++run, t0 = performance.now();
+  document.body.classList.add('searched');
+  history.replaceState(null, '', '?q=' + encodeURIComponent(question));
+  for (const id of ['meta', 'srcs', 'ledger']) $(id).innerHTML = '';
+  $('answer').className = 'answer empty';
+  const showLedger = l => {
+    if (me !== run) return;
+    const n = Object.values(l).reduce((s, x) => s + x.docs, 0);
+    $('status').textContent = `reading… ${n} documents from ${Object.keys(l).length} sources`;
+  };
+  const { docs, ledger, queries } = await gather(question, { onProgress: showLedger });
+  if (me !== run) return;
+  const { top, sources, passages } = retrieve(question, docs);
+  const words = +$('words').value;
+  $('status').textContent = '';
+  $('answer').className = 'answer';
+  let text = extractive(question, top, words), mode = 'extractive';
+  paint(text, sources);
+  const key = $('key').value.trim();
+  if (key && top.length) {
+    let acc = '';
+    $('answer').classList.add('streaming');
+    try {
+      text = await claudeAnswer({ key, model: $('model').value, question, top, words,
+        onText: t => { if (me === run) paint(acc += t, sources); } });
+      mode = $('model').value;
+    } catch (e) {
+      mode = `extractive (Claude failed: ${e.message ?? e})`;
+    }
+    if (me !== run) return;
+    $('answer').classList.remove('streaming');
+    paint(text, sources);
+  }
+  const cited = new Set([...text.matchAll(/\[(\d+)\]/g)].map(m => +m[1]));
+  $('meta').innerHTML = `read <b>${docs.length}</b> documents · <b>${passages.toLocaleString()}</b> passages · ` +
+    `${queries.length} queries · ${esc(mode)} · ${((performance.now() - t0) / 1000).toFixed(1)}s`;
+  $('srcs').innerHTML = sources.filter(s => cited.has(s.n) || cited.size === 0).concat(
+    sources.filter(s => !cited.has(s.n) && cited.size)).slice(0, 8).map(s =>
+    `<a class="src" href="${esc(s.url)}" target="_blank" rel="noopener"><span class="host"><b>${s.n}</b>${esc(host(s.url))}</span>` +
+    `<span class="t">${esc(s.title)}</span></a>`).join('');
+  $('ledger').innerHTML = Object.entries(ledger).map(([name, l]) =>
+    `<span class="${l.error ? 'bad' : ''}">${name}: ${l.error ? esc(l.error) : l.docs}</span>`).join('');
+  if (!docs.length) $('answer').textContent = 'No source answered — are you offline?';
+}
+
+$('form').addEventListener('submit', e => { e.preventDefault(); ask($('q').value); });
+$('chips').addEventListener('click', e => { if (e.target.tagName === 'BUTTON') { $('q').value = e.target.textContent; ask($('q').value); } });
+const q0 = new URLSearchParams(location.search).get('q');
+if (q0) { $('q').value = q0; ask(q0); }
+</script>
+</body>
+</html>

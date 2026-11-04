@@ -1107,6 +1107,26 @@ def test_db_roundtrip():
     assert db.count_images(con) == 1
 
 
+def test_answer():
+    """answer.py: BM25 → rank → cite → extractive, pinned to the JS twin's fixture."""
+    import json
+    import answer
+    fx = json.loads(pathlib.Path("docs/js/ask_fixture.json").read_text())
+    assert answer.twin_fixture() == fx, "run: python3 answer.py --write-fixture"
+    top = answer.rank("why is the sky blue", [{"text": "Unrelated pizza.", "src": "x"}])
+    assert top == [] and answer.extractive("q", top) == "Not in sources."
+    # ≤2 passages per source, citation numbers follow rank order
+    ps = [{"text": "blue sky blue", "src": "a"}] * 3 + [{"text": "blue sky", "src": "b"}]
+    top = answer.rank("blue sky", ps, k=10)
+    answer.number_sources(top)
+    assert [p["src"] for p in top] == ["a", "a", "b"] and [p["n"] for p in top] == [1, 1, 2]
+    try:
+        import scrapling.fetchers  # noqa: F401 — the live crawl needs the optional extra
+    except ImportError:
+        return
+    answer.selftest()
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
