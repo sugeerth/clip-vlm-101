@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLIP·search — the full demo</title>
+<meta name="description" content="Type a sentence (or drop a photo) and CLIP ranks images by meaning — real inference, running entirely in your browser.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="CLIP·search — search images by meaning">
+<meta property="og:description" content="Type a sentence or drop a photo; a real vision-language model ranks the results — entirely in your browser.">
+<meta property="og:url" content="https://sugeerth.github.io/clip-vlm-101/full.html">
+<meta property="og:image" content="https://sugeerth.github.io/clip-vlm-101/images/004_cat.jpg">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
+<link rel="preload" href="db.json" as="fetch" crossorigin>
+<link rel="stylesheet" href="simple.css">
+<script>
+  // Saved theme before first paint (shared with the explorable page).
+  const saved = localStorage.getItem('theme');
+  if (saved) document.documentElement.dataset.theme = saved;
+  // Old deep links into the explorable (likes / pick / mode / t) now live
+  // at explore.html — forward them. A bare ?q= stays here.
+  const p = new URLSearchParams(location.search);
+  if (['likes', 'pick', 'mode', 't'].some(k => p.has(k)))
+    location.replace('explore.html' + location.search);
+</script>
+</head>
+<body>
+
+<main class="stage" id="stage">
+  <h1 class="logo">CLIP<span>·search</span></h1>
+  <p class="tag">search images by <em>meaning</em> — a real vision-language model, in your browser</p>
+
+  <div class="pill" id="pill">
+    <span class="mag" aria-hidden="true">⌕</span>
+    <span class="img-chip hidden" id="imgChip">
+      <img id="imgChipThumb" alt="your image query">
+      <button id="imgChipClear" type="button" aria-label="Clear image query">✕</button>
+    </span>
+    <input id="q" type="search" placeholder="Try “a fluffy animal” — or drop a photo anywhere"
+           autocomplete="off" autofocus aria-label="Search query">
+    <button class="cam" id="cam" type="button" title="Search by image" aria-label="Search by image">📷</button>
+    <input type="file" id="file" accept="image/*" class="hidden">
+  </div>
+
+  <div class="chips" id="chips"></div>
+
+  <div class="bar-track hidden" id="barTrack"><div class="bar-fill" id="bar" style="width:0%"></div></div>
+  <p class="status" id="status"></p>
+  <details class="trace hidden" id="trace">
+    <summary id="traceSummary"></summary>
+    <div class="body" id="traceBody"></div>
+  </details>
+
+  <div class="rgrid" id="results" aria-live="polite"></div>
+  <div class="learn hidden" id="learnPanel" aria-live="polite"></div>
+  <div class="explain hidden" id="explain" aria-live="polite"></div>
+  <div class="webhead hidden" id="webHead"></div>
+  <div class="rgrid" id="webResults"></div>
+  <p class="hint hidden" id="detailsHint">click any result to see <em>why</em> it matched — its
+    tags, embeddings and scores, dissected in <a href="explore.html#lab">the Lab</a></p>
+</main>
+
+<footer>
+  every search runs locally — nothing leaves your machine
+  &nbsp;·&nbsp; <a href="./">the fast one</a>
+  &nbsp;·&nbsp; <a href="explore.html">how it works ↗</a>
+  &nbsp;·&nbsp; <a href="explore.html#lessons">the lessons</a>
+  &nbsp;·&nbsp; <a href="scale.html">a million rows</a>
+  &nbsp;·&nbsp; <a href="blog.html">how it scales to a billion</a>
+  &nbsp;·&nbsp; <a href="https://github.com/sugeerth/clip-vlm-101">github</a>
+</footer>
+
+<script type="module" src="js/simple.js"></script>
+</body>
+</html>

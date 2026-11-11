@@ -4,3 +4,4 @@ gallery.sqlite
 .DS_Store
 data/
 scale.sqlite
+node_modules
