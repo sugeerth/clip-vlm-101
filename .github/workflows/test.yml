@@ -16,6 +16,7 @@ jobs:
       - run: pip install numpy pillow   # pillow: spider.py's icon-size gate runs in test_smoke
       - run: python test_smoke.py
       - run: node docs/js/test_rank.mjs     # the JS math must mirror the Python
+      - run: node docs/js/test_instant.mjs  # front page's instant layer: lexicon matches db.json, preview math, hub bias
       - run: node docs/js/test_lessons.mjs  # the live lessons must reproduce the Python-pinned numbers
       - run: node docs/js/test_crawler.mjs  # web-search fan-out: retries, error prose, dedup — all mocked
       - run: node docs/js/test_learn.mjs    # on-device learned re-ranker: pinned to learn2rank.py

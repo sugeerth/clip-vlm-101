@@ -176,7 +176,9 @@ module names**. Nineteen have a Python twin:
 | `lessons.js` | `temperature.py`+`similarity.py`+`retrieval_eval.py`+`arithmetic.py`+`quantize.py`+`ann.py` |
 | `pq.js` | `pq.py` |
 | `crawler.js` | `crawler.py` (reached from Python as `hermes.py "…" --crawl N`) |
-| `simple.js` | *page-only* — the front page's one search box, composed from the modules above |
+| `instant.js` | *page-only* — the front page's instant layer: packed image vectors, hub-bias centring, the no-model word preview (`docs/lexicon.json`, built by `build_lexicon.mjs`) |
+| `fast.js` + `fast-worker.js` | *page-only* — the front page (`index.html`): cache → instant preview → CLIP in a Web Worker, latest-wins per keystroke |
+| `simple.js` | *page-only* — the full demo (`full.html`): the search box plus Hermes, the web crawl, judges and the learned re-ranker, composed from the modules above |
 
 `viz.js`, `motion.js`, `tour.js`, and `trace.js` are page-only (the matrix, map
 and strips, the animation helpers, the guided tour, and the live agent trace),

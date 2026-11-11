@@ -3,73 +3,175 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CLIP·search — search images by meaning</title>
-<meta name="description" content="Type a sentence (or drop a photo) and CLIP ranks images by meaning — real inference, running entirely in your browser.">
+<title>CLIP·search</title>
+<meta name="description" content="Search photos by meaning. Results on the first keystroke — a real CLIP model runs in your browser.">
 <meta property="og:type" content="website">
-<meta property="og:title" content="CLIP·search — search images by meaning">
-<meta property="og:description" content="Type a sentence or drop a photo; a real vision-language model ranks the results — entirely in your browser.">
+<meta property="og:title" content="CLIP·search">
+<meta property="og:description" content="Search photos by meaning. Results on the first keystroke — a real CLIP model runs in your browser.">
 <meta property="og:url" content="https://sugeerth.github.io/clip-vlm-101/">
 <meta property="og:image" content="https://sugeerth.github.io/clip-vlm-101/images/004_cat.jpg">
 <meta name="twitter:card" content="summary">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
 <link rel="preload" href="db.json" as="fetch" crossorigin>
-<link rel="stylesheet" href="simple.css">
+<link rel="preload" href="lexicon.json" as="fetch" crossorigin>
+<link rel="modulepreload" href="js/fast.js">
+<link rel="modulepreload" href="js/instant.js">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://huggingface.co" crossorigin>
 <script>
-  // Saved theme before first paint (shared with the explorable page).
-  const saved = localStorage.getItem('theme');
-  if (saved) document.documentElement.dataset.theme = saved;
-  // Old deep links into the explorable (likes / pick / mode / t) now live
-  // at explore.html — forward them. A bare ?q= stays here.
+  try {                                    // saved theme, before first paint
+    const t = localStorage.getItem('theme');
+    if (t) document.documentElement.dataset.theme = t;
+  } catch { /* storage blocked: follow the system */ }
+  // old deep links into the explorable now live at explore.html
   const p = new URLSearchParams(location.search);
   if (['likes', 'pick', 'mode', 't'].some(k => p.has(k)))
     location.replace('explore.html' + location.search);
 </script>
+<style>
+:root {
+  --page: #f9f9f7; --surface: #ffffff; --ink: #0b0b0b; --muted: #85837d;
+  --hairline: #e4e3dc; --accent: #2a78d6; --accent-ink: #1c5cab;
+  --shadow: 0 1px 2px rgba(11, 11, 11, 0.04), 0 8px 28px -14px rgba(11, 11, 11, 0.18);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0d0d0d; --surface: #181817; --ink: #f4f4f2; --muted: #8d8b85;
+    --hairline: #2a2a28; --accent: #3987e5; --accent-ink: #86b6ef;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 28px -14px rgba(0, 0, 0, 0.7);
+  }
+}
+:root[data-theme="dark"] {
+  --page: #0d0d0d; --surface: #181817; --ink: #f4f4f2; --muted: #8d8b85;
+  --hairline: #2a2a28; --accent: #3987e5; --accent-ink: #86b6ef;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 28px -14px rgba(0, 0, 0, 0.7);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; display: flex; flex-direction: column;
+  background: var(--page); color: var(--ink);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* model download: one hairline at the very top, gone when done */
+#bar {
+  position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 5;
+  background: var(--accent); transform: scaleX(0); transform-origin: 0 50%;
+  opacity: 0; transition: transform 120ms linear, opacity 300ms ease;
+}
+
+main {
+  flex: 1; width: min(720px, 100% - 32px); margin: 0 auto;
+  padding-top: 30vh; transition: padding-top 180ms cubic-bezier(.2, .7, .2, 1);
+}
+body.searched main { padding-top: 24px; }
+
+h1 {
+  margin: 0 0 20px; text-align: center; font-weight: 700;
+  font-size: clamp(2rem, 7vw, 2.75rem); letter-spacing: -0.04em; line-height: 1.1;
+}
+h1 span { color: var(--muted); font-weight: 400; }
+body.searched h1 { display: none; }
+
+.box {
+  display: flex; align-items: center; gap: 4px; height: 54px;
+  padding: 0 7px 0 18px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--hairline); box-shadow: var(--shadow);
+}
+.box:focus-within { border-color: var(--accent); }
+.box > svg { flex: none; width: 18px; height: 18px; color: var(--muted); margin-right: 6px; }
+#q {
+  flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: none;
+  color: var(--ink); font: inherit; font-size: 1.0625rem;
+}
+#q::placeholder { color: var(--muted); }
+#q::-webkit-search-cancel-button { -webkit-appearance: none; }
+.cam {
+  flex: none; width: 40px; height: 40px; border: 0; border-radius: 50%;
+  display: grid; place-items: center; background: none; color: var(--muted); cursor: pointer;
+}
+.cam:hover { background: var(--page); color: var(--ink); }
+.cam svg { width: 20px; height: 20px; }
+.chip { display: inline-flex; align-items: center; flex: none; }
+.chip[hidden] { display: none; }
+.chip img { width: 34px; height: 34px; border-radius: 9px; object-fit: cover; display: block; }
+.chip button {
+  border: 0; background: none; color: var(--muted); cursor: pointer;
+  font-size: 0.8rem; padding: 4px 8px 4px 5px;
+}
+
+#status {
+  min-height: 1.5em; margin: 14px 6px 16px; text-align: center;
+  color: var(--muted); font-size: 0.8125rem; font-variant-numeric: tabular-nums;
+}
+body.searched #status { text-align: left; }
+
+#results { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 560px) { #results { grid-template-columns: repeat(2, 1fr); } }
+figure {
+  position: relative; margin: 0; aspect-ratio: 1; overflow: hidden;
+  border-radius: 12px; background: var(--hairline); cursor: pointer;
+}
+figure img {
+  display: block; width: 100%; height: 100%; object-fit: cover;
+  transition: transform 220ms ease;
+}
+figure:hover img { transform: scale(1.04); }
+figcaption {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 22px 10px 8px;
+  color: #ffffff; font-size: 0.75rem; opacity: 0; transition: opacity 150ms ease;
+  background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.6));
+}
+figure:hover figcaption, figure:focus-visible figcaption { opacity: 1; }
+
+footer { padding: 28px 16px; text-align: center; font-size: 0.75rem; color: var(--muted); }
+footer a { color: inherit; text-decoration: none; margin: 0 7px; }
+footer a:hover { color: var(--ink); text-decoration: underline; }
+
+body.drop::after {
+  content: "drop to search by this photo"; position: fixed; inset: 12px; z-index: 6;
+  display: grid; place-items: center; border: 2px dashed var(--accent); border-radius: 20px;
+  background: var(--page); opacity: 0.94; color: var(--accent-ink); font-size: 1.05rem;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+</style>
 </head>
 <body>
+<div id="bar" aria-hidden="true"></div>
 
-<main class="stage" id="stage">
-  <h1 class="logo">CLIP<span>·search</span></h1>
-  <p class="tag">search images by <em>meaning</em> — a real vision-language model, in your browser</p>
+<main>
+  <h1>CLIP<span>·search</span></h1>
 
-  <div class="pill" id="pill">
-    <span class="mag" aria-hidden="true">⌕</span>
-    <span class="img-chip hidden" id="imgChip">
-      <img id="imgChipThumb" alt="your image query">
-      <button id="imgChipClear" type="button" aria-label="Clear image query">✕</button>
+  <div class="box">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <span class="chip" id="chip" hidden>
+      <img id="chipImg" alt="">
+      <button id="chipX" type="button" aria-label="Clear image search">✕</button>
     </span>
-    <input id="q" type="search" placeholder="Try “a fluffy animal” — or drop a photo anywhere"
-           autocomplete="off" autofocus aria-label="Search query">
-    <button class="cam" id="cam" type="button" title="Search by image" aria-label="Search by image">📷</button>
-    <input type="file" id="file" accept="image/*" class="hidden">
+    <input id="q" type="search" placeholder="a fluffy animal" autocomplete="off"
+           spellcheck="false" autofocus aria-label="Search photos by meaning">
+    <button class="cam" id="cam" type="button" title="Search by photo" aria-label="Search by photo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+    </button>
+    <input type="file" id="file" accept="image/*" hidden>
   </div>
 
-  <div class="chips" id="chips"></div>
-
-  <div class="bar-track hidden" id="barTrack"><div class="bar-fill" id="bar" style="width:0%"></div></div>
-  <p class="status" id="status"></p>
-  <details class="trace hidden" id="trace">
-    <summary id="traceSummary"></summary>
-    <div class="body" id="traceBody"></div>
-  </details>
-
-  <div class="rgrid" id="results" aria-live="polite"></div>
-  <div class="learn hidden" id="learnPanel" aria-live="polite"></div>
-  <div class="explain hidden" id="explain" aria-live="polite"></div>
-  <div class="webhead hidden" id="webHead"></div>
-  <div class="rgrid" id="webResults"></div>
-  <p class="hint hidden" id="detailsHint">click any result to see <em>why</em> it matched — its
-    tags, embeddings and scores, dissected in <a href="explore.html#lab">the Lab</a></p>
+  <p id="status" aria-live="polite">14 photos, searched by meaning — results on the first keystroke</p>
+  <div id="results"></div>
 </main>
 
 <footer>
-  every search runs locally — nothing leaves your machine
-  &nbsp;·&nbsp; <a href="explore.html">how it works ↗</a>
-  &nbsp;·&nbsp; <a href="explore.html#lessons">the lessons</a>
-  &nbsp;·&nbsp; <a href="scale.html">a million rows</a>
-  &nbsp;·&nbsp; <a href="blog.html">how it scales to a billion</a>
-  &nbsp;·&nbsp; <a href="https://github.com/sugeerth/clip-vlm-101">github</a>
+  <a href="explore.html">how it works</a>
+  <a href="full.html">full demo</a>
+  <a href="https://github.com/sugeerth/clip-vlm-101">github</a>
 </footer>
 
-<script type="module" src="js/simple.js"></script>
+<script type="module" src="js/fast.js"></script>
 </body>
 </html>

@@ -10,6 +10,9 @@
 **Live demo → [sugeerth.github.io/clip-vlm-101](https://sugeerth.github.io/clip-vlm-101/)**
 Real CLIP inference in the tab via [transformers.js](https://huggingface.co/docs/transformers.js).
 No install, no API key, and nothing you type or upload leaves your machine.
+It answers on the first keystroke: a precomputed word lexicon (`docs/lexicon.json`, built by
+`build_lexicon.mjs`) ranks the gallery while the model downloads, then CLIP takes over from a
+Web Worker. Hermes, the web crawl and the judges live on [the full demo](https://sugeerth.github.io/clip-vlm-101/full.html).
 
 > Vector search is usually taken on faith: an embedding model you did not write, an
 > index you cannot inspect, and a ranked list with no way to ask *why*. This repo
