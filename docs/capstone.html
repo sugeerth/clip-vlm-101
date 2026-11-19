@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Capstone — ask·200, an answer engine</title>
+<meta name="description" content="Capstone project: a Perplexity-style answer engine that scrapes up to 200 pages with Scrapling, ranks passages with BM25, and answers in one cited line — plus a keyless browser twin.">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Capstone — ask·200: read 200 sources, answer in one line">
+<meta property="og:description" content="Scrapling fan-out to 200 pages, BM25 passage ranking, and a ≤45-word answer where every claim is cited.">
+<meta property="og:url" content="https://sugeerth.github.io/clip-vlm-101/capstone.html">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+<link rel="stylesheet" href="style.css">
+<script>
+  try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+</script>
+<style>
+  .pipe.six { grid-template-columns: repeat(6, 1fr); }
+  @media (max-width: 860px) { .pipe.six { grid-template-columns: 1fr 1fr; } }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .stat b { display: block; font-size: 1.7rem; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .stat span { font-size: 0.8rem; color: var(--muted); }
+  .table-wrap { overflow-x: auto; }
+  pre.cmd {
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px;
+    padding: 14px 16px; overflow-x: auto; font-size: 0.84rem; line-height: 1.55; margin: 0;
+  }
+  ul.tight { margin: 0; padding-left: 1.2em; color: var(--ink-2); max-width: 68ch; }
+  ul.tight li { margin: 6px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <nav class="nav" aria-label="Sections">
+    <a class="wordmark" href="#top">ask<span class="dim">·200</span></a>
+    <div class="nav-links">
+      <a href="#problem">Problem</a>
+      <a href="#design">Design</a>
+      <a href="#decisions">Decisions</a>
+      <a href="#evaluation">Evaluation</a>
+      <a href="#limits">Limits</a>
+      <a href="#reproduce">Reproduce</a>
+    </div>
+    <a class="gh" href="ask.html">Try it ⚡</a>
+    <a class="gh" href="./">Image search</a>
+    <a class="gh" href="https://github.com/sugeerth/clip-vlm-101">GitHub ↗</a>
+  </nav>
+</header>
+
+<main id="top">
+
+  <div class="hero">
+    <p class="eyebrow">Capstone project</p>
+    <h1>Read <em>200</em> sources. Answer in one line.</h1>
+    <p class="lede">
+      <b>ask·200</b> is an answer engine in the style of Perplexity, built around two rules:
+      <b>read a lot</b> and <b>say very little</b>. A question goes out to four search engines at
+      once. Up to <b>200 result pages</b> are scraped in parallel with
+      <a href="https://github.com/D4Vinci/Scrapling">Scrapling</a> and cut into passages. The best
+      ten are ranked with BM25, and the answer comes back in <b>45 words or fewer</b>, with a
+      <code>[n]</code> citation after every claim.
+    </p>
+    <div class="cta-row">
+      <a class="btn primary" href="ask.html">Try the live demo</a>
+      <a class="btn ghost" href="https://github.com/sugeerth/clip-vlm-101/blob/main/answer.py">Read answer.py</a>
+      <a class="btn ghost" href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/ask.js">Read the browser twin</a>
+    </div>
+    <p class="fine">This is the capstone of <a href="./">CLIP VLM 101</a>. The rest of the site
+      ranks 14 images by meaning; this project points the same retrieval ideas at the open web.</p>
+  </div>
+
+  <!-- ============================================================== problem -->
+  <section id="problem">
+    <p class="eyebrow">01 · The problem</p>
+    <h2>Search gives you ten links. Chat gives you no sources.</h2>
+    <p class="sub">
+      A search engine hands back a list and leaves the reading to you. A chat model reads nothing
+      and answers from memory, so its claims can't be checked. An answer engine sits between the
+      two: it does the reading, and it has to show where each claim came from. The usual weakness
+      is length. Answers grow into paragraphs of hedging that take longer to read than the sources.
+    </p>
+    <p class="sub">
+      <b>The goal:</b> push both ends at once. Read as many pages as one question can justify
+      (200 by default), and keep the answer short enough to read in one glance. If the passages
+      that were read do not support a claim, the engine leaves it out. If none of them answer the
+      question, it says <em>Not in sources.</em>
+    </p>
+  </section>
+
+  <!-- =============================================================== design -->
+  <section id="design">
+    <p class="eyebrow">02 · The design</p>
+    <h2>Six stages, from one question to one cited line</h2>
+    <div class="card">
+      <div class="pipe six">
+        <div class="step"><b>Fan out</b><span>The question plus up to 3 rewrites (Claude writes them
+          when a key is available) go to DuckDuckGo, Bing, Wikipedia and Mojeek at the same time.</span></div>
+        <div class="step"><b>Scrape</b><span>Scrapling's <code>AsyncFetcher</code> fetches up to 200
+          deduplicated URLs, 40 at a time, with a real Chrome TLS fingerprint.</span></div>
+        <div class="step"><b>Clean</b><span>Scrapling XPath keeps paragraphs, lists, headings and code,
+          and drops anything inside nav, header, footer, aside or forms.</span></div>
+        <div class="step"><b>Chunk</b><span>Text is split at sentence boundaries into passages of
+          about 80 words.</span></div>
+        <div class="step"><b>Rank</b><span>Okapi BM25 keeps the top 10 passages, at most 2 from any
+          one page, so a single source can't take over the answer.</span></div>
+        <div class="step"><b>Answer</b><span>Claude sees only those numbered passages and must answer
+          in ≤45 words, citing every claim. With no key, the best sentences are quoted verbatim.</span></div>
+      </div>
+      <p class="hint">The model never browses. It sees only what won the ranking, so every
+        citation points at text the engine actually read.</p>
+    </div>
+    <p class="sub">
+      <b>Two runtimes, one algorithm.</b> Browsers block a page from reading other sites' HTML
+      (CORS), so Scrapling can't run on a static website. The live demo therefore uses the
+      sources that do allow cross-origin reads: Wikipedia (full text of the top articles),
+      Hacker News, Stack Overflow and OpenAlex paper abstracts, up to 200 documents. The
+      chunking, ranking, citation and extractive steps are the same code in both languages, and
+      a test checks they agree byte for byte.
+    </p>
+  </section>
+
+  <!-- ============================================================ decisions -->
+  <section id="decisions">
+    <p class="eyebrow">03 · Design decisions</p>
+    <h2>What I chose, and what each choice costs</h2>
+    <div class="card table-wrap">
+      <table>
+        <tr><th>decision</th><th>why</th><th>trade-off</th></tr>
+        <tr><td>BM25, not embeddings, for ranking</td>
+          <td>No model to download, runs in under a second on hundreds of passages, explainable,
+            and simple enough to mirror exactly in JavaScript.</td>
+          <td>Purely lexical: a passage that uses different words for the same idea scores zero.</td></tr>
+        <tr><td>At most 2 passages per page</td>
+          <td>Forces the answer to draw on several sources instead of one long page.</td>
+          <td>Can drop a third good passage from the single best page.</td></tr>
+        <tr><td>The model sees passages only</td>
+          <td>Every <code>[n]</code> maps to text that was really scraped, which makes the answer
+            checkable.</td>
+          <td>Bounded by the ranking: if BM25 misses the right passage, so does the answer.</td></tr>
+        <tr><td>Hard word budget (default 45)</td>
+          <td>Succinctness is enforced in the prompt and adjustable with <code>--words</code>.</td>
+          <td>Nuanced questions get compressed; the sources are one click away.</td></tr>
+        <tr><td>Extractive fallback</td>
+          <td>Works with no API key and no cost: the best novel sentences, verbatim, with their
+            citations.</td>
+          <td>Quoted sentences don't flow together and can include a near miss.</td></tr>
+        <tr><td>Claude at low effort, server-side fallbacks</td>
+          <td>A short answer from given passages needs little reasoning, so low effort keeps
+            latency and cost down.</td>
+          <td>Harder synthesis questions may need a higher effort setting.</td></tr>
+        <tr><td>Bring-your-own key in the browser</td>
+          <td>The site stays static, with no server holding a key. The key stays in the
+            visitor's browser.</td>
+          <td>Visitors without a key see extractive answers only.</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- =========================================================== evaluation -->
+  <section id="evaluation">
+    <p class="eyebrow">04 · Evaluation</p>
+    <h2>What is measured, and how</h2>
+    <div class="card">
+      <div class="stats">
+        <div class="stat"><b>200/200</b><span>local pages scraped and parsed by Scrapling</span></div>
+        <div class="stat"><b>1.22 s</b><span>median, question to answer over 200 pages (3 runs)</span></div>
+        <div class="stat"><b>1,000</b><span>passages ranked per question in that run</span></div>
+        <div class="stat"><b>21/21</b><span>Python ↔ JavaScript parity checks pass</span></div>
+      </div>
+      <p class="hint">The timing comes from <code>python3 answer.py --bench</code>: 200 generated
+        pages served on localhost, on a 4-core cloud container, no LLM. It measures the engine's own
+        cost (fetching, parsing, chunking, ranking) without internet latency. On the real web,
+        page download time dominates.</p>
+    </div>
+    <div class="card table-wrap">
+      <table>
+        <tr><th>check</th><th>what it proves</th><th>runs in CI</th></tr>
+        <tr><td><code>answer.py --selftest</code></td>
+          <td>A real Scrapling crawl of a local fixture site: nav and footer text are dropped, the
+            off-topic page is excluded, and the answer cites the right source as [1].</td><td>yes</td></tr>
+        <tr><td><code>docs/js/test_ask.mjs</code></td>
+          <td>The browser's tokens, chunks, BM25 scores, rankings, citation numbers and extractive
+            answers match Python exactly; the source fan-out survives one source failing.</td><td>yes</td></tr>
+        <tr><td><code>test_smoke.py · test_answer</code></td>
+          <td>The committed fixture still matches what Python computes; the per-source cap and
+            citation numbering hold.</td><td>yes</td></tr>
+        <tr><td><code>answer.py --bench</code></td>
+          <td>Throughput at the full 200-page budget.</td><td>no, run by hand</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- =============================================================== limits -->
+  <section id="limits">
+    <p class="eyebrow">05 · Limitations</p>
+    <h2>What this does not show yet</h2>
+    <ul class="tight">
+      <li><b>No answer-quality benchmark.</b> The tests prove the pipeline is correct and
+        consistent, not that its answers are good. The next step is a labeled question set
+        scored for accuracy and citation faithfulness.</li>
+      <li><b>Search-engine markup can change.</b> The result-link selectors for DuckDuckGo, Bing and
+        Mojeek were written to their known HTML and were not checked against the live sites when
+        this was built. Each engine fails on its own and is reported in the output.</li>
+      <li><b>Lexical ranking has blind spots.</b> In the benchmark, the extractive answer to
+        "question 42" correctly led with the fact for 42, then used its spare words on a similar
+        but wrong fact. A word budget doesn't guarantee relevance; an LLM answer or a dense
+        re-ranker would filter that.</li>
+      <li><b>The browser version reads fewer kinds of sites.</b> Only CORS-open APIs, so no news
+        sites, blogs or documentation pages. The command-line version reads any page.</li>
+      <li><b>Scrape responsibly.</b> Chrome impersonation gets ordinary pages served as a reader
+        would see them; keep <code>--pages</code> modest on sites you don't own and respect their
+        terms.</li>
+    </ul>
+    <p class="sub" style="margin-top:16px;"><b>Next:</b> re-rank BM25's top 50 with a text
+      embedding model (the same two-tower idea the rest of this site teaches), cache scraped pages
+      between questions, and add the labeled evaluation above.</p>
+  </section>
+
+  <!-- ============================================================ reproduce -->
+  <section id="reproduce">
+    <p class="eyebrow">06 · Reproduce</p>
+    <h2>Run it yourself</h2>
+<pre class="cmd">git clone https://github.com/sugeerth/clip-vlm-101 && cd clip-vlm-101
+pip install "scrapling[fetchers]" anthropic
+
+python3 answer.py "why is the sky blue"           # ≤45 words, every claim cited
+python3 answer.py "what is OPQ" --words 25 --json # machine-readable, with passages
+python3 answer.py --selftest                      # Scrapling crawl of a local fixture
+python3 answer.py --bench                         # 200 local pages, timed
+node docs/js/test_ask.mjs                         # browser twin matches Python</pre>
+    <p class="hint">Without <code>ANTHROPIC_API_KEY</code>, answers are extractive. Everything
+      above runs on a laptop.</p>
+  </section>
+
+  <p class="foot">ask·200 · capstone of <a href="./">CLIP VLM 101</a> ·
+    built on <a href="https://github.com/D4Vinci/Scrapling">Scrapling</a> and Claude ·
+    <a href="https://github.com/sugeerth/clip-vlm-101">source on GitHub</a> · MIT license</p>
+</main>
+</body>
+</html>
