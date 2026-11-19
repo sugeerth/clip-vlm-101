@@ -67,9 +67,11 @@ auto-detects CUDA → Apple Silicon MPS → CPU (`embedder.best_device`).
 
 ---
 
-## Ask the web — read 200 sources, answer in one line
+## Capstone: ask·200 — read 200 sources, answer in one line
 
-**[sugeerth.github.io/clip-vlm-101/ask.html](https://sugeerth.github.io/clip-vlm-101/ask.html)** —
+**Write-up → [sugeerth.github.io/clip-vlm-101/capstone.html](https://sugeerth.github.io/clip-vlm-101/capstone.html)**
+
+**Live demo → [sugeerth.github.io/clip-vlm-101/ask.html](https://sugeerth.github.io/clip-vlm-101/ask.html)** —
 the same retrieval idea pointed at the web: fan out wide, rank passages, say very little.
 
 ```bash
@@ -77,6 +79,7 @@ pip install "scrapling[fetchers]" anthropic
 python3 answer.py "why is the sky blue"            # ≤45 words, every claim cited [n]
 python3 answer.py "what is OPQ" --pages 200 --words 25 --json
 python3 answer.py --selftest                       # a real Scrapling crawl of a local fixture web
+python3 answer.py --bench                          # 200 local pages end to end (1.22 s median here)
 ```
 
 `answer.py` sends each question (plus up to 3 rewrites) to DuckDuckGo, Bing, Wikipedia and

@@ -363,6 +363,49 @@ FIXTURE = {
 }
 
 
+def _serve(pages):
+    """A throwaway local web: {path: html} on 127.0.0.1, plus /search listing every path."""
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            path = self.path.split("?")[0]
+            body = ("".join(f'<div class="r"><a class="hit" href="{p}">x</a></div>' for p in pages)
+                    if path == "/search" else pages.get(path, ""))
+            self.send_response(200 if body else 404)
+            self.send_header("content-type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_port}"
+
+
+def bench(n=200, runs=3):
+    """Time the whole pipeline over n local pages: the engine's own cost, minus the internet."""
+    filler = " ".join(f"Paragraph {i} about topic {i % 17} and its many details." for i in range(40))
+    pages = {f"/p{i}": f"<html><head><title>Page {i}</title></head><body><nav>menu</nav>"
+             f"<p>{filler}</p><p>Fact {i}: the answer to question {i} is {i * 7}.</p></body></html>"
+             for i in range(n)}
+    srv, base = _serve(pages)
+    times = []
+    for _ in range(runs):
+        r = ask("what is the answer to question 42", pages=n, words=20, use_llm=False,
+                engines={"local": (base + "/search?q={q}", "a.hit", None)})
+        times.append(r["stats"]["seconds"])
+    srv.shutdown()
+    st = r["stats"]
+    print(f"{st['scraped']}/{st['urls']} pages · {st['passages']:,} passages · "
+          f"median {sorted(times)[len(times) // 2]}s over {runs} runs (localhost, no network)")
+    print("answer:", r["answer"])
+    return r, times
+
+
 def selftest():
     import http.server
     import threading
@@ -407,6 +450,7 @@ if __name__ == "__main__":
     ap.add_argument("--no-llm", action="store_true", help="extractive answer only")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--bench", action="store_true", help="time 200 local pages end to end")
     ap.add_argument("--write-fixture", action="store_true", help="regenerate docs/js/ask_fixture.json")
     a = ap.parse_args()
     if a.write_fixture:
@@ -414,6 +458,9 @@ if __name__ == "__main__":
         sys.exit()
     if a.selftest:
         selftest()
+        sys.exit()
+    if a.bench:
+        bench(a.pages)
         sys.exit()
     if not a.question:
         ap.error("ask a question")
