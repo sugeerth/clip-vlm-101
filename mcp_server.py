@@ -3,14 +3,15 @@
 pipeline: MCP client (Claude Code, Claude Desktop, research.py, ...) ─► [this server]
           ─► ask · web_search · read_page · search_sources ─► Scrapling + 7 APIs
 
-Four tools, all thin wrappers over answer.py and sources.py:
+Five tools, all thin wrappers over answer.py, sources.py and multimodal.py:
 
     ask             the full pipeline: fan out, scrape ≤N pages + APIs, BM25,
-                    return a cited extractive answer AND the numbered passages,
-                    so the calling model can write its own answer from them
+                    return a cited extractive answer, the numbered passages and
+                    the ranked images, so the calling model writes its own answer
     web_search      4 search engines at once → result URLs
     read_page       one URL → readable text (Scrapling, nav/footer stripped)
     search_sources  7 keyless APIs at once → whole documents
+    find_images     Commons + Openverse → licensed images, ranked
 
     pip install "scrapling[fetchers]" mcp
     python3 mcp_server.py                     # stdio (what desktop clients launch)
@@ -27,6 +28,7 @@ import json
 from mcp.server.mcpserver import MCPServer
 
 import answer
+import multimodal
 import sources
 
 server = MCPServer(
@@ -42,7 +44,7 @@ async def ask(question: str, pages: int = 60, words: int = 45, k: int = 10) -> s
     pages with Scrapling, rank passages with BM25. Returns a cited extractive answer and
     the top-k numbered passages (cite them as [n])."""
     r = await answer.ask_async(question, pages=min(pages, 200), words=words, k=k, use_llm=False)
-    return json.dumps({k_: r[k_] for k_ in ("answer", "sources", "stats", "ledger")} |
+    return json.dumps({k_: r[k_] for k_ in ("answer", "sources", "images", "stats", "ledger")} |
                       {"passages": [{"n": p["n"], "url": p["src"], "text": p["text"]}
                                     for p in r["passages"]]}, indent=1)
 
@@ -59,6 +61,14 @@ async def read_page(url: str, max_chars: int = 8000) -> str:
     """Fetch one web page with Scrapling (Chrome TLS fingerprint) and return its readable
     text — navigation, headers, footers and forms stripped."""
     return json.dumps(await sources.read_page(url, max_chars), indent=1)
+
+
+@server.tool()
+async def find_images(query: str, limit: int = 8) -> str:
+    """Find licensed images for a query on Wikimedia Commons and Openverse, ranked by how well
+    their titles/descriptions match. Returns image URL, landing page, description, license."""
+    imgs, errors = await multimodal.image_search(query)
+    return json.dumps({"images": multimodal.rank_images(query, [], imgs, {}, k=limit), "errors": errors}, indent=1)
 
 
 @server.tool()

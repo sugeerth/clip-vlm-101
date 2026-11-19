@@ -142,6 +142,73 @@
   "Neapolitan pizza is baked in a wood fired oven at very high temperature for about ninety seconds. Rayleigh scattering also explains why the sky is blue at noon; blue light is scattered in every direction by tiny molecules of nitrogen and oxygen.",
   "Why is the sky blue? Short wavelengths scatter more. Why is the sky blue? Short wavelengths scatter more."
  ],
+ "images": {
+  "docs": [
+   {
+    "url": "https://a",
+    "title": "Rayleigh scattering",
+    "images": [
+     {
+      "url": "https://a/sky.jpg",
+      "alt": "Blue sky over a field",
+      "caption": "Why the sky is blue"
+     },
+     {
+      "url": "https://a/chart.png",
+      "alt": "Scattering versus wavelength",
+      "caption": ""
+     }
+    ]
+   },
+   {
+    "url": "https://d",
+    "title": "Pizza",
+    "images": [
+     {
+      "url": "https://d/pizza.jpg",
+      "alt": "Neapolitan pizza",
+      "caption": ""
+     }
+    ]
+   }
+  ],
+  "api": [
+   {
+    "url": "https://c/sky.jpg",
+    "page": "https://c",
+    "alt": "Clear blue sky at noon",
+    "license": "CC0",
+    "source": "commons"
+   },
+   {
+    "url": "https://a/sky.jpg",
+    "page": "https://dup",
+    "alt": "duplicate",
+    "license": "",
+    "source": "openverse"
+   }
+  ],
+  "cited": {
+   "https://a": 1
+  },
+  "ranked": [
+   [
+    "https://a/sky.jpg",
+    1,
+    2.6309
+   ],
+   [
+    "https://c/sky.jpg",
+    null,
+    1.5098
+   ],
+   [
+    "https://a/chart.png",
+    1,
+    1.0
+   ]
+  ]
+ },
  "tokens": [
   "sky",
   "blue",

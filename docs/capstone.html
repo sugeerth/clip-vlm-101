@@ -40,7 +40,7 @@
       <a href="#design">Design</a>
       <a href="#decisions">Decisions</a>
       <a href="#evaluation">Evaluation</a>
-      <a href="#expand">MCP &amp; tools</a>
+      <a href="#expand">Images, MCP &amp; tools</a>
       <a href="#limits">Limits</a>
       <a href="#reproduce">Reproduce</a>
     </div>
@@ -169,7 +169,7 @@
         <div class="stat"><b>200/200</b><span>local pages scraped and parsed by Scrapling</span></div>
         <div class="stat"><b>1.22 s</b><span>median, question to answer over 200 pages (3 runs)</span></div>
         <div class="stat"><b>1,000</b><span>passages ranked per question in that run</span></div>
-        <div class="stat"><b>22/22</b><span>browser twin checks pass, including exact parity with Python</span></div>
+        <div class="stat"><b>26/26</b><span>browser twin checks pass, including exact parity with Python</span></div>
       </div>
       <p class="hint">The timing comes from <code>python3 answer.py --bench</code>: 200 generated
         pages served on localhost, on a 4-core cloud container, no LLM. It measures the engine's own
@@ -197,10 +197,10 @@
   <!-- =============================================================== expand -->
   <section id="expand">
     <p class="eyebrow">05 · Expansion</p>
-    <h2>More of the web: seven APIs, an MCP server, and an agent</h2>
+    <h2>More of the web: seven APIs, images, an MCP server, and an agent</h2>
     <p class="sub">
-      The fixed pipeline reads one round of search results. Three additions widen what it can
-      reach and let other tools use it.
+      The fixed pipeline reads one round of search results, as text. Four additions widen what
+      it can reach, let it work with images, and let other tools use it.
     </p>
     <div class="card table-wrap">
       <table>
@@ -210,9 +210,18 @@
             links: Wikipedia, Hacker News, Stack Overflow, OpenAlex, arXiv, GitHub and Reddit.
             Every request still goes through Scrapling, and <code>answer.py</code> now ranks
             these documents alongside the scraped pages.</td></tr>
+        <tr><td><code>multimodal.py</code></td>
+          <td><b>Images out:</b> every scraped page gives up its content images (logos, icons and
+            tiny images filtered out), and Wikimedia Commons and Openverse add licensed ones. They
+            are ranked by their alt text, caption and page title, with a boost when their page is
+            cited; <code>--clip</code> re-ranks them by CLIP on the pixels, the same model the rest
+            of this site is built on. <b>Images in:</b> <code>--image photo.jpg</code> turns a photo
+            into a search query, using Claude vision with a key or CLIP tags without one.
+            <b>Images read:</b> when Claude writes the answer it also sees your photo and up to
+            three images from cited sources.</td></tr>
         <tr><td><code>mcp_server.py</code></td>
-          <td>ask·200 as an MCP server with four tools: <code>ask</code>, <code>web_search</code>,
-            <code>read_page</code> and <code>search_sources</code>. Any MCP client can call it,
+          <td>ask·200 as an MCP server with five tools: <code>ask</code>, <code>web_search</code>,
+            <code>read_page</code>, <code>search_sources</code> and <code>find_images</code>. Any MCP client can call it,
             for example <code>claude mcp add ask200 -- python3 mcp_server.py</code> in Claude Code.
             It needs no API key; the calling model writes the final answer from the numbered
             passages.</td></tr>
@@ -223,7 +232,8 @@
             (<code>--server-tools</code>), remote MCP servers through the MCP connector
             (<code>--mcp NAME=URL</code>), and local MCP servers over stdio
             (<code>--mcp-stdio</code>, for example Scrapling's own browser tools with
-            <code>"scrapling mcp"</code>). Every tool call is printed as it happens.</td></tr>
+            <code>"scrapling mcp"</code>). <code>--image</code> lets Claude see a photo with the
+            question. Every tool call is printed as it happens.</td></tr>
       </table>
     </div>
     <p class="sub">
@@ -231,10 +241,21 @@
       several pages but costs more tokens and time per question. The capped word budget and
       required citations are the same in both.
     </p>
+    <p class="sub">
+      <b>In the browser:</b> the demo page shows an image strip under each answer, drawn from
+      Wikipedia's article images and five image libraries (Openverse, Commons, the Art Institute
+      of Chicago, the Met and iNaturalist). Ask with a photo by clicking 📷, dropping one on the
+      page or pasting it. With a key, Claude reads the photo; without one, CLIP reads it in the
+      tab. An opt-in setting re-ranks the images with CLIP.
+    </p>
     <p class="hint">Tested locally: each API parser on responses shaped like that API's format, the MCP server
       through a real MCP client (listing tools, reading a page, running <code>ask</code>), the
       agent's tool wiring with a stand-in API client, and a live stdio launch of both this server
-      and <code>scrapling mcp</code>. The agent was not run against the live Claude API here.</p>
+      and <code>scrapling mcp</code>. The image pipeline was tested the same way: a page whose logo,
+      icon and 16-pixel image are dropped while its figure is kept and cited as [1]; CLIP re-ranking
+      with a stand-in encoder; and a photo question where a stand-in Claude received the photo
+      first and a cited page's image. Neither the agent nor vision was run against the live
+      Claude API here, and CLIP was not run on real web images.</p>
   </section>
 
   <!-- =============================================================== limits -->
@@ -282,7 +303,9 @@ node docs/js/test_ask.mjs                         # browser twin matches Python
 pip install mcp "anthropic[mcp]"
 python3 sources.py "vector quantization"          # all 7 APIs at once
 python3 mcp_server.py                             # ask·200 as an MCP server (stdio)
-python3 research.py "..." --server-tools --mcp-stdio "scrapling mcp"   # agent mode</pre>
+python3 research.py "..." --server-tools --mcp-stdio "scrapling mcp"   # agent mode
+python3 answer.py --image photo.jpg "what is this and where?"          # ask with a photo
+python3 answer.py "northern lights" --clip                             # rank images by CLIP (needs torch)</pre>
     <p class="hint">Without <code>ANTHROPIC_API_KEY</code>, answers are extractive. Everything
       above runs on a laptop.</p>
   </section>

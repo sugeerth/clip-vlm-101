@@ -3,6 +3,8 @@
 //   question ─► fan out to 5 keyless, CORS-open sources at once ─► ≤200 docs
 //            ─► sentence-aligned passages ─► BM25 top-k (≤2 per source)
 //            ─► Claude streams ≤N words with [n] cites   (no key: extractive)
+//   images:  Wikipedia thumbnails + 5 image APIs ─► rankImages (words; CLIP pixels opt-in)
+//   photo:   drop one in ─► Claude vision (with a key) or CLIP tags (keyless) ─► the query
 //
 // A browser cannot scrape arbitrary sites (CORS forbids reading another
 // origin's HTML), so the page reads the sources that DO allow it: Wikipedia
@@ -126,13 +128,15 @@ const WIKI = 'https://en.wikipedia.org/w/api.php?format=json&origin=*&action=que
 export const SOURCES = {
   async wikipedia(q, fetchFn) {
     const d = await jget(`${WIKI}&generator=search&gsrsearch=${encodeURIComponent(q)}&gsrlimit=20` +
-      '&prop=extracts|info&inprop=url&exintro=1&explaintext=1&exlimit=20', fetchFn);
+      '&prop=extracts|info|pageimages&inprop=url&exintro=1&explaintext=1&exlimit=20' +
+      '&piprop=thumbnail&pithumbsize=480&pilimit=20', fetchFn);
     const pages = Object.values(d.query?.pages ?? {}).sort((a, b) => a.index - b.index);
     // the top 4 articles are read in full, not just their intros
     const full = await Promise.all(pages.slice(0, 4).map(p =>
       jget(`${WIKI}&prop=extracts&explaintext=1&exsectionformat=plain&pageids=${p.pageid}`, fetchFn)
         .then(x => x.query.pages[p.pageid].extract).catch(() => null)));
-    return pages.map((p, i) => ({ url: p.fullurl, title: p.title, text: full[i] || p.extract || '', source: 'wikipedia' }));
+    return pages.map((p, i) => ({ url: p.fullurl, title: p.title, text: full[i] || p.extract || '', source: 'wikipedia',
+      images: p.thumbnail ? [{ url: p.thumbnail.source, alt: p.title, caption: '' }] : [] }));
   },
   async hackernews(q, fetchFn) {
     const d = await jget(`https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(q)}` +
@@ -173,10 +177,11 @@ export const SOURCES = {
 };
 
 // Fan every query to every source at once; one source failing costs only its own docs.
-export async function gather(question, { limit = 200, fetchFn = fetch, onProgress } = {}) {
+export async function gather(question, { limit = 200, fetchFn = fetch, onProgress, imageFn = discoverImages } = {}) {
   const queries = subqueries(question);
   const ledger = {};
   const jobs = [];
+  const images = imageFn(question, fetchFn).catch(() => ({ records: [], tried: [] }));
   for (const [name, fn] of Object.entries(SOURCES)) {
     ledger[name] = { docs: 0, error: null };
     // Wikipedia is cheap and deep: every sub-query; the rest: the question itself
@@ -190,7 +195,58 @@ export async function gather(question, { limit = 200, fetchFn = fetch, onProgres
   for (const d of (await Promise.all(jobs)).flat()) {
     if (d.text && d.url && !seen.has(d.url) && docs.length < limit) { seen.add(d.url); docs.push(d); }
   }
-  return { docs, ledger, queries };
+  const { records, tried } = await images;
+  for (const t of tried) ledger[t.provider] = { docs: t.count ?? 0, error: t.ok ? null : t.error, images: true };
+  const apiImages = records.map(r => ({ url: r.thumb_url, page: r.source, alt: r.name, license: r.license, source: r.provider }));
+  return { docs, ledger, queries, apiImages };
+}
+
+// Image providers (Openverse, Commons, Art Institute, Met, iNaturalist) from crawler.js —
+// imported lazily so the Node tests never load the browser-only module graph.
+async function discoverImages(term, fetchFn) {
+  const { discover } = await import('./crawler.js');
+  return discover(term, 6, fetchFn);
+}
+
+// Twin of multimodal.rank_images: BM25 on an image's words + a bonus when its page is cited.
+export function rankImages(question, docs, apiImages, cited, k = 6, bonus = 1.0) {
+  const get = u => (cited instanceof Map ? cited.get(u) : cited[u]) ?? null;
+  const cands = [];
+  for (const d of docs) for (const im of d.images ?? []) cands.push({ ...im, page: d.url, title: d.title, source: 'page' });
+  for (const im of apiImages) cands.push({ ...im, title: '' });
+  const seen = new Set(), uniq = cands.filter(c => !seen.has(c.url) && seen.add(c.url));
+  if (!uniq.length) return [];
+  const scores = bm25(question, uniq.map(c => `${c.alt} ${c.caption ?? ''} ${c.title}`));
+  uniq.forEach((c, i) => {
+    c.n = get(c.page);
+    c.score = Math.round((scores[i] + (c.n ? bonus : 0)) * 1e4) / 1e4;
+  });
+  return argsortDesc(uniq.map(c => c.score)).map(i => uniq[i]).filter(c => c.score > 0).slice(0, k);
+}
+
+// CLIP on pixels, in the tab: blend like multimodal.clip_rerank (half words, half CLIP).
+export async function clipRerank(question, images, onStatus = () => {}, weight = 0.5) {
+  const { getTextEncoder, getImageEncoder } = await import('./clip.js');
+  const [encT, encI] = [await getTextEncoder(onStatus, () => {}), await getImageEncoder(onStatus, () => {})];
+  const [q] = await encT([`a photo of ${question}`]);
+  const top = Math.max(...images.map(im => im.score)) || 1;
+  await Promise.all(images.map(async im => {
+    try {
+      const v = await encI(await (await fetch(im.url)).blob());
+      im.clip = Math.round(v.reduce((s, x, i) => s + x * q[i], 0) * 1e4) / 1e4;
+      im.score = Math.round((weight * im.score / top + (1 - weight) * Math.min(1, Math.max(0, im.clip * 3))) * 1e4) / 1e4;
+    } catch { /* an image that won't load keeps its word score */ }
+  }));
+  return [...images].sort((a, b) => b.score - a.score);
+}
+
+// A photo becomes a query: CLIP zero-shot over the repo's tag vocabulary (keyless).
+export async function clipTags(blob, k = 3, onStatus = () => {}) {
+  const [{ getTextEncoder, getImageEncoder }, { VOCAB, tagPrompts }] = await Promise.all([import('./clip.js'), import('./templates.js')]);
+  const encT = await getTextEncoder(onStatus, () => {}), encI = await getImageEncoder(onStatus, () => {});
+  const [img, tags] = [await encI(blob), await encT(tagPrompts())];
+  const s = tags.map(t => t.reduce((acc, x, i) => acc + x * img[i], 0));
+  return argsortDesc(s).slice(0, k).map(i => VOCAB[i]);
 }
 
 export function retrieve(question, docs, k = 10) {
@@ -209,18 +265,58 @@ export const SYSTEM = w => `You are a search engine's answer line. Answer the qu
   'restating the question, no hedging filler. Put a citation like [2] after every ' +
   'claim. If the sources do not contain the answer, reply exactly: Not in sources.';
 
-export async function claudeAnswer({ key, model, question, top, words, onText }) {
+const sdk = async key => {
   const { default: Anthropic } = await import('https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.137.0/+esm');
-  const client = new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true });
+  return new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true });
+};
+const RASTER = /\.(jpe?g|png|gif|webp)(\?|$)/i;
+
+// Twin of answer.py's vision answer: the user's photo first, then up to 3 images from cited
+// sources, then the passages. A dead image URL must not cost the answer: retry without them.
+export async function claudeAnswer({ key, model, question, top, words, onText, photo = null, images = [] }) {
+  const client = await sdk(key);
   const ctx = top.map(p => `[${p.n}] ${p.title}\n${p.text}`).join('\n\n');
-  const stream = client.beta.messages.stream({
-    model, max_tokens: 2000, system: SYSTEM(words),
-    output_config: { effort: 'low' },
-    betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default',
-    messages: [{ role: 'user', content: `Sources:\n${ctx}\n\nQuestion: ${question}` }],
+  const text = { type: 'text', text: `Sources:\n${ctx}\n\nQuestion: ${question}` };
+  const mine = photo ? [{ type: 'text', text: "The user's photo:" }, photo] : [];
+  const web = images.filter(im => im.n && RASTER.test(im.url)).slice(0, 3).flatMap(im => [
+    { type: 'text', text: `Image from source [${im.n}]:` }, { type: 'image', source: { type: 'url', url: im.url } }]);
+  const attempts = web.length ? [[...mine, ...web, text], [...mine, text]] : [[...mine, text]];
+  let lastErr;
+  for (const content of attempts) {
+    try {
+      const stream = client.beta.messages.stream({
+        model, max_tokens: 2000, system: SYSTEM(words),
+        output_config: { effort: 'low' },
+        betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default',
+        messages: [{ role: 'user', content: content.length === 1 ? content[0].text : content }],
+      });
+      stream.on('text', t => onText?.(t));
+      const msg = await stream.finalMessage();
+      if (msg.stop_reason === 'refusal') throw new Error('the model declined');
+      return { text: msg.content.filter(b => b.type === 'text').map(b => b.text).join('').trim(), vision: content.length > 1 };
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
+// A File → a base64 image block (what Claude vision takes from a browser).
+export const photoBlock = file => new Promise((res, rej) => {
+  const r = new FileReader();
+  r.onload = () => res({ type: 'image', source: { type: 'base64', media_type: file.type || 'image/jpeg',
+    data: String(r.result).split(',')[1] } });
+  r.onerror = rej;
+  r.readAsDataURL(file);
+});
+
+// Photo → a short search query with Claude vision (twin of multimodal.image_to_query).
+export async function visionQuery({ key, model, photo, question }) {
+  const client = await sdk(key);
+  const msg = await client.beta.messages.create({
+    model, max_tokens: 300, output_config: { effort: 'low' },
+    system: 'Write ONE short web-search query (max 8 words, no quotes) that would find pages explaining ' +
+      'what this image shows, focused on the user\'s question. Name the specific thing (species, ' +
+      'landmark, product, artwork) if you can.',
+    messages: [{ role: 'user', content: [photo, { type: 'text', text: question || 'What is this?' }] }],
   });
-  stream.on('text', t => onText?.(t));
-  const msg = await stream.finalMessage();
-  if (msg.stop_reason === 'refusal') throw new Error('the model declined');
-  return msg.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+  return msg.content.filter(b => b.type === 'text').map(b => b.text).join('').trim().split('\n')[0];
 }

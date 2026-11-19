@@ -1,6 +1,6 @@
 """research.py — agent mode: Claude drives the toolbelt, plus any MCP servers you plug in.
 
-pipeline: question ─► Claude (tool runner loop) ─┬─► local tools: scrape_search · read_page · search_sources
+pipeline: question ─► Claude (tool runner loop) ─┬─► local tools: scrape_search · read_page · search_sources · find_images
                                                   ├─► Anthropic server tools: web_search · web_fetch  (--server-tools)
                                                   ├─► remote MCP servers via the MCP connector   (--mcp NAME=URL)
                                                   └─► local MCP servers over stdio               (--mcp-stdio "CMD")
@@ -16,6 +16,7 @@ same Scrapling + API tools as answer.py, and whatever other tools MCP brings:
     python3 research.py "..." --mcp-stdio "scrapling mcp"        # + Scrapling's browser MCP tools
     python3 research.py "..." --mcp-stdio "python3 mcp_server.py" --no-local
     python3 research.py "..." --mcp docs=https://example.com/mcp # + any remote MCP server
+    python3 research.py "where is this and when was it built" --image photo.jpg   # vision
 
 Needs an Anthropic credential (ANTHROPIC_API_KEY or `ant auth login`) and
 `pip install "anthropic[mcp]" "scrapling[fetchers]"`. Every tool call is
@@ -84,7 +85,20 @@ def local_tools():
         return json.dumps({"docs": {n: [{**d, "text": d["text"][:800]} for d in ds[:5]]
                                     for n, ds in got.items()}, "errors": errors})
 
-    return [scrape_search, read_page, search_sources]
+    @beta_async_tool
+    async def find_images(query: str, limit: int = 6) -> str:
+        """Find licensed images (Wikimedia Commons, Openverse) for a query, ranked by how well
+        their descriptions match. Use when the user asks to see something or a figure helps.
+
+        Args:
+            query: What the image should show.
+            limit: Maximum number of images.
+        """
+        import multimodal
+        imgs, errors = await multimodal.image_search(query)
+        return json.dumps({"images": multimodal.rank_images(query, [], imgs, {}, k=limit), "errors": errors})
+
+    return [scrape_search, read_page, search_sources, find_images]
 
 
 SERVER_TOOLS = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 5},
@@ -116,7 +130,7 @@ def _trace(msg):
 
 
 async def research(question, words=45, model=MODEL, local=True, server_tools=False,
-                   mcp=(), mcp_stdio=(), max_iterations=14, client=None):
+                   mcp=(), mcp_stdio=(), max_iterations=14, client=None, image=None):
     from anthropic import AsyncAnthropic
     client = client or AsyncAnthropic()
     async with contextlib.AsyncExitStack() as stack:
@@ -135,7 +149,7 @@ async def research(question, words=45, model=MODEL, local=True, server_tools=Fal
             raise SystemExit("no tools: drop --no-local or add --server-tools / --mcp / --mcp-stdio")
         runner = client.beta.messages.tool_runner(
             model=model, max_tokens=16000, system=SYSTEM.format(w=words), tools=tools,
-            messages=[{"role": "user", "content": question}], max_iterations=max_iterations,
+            messages=[{"role": "user", "content": _content(question, image)}], max_iterations=max_iterations,
             output_config={"effort": "medium"}, betas=betas, fallbacks="default", **extra)
         last = None
         async for msg in runner:
@@ -151,6 +165,14 @@ async def research(question, words=45, model=MODEL, local=True, server_tools=Fal
     return text
 
 
+def _content(question, image):
+    """The user turn: text alone, or the photo (Claude vision) followed by the question."""
+    if not image:
+        return question
+    import multimodal
+    return [multimodal.image_block(image), {"type": "text", "text": question or "What is this? Find out."}]
+
+
 def _pair(s):
     name, _, url = s.partition("=")
     if not url.startswith("http"):
@@ -160,7 +182,7 @@ def _pair(s):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("question", nargs="+")
+    ap.add_argument("question", nargs="*")
     ap.add_argument("--words", type=int, default=45)
     ap.add_argument("--model", default=MODEL)
     ap.add_argument("--server-tools", action="store_true", help="add Anthropic's web_search + web_fetch")
@@ -170,6 +192,7 @@ if __name__ == "__main__":
                     help='local stdio MCP server, e.g. "scrapling mcp" (repeatable)')
     ap.add_argument("--no-local", action="store_true", help="drop the built-in Scrapling/API tools")
     ap.add_argument("--max-iterations", type=int, default=14)
+    ap.add_argument("--image", help="a photo (path or URL) Claude sees with the question")
     a = ap.parse_args()
     print(asyncio.run(research(" ".join(a.question), a.words, a.model, not a.no_local,
-                               a.server_tools, a.mcp, a.mcp_stdio, a.max_iterations)))
+                               a.server_tools, a.mcp, a.mcp_stdio, a.max_iterations, image=a.image)))
