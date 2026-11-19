@@ -49,6 +49,23 @@
     border: 1px solid var(--hairline); background: var(--surface); color: var(--ink);
   }
   details.key p { margin: 8px 0 0; }
+  .photo-chip { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+  .photo-chip img { width: 40px; height: 30px; object-fit: cover; border-radius: 8px; display: block; }
+  .photo-chip button, .pill .cam {
+    border: 0; background: none; cursor: pointer; color: var(--muted); font: inherit; padding: 4px 6px; border-radius: 8px;
+  }
+  .pill .cam:hover, .photo-chip button:hover { background: var(--page); color: var(--ink); }
+  body.dragging .pill { border-color: var(--accent); border-style: dashed; }
+  .imgs { width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin: 14px 0 0; }
+  .imgs:empty { display: none; }
+  .imgs a { position: relative; display: block; border-radius: 10px; overflow: hidden; border: 1px solid var(--hairline);
+    background: var(--surface); aspect-ratio: 4 / 3; }
+  .imgs img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .imgs a:hover { border-color: var(--accent); }
+  .imgs .lbl { position: absolute; left: 6px; bottom: 6px; max-width: calc(100% - 12px); padding: 1px 6px; border-radius: 6px;
+    font-size: 0.66rem; background: rgba(0, 0, 0, 0.62); color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hidden { display: none !important; }
+  label.opt { display: flex; gap: 8px; align-items: baseline; margin-top: 10px; }
   .ledger { width: 100%; margin: 12px 0 0; font-size: 0.74rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 14px; }
   .ledger .bad { color: #c2410c; }
   footer { text-align: center; font-size: 0.78rem; color: var(--muted); padding: 28px 16px; }
@@ -57,11 +74,17 @@
 <body>
 <main class="stage">
   <h1 class="logo">ask<span>·200</span></h1>
-  <p class="tag">reads ~200 sources, answers in one cited line</p>
+  <p class="tag">reads ~200 sources and images, answers in one cited line — ask with words or a photo</p>
 
   <form class="pill" id="form" role="search">
     <span class="mag" aria-hidden="true">⌕</span>
-    <input id="q" type="search" placeholder="Ask anything" autocomplete="off" aria-label="Question" autofocus>
+    <span class="photo-chip hidden" id="photoChip">
+      <img id="photoThumb" alt="your photo">
+      <button id="photoClear" type="button" aria-label="Remove photo">✕</button>
+    </span>
+    <input id="q" type="search" placeholder="Ask anything — or add a photo" autocomplete="off" aria-label="Question" autofocus>
+    <button class="cam" id="photoBtn" type="button" aria-label="Ask with a photo" title="Ask with a photo (or drop / paste one)">📷</button>
+    <input id="photoFile" type="file" accept="image/*" hidden>
   </form>
   <div class="chips" id="chips">
     <button type="button">why is the sky blue</button>
@@ -73,11 +96,12 @@
   <p class="status" id="status" aria-live="polite"></p>
   <div class="answer empty" id="answer" aria-live="polite"></div>
   <p class="meta" id="meta"></p>
+  <div class="imgs" id="imgs"></div>
   <div class="srcs" id="srcs"></div>
   <div class="ledger" id="ledger"></div>
 
   <details class="key" id="keyBox">
-    <summary>answers are extractive — add an Anthropic key for Claude-written ones</summary>
+    <summary>settings — answers are extractive until you add an Anthropic key</summary>
     <div class="row">
       <input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" aria-label="Anthropic API key">
       <select id="model" aria-label="Model">
@@ -91,13 +115,16 @@
         <option value="90">paragraph (≤90 words)</option>
       </select>
     </div>
-    <p>The key stays in this browser (localStorage) and goes only to api.anthropic.com. Without one,
-      the answer is the best sentences, verbatim, from the ranked passages.</p>
+    <label class="opt"><input id="clip" type="checkbox"> rank images with CLIP on their pixels
+      (runs in this tab; downloads the model once, ~90 MB)</label>
+    <p>The key stays in this browser (localStorage) and goes only to api.anthropic.com. With it, Claude
+      writes the answer and <em>sees</em> your photo and the top images. Without one, the answer is the
+      best sentences, verbatim, and a photo is read by CLIP in this tab.</p>
   </details>
 </main>
 
 <footer>
-  the browser reads CORS-open sources (Wikipedia, Hacker News, Stack Overflow, OpenAlex);
+  the browser reads CORS-open sources (Wikipedia, Hacker News, Stack Overflow, OpenAlex, GitHub) and 5 image libraries;
   <a href="https://github.com/sugeerth/clip-vlm-101/blob/main/answer.py">answer.py</a> scrapes the whole web with
   <a href="https://github.com/D4Vinci/Scrapling">Scrapling</a>
   &nbsp;·&nbsp; <a href="capstone.html">the capstone write-up</a>
@@ -106,7 +133,7 @@
 </footer>
 
 <script type="module">
-import { gather, retrieve, extractive, claudeAnswer } from './js/ask.js';
+import { gather, retrieve, extractive, claudeAnswer, rankImages, clipRerank, clipTags, photoBlock, visionQuery } from './js/ask.js';
 
 const $ = id => document.getElementById(id);
 const store = {
@@ -116,9 +143,11 @@ const store = {
 $('key').value = store.get('ask_key');
 $('model').value = store.get('ask_model') || 'claude-opus-5-5';
 $('words').value = store.get('ask_words') || '45';
+$('clip').checked = store.get('ask_clip') === '1';
 for (const id of ['key', 'model', 'words']) $(id).addEventListener('change', e => store.set('ask_' + id, e.target.value.trim()));
+$('clip').addEventListener('change', e => store.set('ask_clip', e.target.checked ? '1' : ''));
 
-const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const host = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };
 function paint(text, sources) {
   const by = new Map(sources.map(s => [s.n, s]));
@@ -128,36 +157,75 @@ function paint(text, sources) {
   });
 }
 
+// ---- the photo: button, drop anywhere, or paste ----
+let photo = null;      // File
+function setPhoto(file) {
+  if (file && !file.type.startsWith('image/')) return;
+  photo = file || null;
+  $('photoChip').classList.toggle('hidden', !photo);
+  if (photo) { $('photoThumb').src = URL.createObjectURL(photo); $('q').focus(); }
+}
+$('photoBtn').addEventListener('click', () => $('photoFile').click());
+$('photoFile').addEventListener('change', e => setPhoto(e.target.files[0]));
+$('photoClear').addEventListener('click', () => { setPhoto(null); $('photoFile').value = ''; });
+addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('dragging'); });
+addEventListener('dragleave', e => { if (!e.relatedTarget) document.body.classList.remove('dragging'); });
+addEventListener('drop', e => { e.preventDefault(); document.body.classList.remove('dragging'); setPhoto(e.dataTransfer.files[0]); });
+addEventListener('paste', e => { const f = [...(e.clipboardData?.files ?? [])].find(f => f.type.startsWith('image/')); if (f) setPhoto(f); });
+
 let run = 0;
 async function ask(question) {
   question = question.trim();
-  if (!question) return;
+  if (!question && !photo) return;
   const me = ++run, t0 = performance.now();
+  const key = $('key').value.trim(), model = $('model').value, words = +$('words').value;
   document.body.classList.add('searched');
-  history.replaceState(null, '', '?q=' + encodeURIComponent(question));
-  for (const id of ['meta', 'srcs', 'ledger']) $(id).innerHTML = '';
+  for (const id of ['meta', 'srcs', 'ledger', 'imgs']) $(id).innerHTML = '';
   $('answer').className = 'answer empty';
-  const showLedger = l => {
+  const status = t => { if (me === run) $('status').textContent = t; };
+
+  // a photo becomes (part of) the query: Claude vision with a key, CLIP in the tab without
+  let block = null, photoQuery = null;
+  if (photo) {
+    status('reading your photo…');
+    try {
+      block = await photoBlock(photo);
+      photoQuery = key ? await visionQuery({ key, model, photo: block, question })
+        : (await clipTags(photo, 3, t => status(t + ' (first time only)'))).join(' ');
+    } catch (e) { status(`couldn't read the photo: ${e.message ?? e}`); return; }
     if (me !== run) return;
+  }
+  const query = [question, photoQuery].filter(Boolean).join(' ');
+  if (!photo) history.replaceState(null, '', '?q=' + encodeURIComponent(question));
+
+  const showLedger = l => {
     const n = Object.values(l).reduce((s, x) => s + x.docs, 0);
-    $('status').textContent = `reading… ${n} documents from ${Object.keys(l).length} sources`;
+    status(`reading… ${n} documents and images from ${Object.keys(l).length} sources`);
   };
-  const { docs, ledger, queries } = await gather(question, { onProgress: showLedger });
+  const { docs, ledger, queries, apiImages } = await gather(query, { onProgress: showLedger });
   if (me !== run) return;
-  const { top, sources, passages } = retrieve(question, docs);
-  const words = +$('words').value;
-  $('status').textContent = '';
+  const { top, sources, passages } = retrieve(query, docs);
+  let images = rankImages(query, docs, apiImages, new Map(sources.map(s => [s.url, s.n])));
+  status('');
   $('answer').className = 'answer';
-  let text = extractive(question, top, words), mode = 'extractive';
+  let text = extractive(query, top, words), mode = 'extractive';
   paint(text, sources);
-  const key = $('key').value.trim();
+  drawImages(images);
+  if ($('clip').checked && images.length) {
+    status('ranking images with CLIP…');
+    try { images = await clipRerank(query, images, t => status(t + ' (first time only)')); } catch { /* keep word ranking */ }
+    if (me !== run) return;
+    status('');
+    drawImages(images);
+  }
   if (key && top.length) {
     let acc = '';
     $('answer').classList.add('streaming');
     try {
-      text = await claudeAnswer({ key, model: $('model').value, question, top, words,
+      const out = await claudeAnswer({ key, model, question: query, top, words, photo: block, images,
         onText: t => { if (me === run) paint(acc += t, sources); } });
-      mode = $('model').value;
+      text = out.text;
+      mode = model + (out.vision ? ' + vision' : '');
     } catch (e) {
       mode = `extractive (Claude failed: ${e.message ?? e})`;
     }
@@ -166,8 +234,9 @@ async function ask(question) {
     paint(text, sources);
   }
   const cited = new Set([...text.matchAll(/\[(\d+)\]/g)].map(m => +m[1]));
-  $('meta').innerHTML = `read <b>${docs.length}</b> documents · <b>${passages.toLocaleString()}</b> passages · ` +
-    `${queries.length} queries · ${esc(mode)} · ${((performance.now() - t0) / 1000).toFixed(1)}s`;
+  $('meta').innerHTML = (photoQuery ? `photo read as <b>${esc(photoQuery)}</b> · ` : '') +
+    `read <b>${docs.length}</b> documents · <b>${passages.toLocaleString()}</b> passages · ` +
+    `<b>${images.length}</b> images · ${esc(mode)} · ${((performance.now() - t0) / 1000).toFixed(1)}s`;
   $('srcs').innerHTML = sources.filter(s => cited.has(s.n) || cited.size === 0).concat(
     sources.filter(s => !cited.has(s.n) && cited.size)).slice(0, 8).map(s =>
     `<a class="src" href="${esc(s.url)}" target="_blank" rel="noopener"><span class="host"><b>${s.n}</b>${esc(host(s.url))}</span>` +
@@ -175,6 +244,15 @@ async function ask(question) {
   $('ledger').innerHTML = Object.entries(ledger).map(([name, l]) =>
     `<span class="${l.error ? 'bad' : ''}">${name}: ${l.error ? esc(l.error) : l.docs}</span>`).join('');
   if (!docs.length) $('answer').textContent = 'No source answered — are you offline?';
+}
+
+function drawImages(images) {
+  $('imgs').innerHTML = images.slice(0, 6).map(im => {
+    const lbl = im.n ? `[${im.n}] ${host(im.page)}` : [im.source, im.license].filter(Boolean).join(' · ');
+    return `<a href="${esc(im.page || im.url)}" target="_blank" rel="noopener" title="${esc(im.alt)}">` +
+      `<img src="${esc(im.url)}" alt="${esc(im.alt)}" loading="lazy" referrerpolicy="no-referrer" ` +
+      `onerror="this.parentElement.remove()"><span class="lbl">${esc(lbl)}</span></a>`;
+  }).join('');
 }
 
 $('form').addEventListener('submit', e => { e.preventDefault(); ask($('q').value); });

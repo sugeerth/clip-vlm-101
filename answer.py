@@ -219,6 +219,7 @@ def readable(page, min_chars=40):
 
 
 async def scrape(urls, concurrency, timeout):
+    import multimodal
     sem = asyncio.Semaphore(concurrency)
 
     async def one(u):
@@ -228,7 +229,8 @@ async def scrape(urls, concurrency, timeout):
                 if page.status >= 400 or "html" not in str(page.headers.get("content-type", "html")):
                     return None
                 title, text = readable(page)
-                return {"url": u, "title": title or urllib.parse.urlparse(u).netloc, "text": text}
+                return {"url": u, "title": title or urllib.parse.urlparse(u).netloc, "text": text,
+                        "images": multimodal.page_images(page, u)}
             except Exception:
                 return None
 
@@ -240,7 +242,9 @@ async def scrape(urls, concurrency, timeout):
 SYSTEM = ("You are a search engine's answer line. Answer the question in at most {w} words, "
           "using ONLY the numbered sources. Lead with the answer itself: no preamble, no "
           "restating the question, no hedging filler. Put a citation like [2] after every "
-          "claim. If the sources do not contain the answer, reply exactly: Not in sources.")
+          "claim. Images may be attached: the user's own photo, and images labelled with the "
+          "source they came from; use what you see, and cite an image's source like any other. "
+          "If the sources do not contain the answer, reply exactly: Not in sources.")
 
 
 def _client():
@@ -258,7 +262,7 @@ def _claude(client, model, max_tokens, system, user, on_text=None):
             model=model, max_tokens=max_tokens, system=system,
             output_config={"effort": "low"},        # short answers don't need deep thought
             betas=["server-side-fallback-2026-07-01"], fallbacks="default",
-            messages=[{"role": "user", "content": user}]) as stream:
+            messages=[{"role": "user", "content": user}]) as stream:   # user: str or content blocks
         for t in stream.text_stream:
             if on_text:
                 on_text(t)
@@ -268,36 +272,82 @@ def _claude(client, model, max_tokens, system, user, on_text=None):
     return "".join(b.text for b in msg.content if b.type == "text").strip()
 
 
-def ask(question, pages=200, k=10, words=45, engines=None, model="claude-opus-5-5",
-        concurrency=40, timeout=10, use_llm=True, stream=None):
+async def ask_async(question, pages=200, k=10, words=45, engines=None, model="claude-opus-5-5",
+                    concurrency=40, timeout=10, use_llm=True, stream=None, apis=None,
+                    image=None, use_clip=False, n_images=6):
+    """The whole pipeline. `apis`: source names from sources.py (None = all, () = none).
+    `image`: a local photo to ask about; `use_clip`: re-rank result images by CLIP pixels."""
+    import multimodal
+    import sources as api_sources
     t0 = time.time()
-    engines = engines or ENGINES
+    engines = ENGINES if engines is None else engines
     client = _client() if use_llm else None
+    image_query = multimodal.image_to_query(image, question, client, model) if image else None
+    question = " ".join(x for x in (question, image_query) if x) if image_query else question
     queries = subqueries(question, client, model)
-    per_engine = max(10, math.ceil(pages / max(1, len(queries) * len(engines))) * 2)
-    urls, ledger = asyncio.run(search(queries, engines, per_engine, timeout))
-    urls = urls[:pages]
-    docs = asyncio.run(scrape(urls, concurrency, timeout))
+    per_engine = max(10, math.ceil(pages / max(1, len(queries) * max(1, len(engines)))) * 2)
+
+    async def scraped():
+        urls, ledger = await search(queries, engines, per_engine, timeout) if engines else ([], {})
+        return urls[:pages], ledger, await scrape(urls[:pages], concurrency, timeout)
+
+    async def from_apis():
+        if apis is not None and not apis:
+            return {}, {}
+        return await api_sources.search_sources(question, apis, timeout)
+
+    async def from_image_apis():
+        if apis is not None and not apis:
+            return [], {}
+        return await multimodal.image_search(question, timeout=timeout)
+
+    (urls, ledger, docs), (api_docs, api_errors), (api_images, img_errors) = await asyncio.gather(
+        scraped(), from_apis(), from_image_apis())
+    for name in multimodal.IMAGE_SOURCES:
+        if apis is None or apis:
+            ledger[name] = {"images": sum(im["source"] == name for im in api_images),
+                            "errors": [img_errors[name]] if name in img_errors else []}
+    for name, ds in api_docs.items():                     # one ledger for engines and APIs alike
+        ledger[name] = {"docs": len(ds), "errors": [api_errors[name]] if name in api_errors else []}
+    seen = {d["url"] for d in docs}
+    docs += [d for ds in api_docs.values() for d in ds if d["url"] not in seen and not seen.add(d["url"])]
     passages = [{"text": c, "src": d["url"], "title": d["title"]}
                 for d in docs for c in chunk(d["text"])]
     top = rank(question, passages, k=k)
     num = number_sources(top)
     titles = {p["src"]: p["title"] for p in top}
     sources = [{"n": n, "url": u, "title": titles[u]} for u, n in num.items()]
+    images = multimodal.rank_images(question, docs, api_images, num, k=n_images)
+    if use_clip and images:
+        images = await multimodal.clip_rerank(question, images)
     mode = "extractive"
     answer = extractive(question, top, words)
     if client and top:
         ctx = "\n\n".join(f"[{p['n']}] {p['title']}\n{p['text']}" for p in top)
-        try:
-            answer = _claude(client, model, 2000, SYSTEM.format(w=words),
-                             f"Sources:\n{ctx}\n\nQuestion: {question}", stream)
-            mode = model
-        except Exception as e:
-            print(f"  (LLM answer failed, extractive instead: {e})", file=sys.stderr)
+        text = {"type": "text", "text": f"Sources:\n{ctx}\n\nQuestion: {question}"}
+        mine = ([{"type": "text", "text": "The user's photo:"}, multimodal.image_block(image)]
+                if image else [])
+        shown = [im for im in images if im["n"] and multimodal.RASTER.search(im["url"])][:3]
+        web = [b for im in shown for b in ({"type": "text", "text": f"Image from source [{im['n']}]:"},
+                                           multimodal.image_block(im["url"]))]
+        attempts = [[*mine, *web, text]] + ([[*mine, text]] if web else [])
+        for content in attempts:              # a dead image URL must not cost the answer
+            try:
+                answer = _claude(client, model, 2000, SYSTEM.format(w=words), content, stream)
+                mode = model + (" + vision" if len(content) > 1 else "")
+                break
+            except Exception as e:
+                print(f"  (LLM answer failed: {e})", file=sys.stderr)
+    n_api = sum(map(len, api_docs.values()))
     return {"question": question, "answer": answer, "mode": mode, "sources": sources,
+            "images": images, "image_query": image_query,
             "passages": top, "queries": queries, "ledger": ledger,
-            "stats": {"urls": len(urls), "scraped": len(docs), "passages": len(passages),
-                      "seconds": round(time.time() - t0, 2)}}
+            "stats": {"urls": len(urls), "scraped": len(docs) - n_api, "api_docs": n_api,
+                      "passages": len(passages), "seconds": round(time.time() - t0, 2)}}
+
+
+def ask(question, **kw):
+    return asyncio.run(ask_async(question, **kw))
 
 
 def show(r, streamed=False):
@@ -306,8 +356,13 @@ def show(r, streamed=False):
     print()
     for s in r["sources"]:
         print(f"  [{s['n']}] {urllib.parse.urlparse(s['url']).netloc} — {s['title'][:70]}")
+    for im in r.get("images", [])[:3]:
+        cite = f"[{im['n']}]" if im.get("n") else f"({im['source']})"
+        print(f"  img {cite} {im['url'][:90]}  — {(im['alt'] or im.get('caption', ''))[:50]}")
+    if r.get("image_query"):
+        print(f"  your photo was read as: {r['image_query']!r}")
     st = r["stats"]
-    print(f"\n  read {st['scraped']}/{st['urls']} pages · {st['passages']:,} passages · "
+    print(f"\n  read {st['scraped']}/{st['urls']} pages + {st.get('api_docs', 0)} API docs · {st['passages']:,} passages · "
           f"{len(r['queries'])} queries · {r['mode']} · {st['seconds']}s")
 
 
@@ -341,7 +396,19 @@ def twin_fixture():
                       "rank": [[p["src"], p["n"], p["score"]] for p in top],
                       "extractive": extractive(q, top, 30)})
     text = " ".join(t for _, t in TWIN)
+    import multimodal
+    img_docs = [{"url": "https://a", "title": "Rayleigh scattering", "images": [
+                    {"url": "https://a/sky.jpg", "alt": "Blue sky over a field", "caption": "Why the sky is blue"},
+                    {"url": "https://a/chart.png", "alt": "Scattering versus wavelength", "caption": ""}]},
+                {"url": "https://d", "title": "Pizza", "images": [
+                    {"url": "https://d/pizza.jpg", "alt": "Neapolitan pizza", "caption": ""}]}]
+    img_api = [{"url": "https://c/sky.jpg", "page": "https://c", "alt": "Clear blue sky at noon",
+                "license": "CC0", "source": "commons"},
+               {"url": "https://a/sky.jpg", "page": "https://dup", "alt": "duplicate", "license": "", "source": "openverse"}]
+    images = multimodal.rank_images("why is the sky blue", img_docs, img_api, {"https://a": 1}, k=3)
     return {"passages": passages, "cases": cases, "chunk_text": text, "chunk": chunk(text, 20),
+            "images": {"docs": img_docs, "api": img_api, "cited": {"https://a": 1},
+                       "ranked": [[im["url"], im["n"], im["score"]] for im in images]},
             "tokens": tokens("Why is the Sky blue? It's Rayleigh-scattering, 4th power!")}
 
 
@@ -349,7 +416,11 @@ def twin_fixture():
 
 FIXTURE = {
     "/a": "<html><head><title>Rayleigh scattering</title></head><body><nav>Home About "
-          "Contact Login and other navigation links here</nav><article><p>The sky is blue "
+          "Contact Login and other navigation links here <img src=\"/logo.png\" alt=\"Site logo\"></nav>"
+          "<article><figure><img src=\"/sky.jpg\" alt=\"Blue sky over a wheat field\" width=\"800\">"
+          "<figcaption>Rayleigh scattering turns the daytime sky blue.</figcaption></figure>"
+          "<img src=\"/icons/share.png\" alt=\"share\"><img src=\"/tiny.jpg\" alt=\"sky dot\" width=\"16\">"
+          "<p>The sky is blue "
           "because air molecules scatter short blue wavelengths of sunlight far more than red "
           "ones, an effect called Rayleigh scattering.</p><p>Scattering strength rises with the "
           "inverse fourth power of wavelength, so blue light scatters about five times more "
@@ -377,9 +448,10 @@ def _serve(pages):
             body = ("".join(f'<div class="r"><a class="hit" href="{p}">x</a></div>' for p in pages)
                     if path == "/search" else pages.get(path, ""))
             self.send_response(200 if body else 404)
-            self.send_header("content-type", "text/html; charset=utf-8")
+            binary = isinstance(body, bytes)              # images are served as raw PNG bytes
+            self.send_header("content-type", "image/png" if binary else "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(body.encode())
+            self.wfile.write(body if binary else body.encode())
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -395,7 +467,7 @@ def bench(n=200, runs=3):
     srv, base = _serve(pages)
     times = []
     for _ in range(runs):
-        r = ask("what is the answer to question 42", pages=n, words=20, use_llm=False,
+        r = ask("what is the answer to question 42", pages=n, words=20, use_llm=False, apis=(),
                 engines={"local": (base + "/search?q={q}", "a.hit", None)})
         times.append(r["stats"]["seconds"])
     srv.shutdown()
@@ -429,7 +501,7 @@ def selftest():
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_port}"
-    r = ask("why is the sky blue", pages=10, words=30, use_llm=False,
+    r = ask("why is the sky blue", pages=10, words=30, use_llm=False, apis=(),
             engines={"local": (base + "/search?q={q}", "a.hit", None)})
     srv.shutdown()
     show(r)
@@ -437,6 +509,8 @@ def selftest():
     assert r["sources"][0]["title"] == "Rayleigh scattering"
     assert "Rayleigh scattering" in r["answer"] and "[1]" in r["answer"]
     assert "pizza" not in r["answer"].lower() and "footer" not in r["answer"].lower()
+    assert [im["url"].rsplit("/", 1)[1] for im in r["images"]] == ["sky.jpg"], r["images"]  # logo/icon/tiny dropped
+    assert r["images"][0]["n"] == 1 and "Rayleigh" in r["images"][0]["caption"]
     print("selftest ok — Scrapling fetched + parsed the fixture web, answer is cited")
 
 
@@ -448,6 +522,9 @@ if __name__ == "__main__":
     ap.add_argument("--words", type=int, default=45, help="answer word budget")
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--no-llm", action="store_true", help="extractive answer only")
+    ap.add_argument("--apis", help="comma-separated API sources from sources.py (default: all)")
+    ap.add_argument("--image", help="a photo to ask about (Claude vision, or CLIP tags with torch)")
+    ap.add_argument("--clip", action="store_true", help="re-rank result images with CLIP (needs torch)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--bench", action="store_true", help="time 200 local pages end to end")
@@ -462,10 +539,12 @@ if __name__ == "__main__":
     if a.bench:
         bench(a.pages)
         sys.exit()
-    if not a.question:
-        ap.error("ask a question")
+    if not a.question and not a.image:
+        ap.error("ask a question (or pass --image)")
     live = not a.json and sys.stdout.isatty()
-    out = ask(" ".join(a.question), a.pages, a.k, a.words, model=a.model, use_llm=not a.no_llm,
+    out = ask(" ".join(a.question), pages=a.pages, k=a.k, words=a.words, model=a.model,
+              use_llm=not a.no_llm, apis=a.apis.split(",") if a.apis else None,
+              image=a.image, use_clip=a.clip,
               stream=(lambda t: print(t, end="", flush=True)) if live else None)
     if a.json:
         print(json.dumps(out, indent=2))
