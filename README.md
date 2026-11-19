@@ -4,7 +4,7 @@
 
 [![python](https://img.shields.io/badge/python-3.12-blue)](.github/workflows/test.yml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-41%20python%20%2B%2013%20JS%20twins-brightgreen)](test_smoke.py)
+[![tests](https://img.shields.io/badge/tests-42%20python%20%2B%2013%20JS%20twins-brightgreen)](test_smoke.py)
 [![demo](https://img.shields.io/badge/demo-live%20in%20your%20browser-orange)](https://sugeerth.github.io/clip-vlm-101/)
 
 **Live demo → [sugeerth.github.io/clip-vlm-101](https://sugeerth.github.io/clip-vlm-101/)**
@@ -30,7 +30,7 @@ git clone https://github.com/sugeerth/clip-vlm-101 && cd clip-vlm-101
 pip install numpy pillow    # numpy does the math; pillow is for one crawler test
 
 python3 similarity.py --json docs/db.json      # the modality gap, measured
-python3 test_smoke.py                          # 41 tests, ~2 seconds
+python3 test_smoke.py                          # 42 tests, ~2 seconds
 ```
 
 Tail of the first command, verbatim:
@@ -81,6 +81,22 @@ python3 answer.py "what is OPQ" --pages 200 --words 25 --json
 python3 answer.py --selftest                       # a real Scrapling crawl of a local fixture web
 python3 answer.py --bench                          # 200 local pages end to end (1.22 s median here)
 ```
+
+**Expand it with MCP and more tools** (`pip install mcp "anthropic[mcp]"`):
+
+```bash
+python3 sources.py "vector quantization"            # 7 keyless APIs at once, via Scrapling
+python3 mcp_server.py                               # ask·200 as an MCP server (stdio; --http for HTTP)
+claude mcp add ask200 -- python3 "$PWD/mcp_server.py"  # ...and plug it into Claude Code
+python3 research.py "..." --server-tools            # agent mode: Claude drives the tools
+python3 research.py "..." --mcp-stdio "scrapling mcp" --mcp docs=https://host/mcp
+```
+
+`sources.py` adds Wikipedia, Hacker News, Stack Overflow, OpenAlex, arXiv, GitHub and Reddit;
+`answer.py` ranks their documents with the scraped pages. `mcp_server.py` exposes `ask`,
+`web_search`, `read_page` and `search_sources` to any MCP client. `research.py` gives Claude
+those tools plus, optionally, Anthropic's server-side web search/fetch, remote MCP servers
+(MCP connector) and local stdio MCP servers, and has it answer in ≤45 cited words.
 
 `answer.py` sends each question (plus up to 3 rewrites) to DuckDuckGo, Bing, Wikipedia and
 Mojeek at once, fetches up to 200 result pages concurrently with
@@ -175,12 +191,13 @@ Same algorithm, an order of magnitude apart — the win came from moving the byt
 | [`guide/`](guide/README.md) | **start here after the quickstart** — 9 chapters, each runnable |
 | `features.py` | the one-call API: `fx.extract("photo.jpg")` → tags, caption, all three vectors |
 | `templates.py`, `embedder.py`, `tagger.py`, `fusion.py`, `db.py`, `ingest.py`, `search.py` | the other seven files of the 592-line core |
+| `sources.py`, `mcp_server.py`, `research.py` | 7 web APIs; ask·200 as an MCP server; agent mode with server tools + any MCP servers |
 | `answer.py` | ask the web: Scrapling fan-out to ≤200 pages → BM25 → one cited line (browser twin: `docs/ask.html`) |
 | `scale.py` | the 690k engine — `ingest`, `search`, `bench`, `serve`, `selftest` |
 | `opq.py`, `pq.py` | product quantization to 64 bytes/vector — the learned rotation, and the browser twin. IVF (`ivf_train`/`ivf_search`) and per-dimension int8 (`build_i8`) live inside `scale.py`; 1-bit binary (`binary_encode`) inside `cascade.py` |
 | `judge.py`, `conformal.py`, `trust.py`, `drift.py` | the evaluation layer: judges, coverage guarantees, drift gates |
 | `docs/` | the GitHub Pages demo (`main:/docs`) + 13 JS twin test suites |
-| `test_smoke.py` | 41 model-free tests; stubs the CLIP encoder so CI never installs torch |
+| `test_smoke.py` | 42 model-free tests; stubs the CLIP encoder so CI never installs torch |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | the four stages of billion-scale visual search, and which file shows each |
 
 CI ([`.github/workflows/test.yml`](.github/workflows/test.yml)) runs the smoke suite,

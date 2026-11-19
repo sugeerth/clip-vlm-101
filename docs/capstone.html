@@ -40,6 +40,7 @@
       <a href="#design">Design</a>
       <a href="#decisions">Decisions</a>
       <a href="#evaluation">Evaluation</a>
+      <a href="#expand">MCP &amp; tools</a>
       <a href="#limits">Limits</a>
       <a href="#reproduce">Reproduce</a>
     </div>
@@ -56,8 +57,8 @@
     <h1>Read <em>200</em> sources. Answer in one line.</h1>
     <p class="lede">
       <b>ask·200</b> is an answer engine in the style of Perplexity, built around two rules:
-      <b>read a lot</b> and <b>say very little</b>. A question goes out to four search engines at
-      once. Up to <b>200 result pages</b> are scraped in parallel with
+      <b>read a lot</b> and <b>say very little</b>. A question goes out to four search engines and seven
+      public APIs at once. Up to <b>200 result pages</b> are scraped in parallel with
       <a href="https://github.com/D4Vinci/Scrapling">Scrapling</a> and cut into passages. The best
       ten are ranked with BM25, and the answer comes back in <b>45 words or fewer</b>, with a
       <code>[n]</code> citation after every claim.
@@ -96,7 +97,8 @@
     <div class="card">
       <div class="pipe six">
         <div class="step"><b>Fan out</b><span>The question plus up to 3 rewrites (Claude writes them
-          when a key is available) go to DuckDuckGo, Bing, Wikipedia and Mojeek at the same time.</span></div>
+          when a key is available) go to DuckDuckGo, Bing, Wikipedia and Mojeek, and the question to
+          7 APIs, all at the same time.</span></div>
         <div class="step"><b>Scrape</b><span>Scrapling's <code>AsyncFetcher</code> fetches up to 200
           deduplicated URLs, 40 at a time, with a real Chrome TLS fingerprint.</span></div>
         <div class="step"><b>Clean</b><span>Scrapling XPath keeps paragraphs, lists, headings and code,
@@ -115,7 +117,7 @@
       <b>Two runtimes, one algorithm.</b> Browsers block a page from reading other sites' HTML
       (CORS), so Scrapling can't run on a static website. The live demo therefore uses the
       sources that do allow cross-origin reads: Wikipedia (full text of the top articles),
-      Hacker News, Stack Overflow and OpenAlex paper abstracts, up to 200 documents. The
+      Hacker News, Stack Overflow, OpenAlex paper abstracts and GitHub, up to 200 documents. The
       chunking, ranking, citation and extractive steps are the same code in both languages, and
       a test checks they agree byte for byte.
     </p>
@@ -167,7 +169,7 @@
         <div class="stat"><b>200/200</b><span>local pages scraped and parsed by Scrapling</span></div>
         <div class="stat"><b>1.22 s</b><span>median, question to answer over 200 pages (3 runs)</span></div>
         <div class="stat"><b>1,000</b><span>passages ranked per question in that run</span></div>
-        <div class="stat"><b>21/21</b><span>Python ↔ JavaScript parity checks pass</span></div>
+        <div class="stat"><b>22/22</b><span>browser twin checks pass, including exact parity with Python</span></div>
       </div>
       <p class="hint">The timing comes from <code>python3 answer.py --bench</code>: 200 generated
         pages served on localhost, on a 4-core cloud container, no LLM. It measures the engine's own
@@ -192,9 +194,52 @@
     </div>
   </section>
 
+  <!-- =============================================================== expand -->
+  <section id="expand">
+    <p class="eyebrow">05 · Expansion</p>
+    <h2>More of the web: seven APIs, an MCP server, and an agent</h2>
+    <p class="sub">
+      The fixed pipeline reads one round of search results. Three additions widen what it can
+      reach and let other tools use it.
+    </p>
+    <div class="card table-wrap">
+      <table>
+        <tr><th>piece</th><th>what it adds</th></tr>
+        <tr><td><code>sources.py</code></td>
+          <td>Seven keyless APIs queried in parallel, each returning whole documents rather than
+            links: Wikipedia, Hacker News, Stack Overflow, OpenAlex, arXiv, GitHub and Reddit.
+            Every request still goes through Scrapling, and <code>answer.py</code> now ranks
+            these documents alongside the scraped pages.</td></tr>
+        <tr><td><code>mcp_server.py</code></td>
+          <td>ask·200 as an MCP server with four tools: <code>ask</code>, <code>web_search</code>,
+            <code>read_page</code> and <code>search_sources</code>. Any MCP client can call it,
+            for example <code>claude mcp add ask200 -- python3 mcp_server.py</code> in Claude Code.
+            It needs no API key; the calling model writes the final answer from the numbered
+            passages.</td></tr>
+        <tr><td><code>research.py</code></td>
+          <td>Agent mode. Claude runs the search loop itself, deciding what to search next, which
+            page to open and when to stop, using the built-in tools plus any combination of:
+            Anthropic's server-side <code>web_search</code> and <code>web_fetch</code>
+            (<code>--server-tools</code>), remote MCP servers through the MCP connector
+            (<code>--mcp NAME=URL</code>), and local MCP servers over stdio
+            (<code>--mcp-stdio</code>, for example Scrapling's own browser tools with
+            <code>"scrapling mcp"</code>). Every tool call is printed as it happens.</td></tr>
+      </table>
+    </div>
+    <p class="sub">
+      <b>Trade-off:</b> the pipeline is fast and predictable; the agent can follow a lead across
+      several pages but costs more tokens and time per question. The capped word budget and
+      required citations are the same in both.
+    </p>
+    <p class="hint">Tested locally: each API parser on responses shaped like that API's format, the MCP server
+      through a real MCP client (listing tools, reading a page, running <code>ask</code>), the
+      agent's tool wiring with a stand-in API client, and a live stdio launch of both this server
+      and <code>scrapling mcp</code>. The agent was not run against the live Claude API here.</p>
+  </section>
+
   <!-- =============================================================== limits -->
   <section id="limits">
-    <p class="eyebrow">05 · Limitations</p>
+    <p class="eyebrow">06 · Limitations</p>
     <h2>What this does not show yet</h2>
     <ul class="tight">
       <li><b>No answer-quality benchmark.</b> The tests prove the pipeline is correct and
@@ -207,6 +252,9 @@
         "question 42" correctly led with the fact for 42, then used its spare words on a similar
         but wrong fact. A word budget doesn't guarantee relevance; an LLM answer or a dense
         re-ranker would filter that.</li>
+      <li><b>The new APIs were not called live.</b> Their parsers were tested against responses
+        shaped like each API's documented format, not the live services; Reddit in particular
+        may block automated clients.</li>
       <li><b>The browser version reads fewer kinds of sites.</b> Only CORS-open APIs, so no news
         sites, blogs or documentation pages. The command-line version reads any page.</li>
       <li><b>Scrape responsibly.</b> Chrome impersonation gets ordinary pages served as a reader
@@ -220,7 +268,7 @@
 
   <!-- ============================================================ reproduce -->
   <section id="reproduce">
-    <p class="eyebrow">06 · Reproduce</p>
+    <p class="eyebrow">07 · Reproduce</p>
     <h2>Run it yourself</h2>
 <pre class="cmd">git clone https://github.com/sugeerth/clip-vlm-101 && cd clip-vlm-101
 pip install "scrapling[fetchers]" anthropic
@@ -229,7 +277,12 @@ python3 answer.py "why is the sky blue"           # ≤45 words, every claim cit
 python3 answer.py "what is OPQ" --words 25 --json # machine-readable, with passages
 python3 answer.py --selftest                      # Scrapling crawl of a local fixture
 python3 answer.py --bench                         # 200 local pages, timed
-node docs/js/test_ask.mjs                         # browser twin matches Python</pre>
+node docs/js/test_ask.mjs                         # browser twin matches Python
+
+pip install mcp "anthropic[mcp]"
+python3 sources.py "vector quantization"          # all 7 APIs at once
+python3 mcp_server.py                             # ask·200 as an MCP server (stdio)
+python3 research.py "..." --server-tools --mcp-stdio "scrapling mcp"   # agent mode</pre>
     <p class="hint">Without <code>ANTHROPIC_API_KEY</code>, answers are extractive. Everything
       above runs on a laptop.</p>
   </section>

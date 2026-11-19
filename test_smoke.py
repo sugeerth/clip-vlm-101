@@ -1127,6 +1127,93 @@ def test_answer():
     answer.selftest()
 
 
+def test_web_tools():
+    """sources.py's 7 API parsers, the MCP server, and research.py's tool wiring — all local."""
+    try:
+        import mcp  # noqa: F401
+        import scrapling.fetchers  # noqa: F401
+    except ImportError:
+        return                                   # optional extras; CI installs them
+    import asyncio
+    import json
+    import types
+    import answer
+    import mcp_server
+    import research
+    import sources
+    from mcp import Client
+
+    fixtures = {
+        "/wikipedia": json.dumps({"query": {"pages": {"2": {"index": 2, "title": "Sunset", "fullurl": "https://w/2",
+                                                            "extract": "Sunsets are red."},
+                                                      "1": {"index": 1, "title": "Rayleigh scattering", "fullurl": "https://w/1",
+                                                            "extract": "The sky is blue because of Rayleigh scattering."}}}}),
+        "/hackernews": json.dumps({"hits": [{"objectID": "7", "story_title": "Sky", "comment_text": "<p>Blue &amp; bright</p>"}]}),
+        "/stackexchange": json.dumps({"items": [{"item_type": "answer", "answer_id": 3, "question_id": 1,
+                                                 "title": "Why blue?", "excerpt": "Short <span>wavelengths</span>."}]}),
+        "/openalex": json.dumps({"results": [{"id": "https://o/1", "display_name": "Optics", "publication_year": 1871,
+                                              "abstract_inverted_index": {"sky": [1], "The": [0], "glows.": [2]}}]}),
+        "/arxiv": "<feed><entry><id>http://arxiv.org/abs/1</id><title> Light\n scattering </title>"
+                  "<summary>Blue light scatters.</summary></entry></feed>",
+        "/github": json.dumps({"items": [{"html_url": "https://g/x", "full_name": "a/x", "description": "sky tools",
+                                          "topics": ["optics"], "stargazers_count": 5, "language": "Python"}]}),
+        "/reddit": "not json",
+        "/page": answer.FIXTURE["/a"],
+    }
+    fixtures.update(answer.FIXTURE)
+    srv, base = answer._serve(fixtures)
+    saved_sources, saved_engines = dict(sources.SOURCES), dict(answer.ENGINES)
+    try:
+        for name, (tpl, parse) in saved_sources.items():
+            sources.SOURCES[name] = (f"{base}/{name}?q={{q}}", parse)
+        answer.ENGINES.clear()
+        answer.ENGINES["local"] = (base + "/search?q={q}", "a.hit", None)
+
+        got, errors = asyncio.run(sources.search_sources("sky"))
+        assert [d["title"] for d in got["wikipedia"]] == ["Rayleigh scattering", "Sunset"]   # API rank order kept
+        assert got["hackernews"][0]["text"] == "Blue & bright"
+        assert got["stackexchange"][0]["url"] == "https://stackoverflow.com/a/3"
+        assert got["openalex"][0]["text"] == "The sky glows."
+        assert got["arxiv"][0] == {"url": "http://arxiv.org/abs/1", "title": "Light scattering",
+                                   "text": "Blue light scatters.", "source": "arxiv"}
+        assert "5 stars" in got["github"][0]["text"]
+        assert got["reddit"] == [] and "reddit" in errors                 # one source down, the rest fine
+
+        async def via_mcp():
+            async with Client(mcp_server.server) as c:
+                assert {t.name for t in (await c.list_tools()).tools} == {"ask", "web_search", "read_page", "search_sources"}
+                page = json.loads((await c.call_tool("read_page", {"url": base + "/page"})).content[0].text)
+                ans = json.loads((await c.call_tool("ask", {"question": "why is the sky blue", "pages": 10})).content[0].text)
+                return page, ans
+        page, ans = asyncio.run(via_mcp())
+        assert page["title"] == "Rayleigh scattering" and "footer" not in page["text"].lower()
+        assert ans["stats"]["scraped"] == 3 and ans["stats"]["api_docs"] == 7
+        assert "[1]" in ans["answer"] and ans["passages"][0]["n"] == 1
+    finally:
+        sources.SOURCES.update(saved_sources)
+        answer.ENGINES.clear()
+        answer.ENGINES.update(saved_engines)
+        srv.shutdown()
+
+    # research.py: what the tool runner is handed (a fake client — no API call)
+    seen = {}
+
+    class Runner:
+        def __init__(self, kw):
+            seen.update(kw)
+
+        async def __aiter__(self):
+            yield types.SimpleNamespace(stop_reason="end_turn",
+                                        content=[types.SimpleNamespace(type="text", text="Blue [1].\n\n[1] https://a")])
+
+    fake = types.SimpleNamespace(beta=types.SimpleNamespace(messages=types.SimpleNamespace(tool_runner=lambda **kw: Runner(kw))))
+    out = asyncio.run(research.research("q", server_tools=True, mcp=[("docs", "https://e.x/mcp")], client=fake))
+    names = [getattr(t, "name", None) or t.get("name") or t["type"] for t in seen["tools"]]
+    assert out.startswith("Blue [1]")
+    assert names == ["scrape_search", "read_page", "search_sources", "web_search", "web_fetch", "mcp_toolset"]
+    assert "mcp-client-2025-11-20" in seen["betas"] and seen["mcp_servers"][0]["name"] == "docs"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

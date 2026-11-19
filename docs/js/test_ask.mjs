@@ -34,12 +34,15 @@ check(plain('<p>a &amp; b&#x27;s</p><p>c &#x2F; d</p>') === "a & b's. c / d.", '
     if (url.includes('algolia')) return ok({ hits: [{ objectID: '1', title: 'Blue sky', story_text: '<p>Blue light scatters most.</p>' }] });
     if (url.includes('openalex')) return ok({ results: [{ id: 'https://o/1', display_name: 'Optics', publication_year: 2020,
       abstract_inverted_index: { Rayleigh: [0], scattering: [1], 'dominates.': [2] } }] });
+    if (url.includes('api.github.com')) return ok({ items: [{ html_url: 'https://github.com/a/sky', full_name: 'a/sky',
+      description: 'sky renderer', topics: ['optics'], stargazers_count: 9, language: 'Rust' }] });
     throw new Error('unexpected ' + url);
   };
   const { docs, ledger, queries } = await gather('why is the sky blue', { fetchFn });
   check(queries.length === 2, 'question + its keyword form are both searched');
   check(ledger.stackexchange.error && ledger.wikipedia.docs === 2 && ledger.hackernews.docs === 1, 'the ledger reports each source honestly');
-  check(docs.length === 3 && docs[0].text.startsWith('The sky is blue'), 'dedup by URL; top Wikipedia article read in full');
+  check(docs.length === 4 && docs[0].text.startsWith('The sky is blue'), 'dedup by URL; top Wikipedia article read in full');
+  check(docs.find(d => d.source === 'github').text.includes('9 stars, written in Rust'), 'GitHub repositories become documents');
   check(docs.find(d => d.source === 'openalex').text === 'Rayleigh scattering dominates.', 'OpenAlex abstract rebuilt from its inverted index');
   const { sources, top } = retrieve('why is the sky blue', docs);
   check(sources[0].url === 'https://w/Sky' && top[0].n === 1, 'retrieve numbers the best source [1]');

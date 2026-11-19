@@ -8,7 +8,8 @@
 // origin's HTML), so the page reads the sources that DO allow it: Wikipedia
 // (intro extracts + full text of the top articles), Hacker News (stories and
 // comments), Stack Exchange (questions and answers) and OpenAlex (paper
-// abstracts). answer.py, with Scrapling, reads any page on the web.
+// abstracts) and GitHub (repositories). answer.py, with Scrapling, reads any
+// page on the web; sources.py adds arXiv and Reddit there too.
 //
 // tokens / chunk / bm25 / rank / numberSources / extractive mirror answer.py
 // line for line; test_ask.mjs pins them to Python-computed fixtures.
@@ -160,6 +161,14 @@ export const SOURCES = {
       return { url: w.doi || w.id, title: `${w.display_name} (${w.publication_year})`,
         text: words.filter(Boolean).join(' '), source: 'openalex' };
     });
+  },
+  async github(q, fetchFn) {
+    const d = await jget(`https://api.github.com/search/repositories?per_page=20&q=${encodeURIComponent(q)}`, fetchFn);
+    return (d.items ?? []).map(r => ({
+      url: r.html_url, title: r.full_name, source: 'github',
+      text: `${r.full_name}: ${r.description || 'no description'}. Topics: ${(r.topics ?? []).join(', ') || 'none'}. ` +
+        `${r.stargazers_count ?? 0} stars, written in ${r.language || 'unknown'}.`,
+    }));
   },
 };
 

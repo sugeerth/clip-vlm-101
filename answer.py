@@ -268,16 +268,30 @@ def _claude(client, model, max_tokens, system, user, on_text=None):
     return "".join(b.text for b in msg.content if b.type == "text").strip()
 
 
-def ask(question, pages=200, k=10, words=45, engines=None, model="claude-opus-5-5",
-        concurrency=40, timeout=10, use_llm=True, stream=None):
+async def ask_async(question, pages=200, k=10, words=45, engines=None, model="claude-opus-5-5",
+                    concurrency=40, timeout=10, use_llm=True, stream=None, apis=None):
+    """The whole pipeline. `apis`: source names from sources.py (None = all, () = none)."""
+    import sources as api_sources
     t0 = time.time()
-    engines = engines or ENGINES
+    engines = ENGINES if engines is None else engines
     client = _client() if use_llm else None
     queries = subqueries(question, client, model)
-    per_engine = max(10, math.ceil(pages / max(1, len(queries) * len(engines))) * 2)
-    urls, ledger = asyncio.run(search(queries, engines, per_engine, timeout))
-    urls = urls[:pages]
-    docs = asyncio.run(scrape(urls, concurrency, timeout))
+    per_engine = max(10, math.ceil(pages / max(1, len(queries) * max(1, len(engines)))) * 2)
+
+    async def scraped():
+        urls, ledger = await search(queries, engines, per_engine, timeout) if engines else ([], {})
+        return urls[:pages], ledger, await scrape(urls[:pages], concurrency, timeout)
+
+    async def from_apis():
+        if apis is not None and not apis:
+            return {}, {}
+        return await api_sources.search_sources(question, apis, timeout)
+
+    (urls, ledger, docs), (api_docs, api_errors) = await asyncio.gather(scraped(), from_apis())
+    for name, ds in api_docs.items():                     # one ledger for engines and APIs alike
+        ledger[name] = {"docs": len(ds), "errors": [api_errors[name]] if name in api_errors else []}
+    seen = {d["url"] for d in docs}
+    docs += [d for ds in api_docs.values() for d in ds if d["url"] not in seen and not seen.add(d["url"])]
     passages = [{"text": c, "src": d["url"], "title": d["title"]}
                 for d in docs for c in chunk(d["text"])]
     top = rank(question, passages, k=k)
@@ -294,10 +308,15 @@ def ask(question, pages=200, k=10, words=45, engines=None, model="claude-opus-5-
             mode = model
         except Exception as e:
             print(f"  (LLM answer failed, extractive instead: {e})", file=sys.stderr)
+    n_api = sum(map(len, api_docs.values()))
     return {"question": question, "answer": answer, "mode": mode, "sources": sources,
             "passages": top, "queries": queries, "ledger": ledger,
-            "stats": {"urls": len(urls), "scraped": len(docs), "passages": len(passages),
-                      "seconds": round(time.time() - t0, 2)}}
+            "stats": {"urls": len(urls), "scraped": len(docs) - n_api, "api_docs": n_api,
+                      "passages": len(passages), "seconds": round(time.time() - t0, 2)}}
+
+
+def ask(question, **kw):
+    return asyncio.run(ask_async(question, **kw))
 
 
 def show(r, streamed=False):
@@ -307,7 +326,7 @@ def show(r, streamed=False):
     for s in r["sources"]:
         print(f"  [{s['n']}] {urllib.parse.urlparse(s['url']).netloc} — {s['title'][:70]}")
     st = r["stats"]
-    print(f"\n  read {st['scraped']}/{st['urls']} pages · {st['passages']:,} passages · "
+    print(f"\n  read {st['scraped']}/{st['urls']} pages + {st.get('api_docs', 0)} API docs · {st['passages']:,} passages · "
           f"{len(r['queries'])} queries · {r['mode']} · {st['seconds']}s")
 
 
@@ -395,7 +414,7 @@ def bench(n=200, runs=3):
     srv, base = _serve(pages)
     times = []
     for _ in range(runs):
-        r = ask("what is the answer to question 42", pages=n, words=20, use_llm=False,
+        r = ask("what is the answer to question 42", pages=n, words=20, use_llm=False, apis=(),
                 engines={"local": (base + "/search?q={q}", "a.hit", None)})
         times.append(r["stats"]["seconds"])
     srv.shutdown()
@@ -429,7 +448,7 @@ def selftest():
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_port}"
-    r = ask("why is the sky blue", pages=10, words=30, use_llm=False,
+    r = ask("why is the sky blue", pages=10, words=30, use_llm=False, apis=(),
             engines={"local": (base + "/search?q={q}", "a.hit", None)})
     srv.shutdown()
     show(r)
@@ -448,6 +467,7 @@ if __name__ == "__main__":
     ap.add_argument("--words", type=int, default=45, help="answer word budget")
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--no-llm", action="store_true", help="extractive answer only")
+    ap.add_argument("--apis", help="comma-separated API sources from sources.py (default: all)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--bench", action="store_true", help="time 200 local pages end to end")
@@ -465,7 +485,8 @@ if __name__ == "__main__":
     if not a.question:
         ap.error("ask a question")
     live = not a.json and sys.stdout.isatty()
-    out = ask(" ".join(a.question), a.pages, a.k, a.words, model=a.model, use_llm=not a.no_llm,
+    out = ask(" ".join(a.question), pages=a.pages, k=a.k, words=a.words, model=a.model,
+              use_llm=not a.no_llm, apis=a.apis.split(",") if a.apis else None,
               stream=(lambda t: print(t, end="", flush=True)) if live else None)
     if a.json:
         print(json.dumps(out, indent=2))
