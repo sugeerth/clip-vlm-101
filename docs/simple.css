@@ -349,3 +349,29 @@ footer { padding: 14px 20px 18px; text-align: center; font-size: 0.78rem; color:
 .rgrid figure.linked:hover, .rgrid figure.linked:focus-visible { transform: translateY(-2px); box-shadow: 0 8px 22px -10px rgba(0, 0, 0, 0.35); }
 .hint { font-size: 0.8rem; color: var(--muted, #898781); text-align: center; margin: 14px auto 0; max-width: 60ch; }
 .hint.hidden { display: none; }
+
+/* ---- ask·200 inline: the web's cited line above the gallery (bridge.js) ---- */
+.answer-card {
+  width: 100%; margin: 22px 0 0; padding: 14px 16px; border: 1px solid var(--hairline); border-radius: 14px;
+  background: var(--surface); box-shadow: var(--shadow); font-size: 0.98rem; line-height: 1.55;
+}
+.answer-card .ac-head { font-size: 0.74rem; color: var(--muted); margin-bottom: 4px; }
+.answer-card .ac-head b { color: var(--ink-2); font-weight: 600; }
+.answer-card .ac-body { color: var(--ink); }
+.answer-card .cite {
+  display: inline-block; min-width: 1.3em; padding: 0 5px; margin: 0 1px; border-radius: 6px; font-size: 0.7em;
+  vertical-align: 0.2em; text-align: center; text-decoration: none; background: var(--hairline); color: var(--ink-2);
+}
+.answer-card .cite:hover { background: var(--accent); color: #fff; }
+.answer-card .ac-imgs { display: flex; gap: 6px; margin-top: 10px; overflow-x: auto; }
+.answer-card .ac-imgs img { height: 64px; width: auto; max-width: 120px; object-fit: cover; border-radius: 8px; display: block; }
+.answer-card .ac-foot { margin-top: 8px; font-size: 0.74rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.answer-card .ac-foot a { color: var(--muted); text-decoration: none; }
+.answer-card .ac-foot a:hover { color: var(--accent-ink); }
+.answer-card .ac-more { margin-left: auto; color: var(--accent-ink) !important; }
+.rgrid figure .askit {
+  position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 0.68rem; text-decoration: none;
+  background: rgba(0, 0, 0, 0.62); color: #fff; opacity: 0; transition: opacity 140ms ease;
+}
+.rgrid figure:hover .askit, .rgrid figure:focus-within .askit, .rgrid figure .askit:focus { opacity: 1; }
+@media (hover: none) { .rgrid figure .askit { opacity: 1; } }

@@ -15,7 +15,8 @@ jobs:
           python-version: "3.12"
       - run: pip install numpy pillow   # pillow: spider.py's icon-size gate runs in test_smoke
       - run: python test_smoke.py
-      - run: pip install "scrapling[fetchers]"   # answer.py: a real Scrapling crawl of a local fixture web
+      - run: pip install "scrapling[fetchers]" mcp "anthropic[mcp]"   # answer.py crawl + MCP server + agent wiring
+      - run: python test_smoke.py          # again, now with the optional extras: test_web_tools runs for real
       - run: python answer.py --selftest
       - run: node docs/js/test_ask.mjs      # the browser answer engine: BM25/cites/extractive pinned to answer.py
       - run: node docs/js/test_rank.mjs     # the JS math must mirror the Python

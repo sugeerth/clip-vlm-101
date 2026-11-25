@@ -40,6 +40,8 @@
       <a href="#design">Design</a>
       <a href="#decisions">Decisions</a>
       <a href="#evaluation">Evaluation</a>
+      <a href="#expand">Images, MCP &amp; tools</a>
+      <a href="#bridge">See ⇄ read</a>
       <a href="#limits">Limits</a>
       <a href="#reproduce">Reproduce</a>
     </div>
@@ -56,19 +58,21 @@
     <h1>Read <em>200</em> sources. Answer in one line.</h1>
     <p class="lede">
       <b>ask·200</b> is an answer engine in the style of Perplexity, built around two rules:
-      <b>read a lot</b> and <b>say very little</b>. A question goes out to four search engines at
-      once. Up to <b>200 result pages</b> are scraped in parallel with
+      <b>read a lot</b> and <b>say very little</b>. A question goes out to four search engines and seven
+      public APIs at once. Up to <b>200 result pages</b> are scraped in parallel with
       <a href="https://github.com/D4Vinci/Scrapling">Scrapling</a> and cut into passages. The best
       ten are ranked with BM25, and the answer comes back in <b>45 words or fewer</b>, with a
       <code>[n]</code> citation after every claim.
     </p>
     <div class="cta-row">
       <a class="btn primary" href="ask.html">Try the live demo</a>
+      <a class="btn ghost" href="./?q=a%20fluffy%20animal">Try it with CLIP·search</a>
       <a class="btn ghost" href="https://github.com/sugeerth/clip-vlm-101/blob/main/answer.py">Read answer.py</a>
       <a class="btn ghost" href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/ask.js">Read the browser twin</a>
     </div>
     <p class="fine">This is the capstone of <a href="./">CLIP VLM 101</a>. The rest of the site
-      ranks 14 images by meaning; this project points the same retrieval ideas at the open web.</p>
+      ranks images by meaning with CLIP; this project points the same retrieval ideas at the open web,
+      and <a href="#bridge">section 06</a> joins the two into one system that both sees and reads.</p>
   </div>
 
   <!-- ============================================================== problem -->
@@ -96,7 +100,8 @@
     <div class="card">
       <div class="pipe six">
         <div class="step"><b>Fan out</b><span>The question plus up to 3 rewrites (Claude writes them
-          when a key is available) go to DuckDuckGo, Bing, Wikipedia and Mojeek at the same time.</span></div>
+          when a key is available) go to DuckDuckGo, Bing, Wikipedia and Mojeek, and the question to
+          7 APIs, all at the same time.</span></div>
         <div class="step"><b>Scrape</b><span>Scrapling's <code>AsyncFetcher</code> fetches up to 200
           deduplicated URLs, 40 at a time, with a real Chrome TLS fingerprint.</span></div>
         <div class="step"><b>Clean</b><span>Scrapling XPath keeps paragraphs, lists, headings and code,
@@ -115,7 +120,7 @@
       <b>Two runtimes, one algorithm.</b> Browsers block a page from reading other sites' HTML
       (CORS), so Scrapling can't run on a static website. The live demo therefore uses the
       sources that do allow cross-origin reads: Wikipedia (full text of the top articles),
-      Hacker News, Stack Overflow and OpenAlex paper abstracts, up to 200 documents. The
+      Hacker News, Stack Overflow, OpenAlex paper abstracts and GitHub, up to 200 documents. The
       chunking, ranking, citation and extractive steps are the same code in both languages, and
       a test checks they agree byte for byte.
     </p>
@@ -167,7 +172,7 @@
         <div class="stat"><b>200/200</b><span>local pages scraped and parsed by Scrapling</span></div>
         <div class="stat"><b>1.22 s</b><span>median, question to answer over 200 pages (3 runs)</span></div>
         <div class="stat"><b>1,000</b><span>passages ranked per question in that run</span></div>
-        <div class="stat"><b>21/21</b><span>Python ↔ JavaScript parity checks pass</span></div>
+        <div class="stat"><b>32/32</b><span>browser twin checks pass, including exact parity with Python</span></div>
       </div>
       <p class="hint">The timing comes from <code>python3 answer.py --bench</code>: 200 generated
         pages served on localhost, on a 4-core cloud container, no LLM. It measures the engine's own
@@ -192,9 +197,125 @@
     </div>
   </section>
 
+  <!-- =============================================================== expand -->
+  <section id="expand">
+    <p class="eyebrow">05 · Expansion</p>
+    <h2>More of the web: seven APIs, images, an MCP server, and an agent</h2>
+    <p class="sub">
+      The fixed pipeline reads one round of search results, as text. Four additions widen what
+      it can reach, let it work with images, and let other tools use it.
+    </p>
+    <div class="card table-wrap">
+      <table>
+        <tr><th>piece</th><th>what it adds</th></tr>
+        <tr><td><code>sources.py</code></td>
+          <td>Seven keyless APIs queried in parallel, each returning whole documents rather than
+            links: Wikipedia, Hacker News, Stack Overflow, OpenAlex, arXiv, GitHub and Reddit.
+            Every request still goes through Scrapling, and <code>answer.py</code> now ranks
+            these documents alongside the scraped pages.</td></tr>
+        <tr><td><code>multimodal.py</code></td>
+          <td><b>Images out:</b> every scraped page gives up its content images (logos, icons and
+            tiny images filtered out), and Wikimedia Commons and Openverse add licensed ones. They
+            are ranked by their alt text, caption and page title, with a boost when their page is
+            cited; <code>--clip</code> re-ranks them by CLIP on the pixels, the same model the rest
+            of this site is built on. <b>Images in:</b> <code>--image photo.jpg</code> turns a photo
+            into a search query, using Claude vision with a key or CLIP tags without one.
+            <b>Images read:</b> when Claude writes the answer it also sees your photo and up to
+            three images from cited sources.</td></tr>
+        <tr><td><code>mcp_server.py</code></td>
+          <td>ask·200 as an MCP server with five tools: <code>ask</code>, <code>web_search</code>,
+            <code>read_page</code>, <code>search_sources</code> and <code>find_images</code>. Any MCP client can call it,
+            for example <code>claude mcp add ask200 -- python3 mcp_server.py</code> in Claude Code.
+            It needs no API key; the calling model writes the final answer from the numbered
+            passages.</td></tr>
+        <tr><td><code>research.py</code></td>
+          <td>Agent mode. Claude runs the search loop itself, deciding what to search next, which
+            page to open and when to stop, using the built-in tools plus any combination of:
+            Anthropic's server-side <code>web_search</code> and <code>web_fetch</code>
+            (<code>--server-tools</code>), remote MCP servers through the MCP connector
+            (<code>--mcp NAME=URL</code>), and local MCP servers over stdio
+            (<code>--mcp-stdio</code>, for example Scrapling's own browser tools with
+            <code>"scrapling mcp"</code>). <code>--image</code> lets Claude see a photo with the
+            question. Every tool call is printed as it happens.</td></tr>
+      </table>
+    </div>
+    <p class="sub">
+      <b>Trade-off:</b> the pipeline is fast and predictable; the agent can follow a lead across
+      several pages but costs more tokens and time per question. The capped word budget and
+      required citations are the same in both.
+    </p>
+    <p class="sub">
+      <b>In the browser:</b> the demo page shows an image strip under each answer, drawn from
+      Wikipedia's article images and five image libraries (Openverse, Commons, the Art Institute
+      of Chicago, the Met and iNaturalist). Ask with a photo by clicking 📷, dropping one on the
+      page or pasting it. With a key, Claude reads the photo; without one, CLIP reads it in the
+      tab. An opt-in setting re-ranks the images with CLIP.
+    </p>
+    <p class="hint">Tested locally: each API parser on responses shaped like that API's format, the MCP server
+      through a real MCP client (listing tools, reading a page, running <code>ask</code>), the
+      agent's tool wiring with a stand-in API client, and a live stdio launch of both this server
+      and <code>scrapling mcp</code>. The image pipeline was tested the same way: a page whose logo,
+      icon and 16-pixel image are dropped while its figure is kept and cited as [1]; CLIP re-ranking
+      with a stand-in encoder; and a photo question where a stand-in Claude received the photo
+      first and a cited page's image. Neither the agent nor vision was run against the live
+      Claude API here, and CLIP was not run on real web images.</p>
+  </section>
+
+  <!-- =============================================================== bridge -->
+  <section id="bridge">
+    <p class="eyebrow">06 · One system</p>
+    <h2>CLIP·search ⇄ ask·200: a gallery that sees, an engine that reads</h2>
+    <p class="sub">
+      CLIP·search finds images by what they show; ask·200 finds answers by what pages say. Joined,
+      each covers the other's blind spot: CLIP can say a photo is "a cat" but not what breed it is
+      or how to care for it, and a web answer can explain Rayleigh scattering but not find the
+      photo of the sky already in your gallery. The bridge is small on purpose: two shared
+      functions plus links between the pages.
+    </p>
+    <div class="card">
+      <div class="pipe" style="grid-template-columns:repeat(4,1fr)">
+        <div class="step"><b>Search → answer</b><span>Every text search on the
+          <a href="./">CLIP·search home page</a> also runs ask·200 and shows the web's cited
+          answer above the gallery results. It's keyless, never delays the gallery, and follows the
+          page's web toggle.</span></div>
+        <div class="step"><b>Photo → answer</b><span>Search by a photo and its nearest gallery
+          images name it (<code>knnTags</code>: their tags, weighted by similarity and tag
+          position). That name becomes a web question. No text model and no key are needed.</span></div>
+        <div class="step"><b>Gallery → web</b><span>Every gallery photo has an "ask the web ↗"
+          link. ask·200 opens with the photo and reads it from its stored CLIP tags, again without a
+          model or key.</span></div>
+        <div class="step"><b>Web → gallery</b><span>Every ask·200 question also searches your gallery
+          (BM25 on captions and tags, or CLIP on the pixels), and
+          <code>answer.py --save-images</code> downloads the web's top images with a manifest so
+          <code>ingest.py</code> can add them: answers grow the gallery.</span></div>
+      </div>
+      <p class="hint">Also exposed as tools: the MCP server's <code>gallery_search</code> and the
+        agent's <code>gallery_search</code> let Claude check your photos and the web in one session.</p>
+    </div>
+    <div class="card table-wrap">
+      <table>
+        <tr><th>measured on the committed gallery</th><th>result</th></tr>
+        <tr><td>A photo's vector alone, named by its gallery neighbours</td>
+          <td><b>13 of 14</b> get their own head tag. The castle is outvoted by "tower": its
+            nearest neighbours are the Eiffel Tower and Westminster.</td></tr>
+        <tr><td>Voting rule</td>
+          <td>Plain similarity voting named only <b>2 of 14</b> correctly (the cat came out as "pet",
+            the bear as "wildlife"): shared, generic tags pile up votes.
+            Weighting each tag by 0.5<sup>position</sup> fixed that, because a tag listed first is the
+            most specific.</td></tr>
+        <tr><td>Python ↔ browser parity</td>
+          <td><code>knnTags</code> on all 14 captions and <code>gallerySearch</code> on 4 queries
+            match <code>multimodal.py</code> exactly.</td></tr>
+        <tr><td>Grow the gallery from answers</td>
+          <td><code>save_images</code> keeps an image once per pixel hash, skips images smaller than
+            160 px and dead links, and records URL, page, license and the question.</td></tr>
+      </table>
+    </div>
+  </section>
+
   <!-- =============================================================== limits -->
   <section id="limits">
-    <p class="eyebrow">05 · Limitations</p>
+    <p class="eyebrow">07 · Limitations</p>
     <h2>What this does not show yet</h2>
     <ul class="tight">
       <li><b>No answer-quality benchmark.</b> The tests prove the pipeline is correct and
@@ -207,6 +328,9 @@
         "question 42" correctly led with the fact for 42, then used its spare words on a similar
         but wrong fact. A word budget doesn't guarantee relevance; an LLM answer or a dense
         re-ranker would filter that.</li>
+      <li><b>The new APIs were not called live.</b> Their parsers were tested against responses
+        shaped like each API's documented format, not the live services; Reddit in particular
+        may block automated clients.</li>
       <li><b>The browser version reads fewer kinds of sites.</b> Only CORS-open APIs, so no news
         sites, blogs or documentation pages. The command-line version reads any page.</li>
       <li><b>Scrape responsibly.</b> Chrome impersonation gets ordinary pages served as a reader
@@ -220,7 +344,7 @@
 
   <!-- ============================================================ reproduce -->
   <section id="reproduce">
-    <p class="eyebrow">06 · Reproduce</p>
+    <p class="eyebrow">08 · Reproduce</p>
     <h2>Run it yourself</h2>
 <pre class="cmd">git clone https://github.com/sugeerth/clip-vlm-101 && cd clip-vlm-101
 pip install "scrapling[fetchers]" anthropic
@@ -229,7 +353,16 @@ python3 answer.py "why is the sky blue"           # ≤45 words, every claim cit
 python3 answer.py "what is OPQ" --words 25 --json # machine-readable, with passages
 python3 answer.py --selftest                      # Scrapling crawl of a local fixture
 python3 answer.py --bench                         # 200 local pages, timed
-node docs/js/test_ask.mjs                         # browser twin matches Python</pre>
+node docs/js/test_ask.mjs                         # browser twin matches Python
+
+pip install mcp "anthropic[mcp]"
+python3 sources.py "vector quantization"          # all 7 APIs at once
+python3 mcp_server.py                             # ask·200 as an MCP server (stdio)
+python3 research.py "..." --server-tools --mcp-stdio "scrapling mcp"   # agent mode
+python3 answer.py --image photo.jpg "what is this and where?"          # ask with a photo
+python3 answer.py "northern lights" --clip                             # rank images by CLIP (needs torch)
+python3 answer.py "why do cats purr" --gallery --save-images web_imgs/  # + your gallery, then grow it
+python3 ingest.py web_imgs/web_*.jpg                                     # the web's images, now searchable by meaning</pre>
     <p class="hint">Without <code>ANTHROPIC_API_KEY</code>, answers are extractive. Everything
       above runs on a laptop.</p>
   </section>
