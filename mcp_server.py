@@ -3,7 +3,7 @@
 pipeline: MCP client (Claude Code, Claude Desktop, research.py, ...) ─► [this server]
           ─► ask · web_search · read_page · search_sources ─► Scrapling + 7 APIs
 
-Five tools, all thin wrappers over answer.py, sources.py and multimodal.py:
+Six tools, all thin wrappers over answer.py, sources.py and multimodal.py:
 
     ask             the full pipeline: fan out, scrape ≤N pages + APIs, BM25,
                     return a cited extractive answer, the numbered passages and
@@ -12,6 +12,7 @@ Five tools, all thin wrappers over answer.py, sources.py and multimodal.py:
     read_page       one URL → readable text (Scrapling, nav/footer stripped)
     search_sources  7 keyless APIs at once → whole documents
     find_images     Commons + Openverse → licensed images, ranked
+    gallery_search  the CLIP·search gallery (docs/db.json) by meaning — the bridge
 
     pip install "scrapling[fetchers]" mcp
     python3 mcp_server.py                     # stdio (what desktop clients launch)
@@ -24,6 +25,7 @@ already is one, and this keeps the server keyless.
 """
 import argparse
 import json
+import pathlib
 
 from mcp.server.mcpserver import MCPServer
 
@@ -69,6 +71,19 @@ async def find_images(query: str, limit: int = 8) -> str:
     their titles/descriptions match. Returns image URL, landing page, description, license."""
     imgs, errors = await multimodal.image_search(query)
     return json.dumps({"images": multimodal.rank_images(query, [], imgs, {}, k=limit), "errors": errors}, indent=1)
+
+
+GALLERY = str(pathlib.Path(__file__).with_name("docs") / "db.json")
+
+
+@server.tool()
+async def gallery_search(query: str, k: int = 6, clip: bool = False) -> str:
+    """Search the CLIP·search image gallery (docs/db.json, stored CLIP vectors) by meaning:
+    keyword BM25 over captions and tags, or with clip=true CLIP's text tower against the
+    images' pixels (needs torch). Returns files, tags and scores."""
+    items = multimodal.load_gallery(GALLERY)
+    hits = multimodal.clip_gallery_search(query, items, k) if clip else multimodal.gallery_search(query, items, k)
+    return json.dumps({"gallery": GALLERY, "hits": hits}, indent=1)
 
 
 @server.tool()

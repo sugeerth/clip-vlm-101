@@ -65,6 +65,9 @@
   .imgs .lbl { position: absolute; left: 6px; bottom: 6px; max-width: calc(100% - 12px); padding: 1px 6px; border-radius: 6px;
     font-size: 0.66rem; background: rgba(0, 0, 0, 0.62); color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hidden { display: none !important; }
+  .imgs.gal { grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); }
+  .imgs.gal .glabel { grid-column: 1 / -1; font-size: 0.74rem; color: var(--muted); }
+  .imgs.gal .glabel + a, .imgs.gal a { aspect-ratio: 1; }
   label.opt { display: flex; gap: 8px; align-items: baseline; margin-top: 10px; }
   .ledger { width: 100%; margin: 12px 0 0; font-size: 0.74rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 14px; }
   .ledger .bad { color: #c2410c; }
@@ -97,6 +100,7 @@
   <div class="answer empty" id="answer" aria-live="polite"></div>
   <p class="meta" id="meta"></p>
   <div class="imgs" id="imgs"></div>
+  <div class="imgs gal" id="gallery"></div>
   <div class="srcs" id="srcs"></div>
   <div class="ledger" id="ledger"></div>
 
@@ -115,7 +119,7 @@
         <option value="90">paragraph (≤90 words)</option>
       </select>
     </div>
-    <label class="opt"><input id="clip" type="checkbox"> rank images with CLIP on their pixels
+    <label class="opt"><input id="clip" type="checkbox"> rank web images and your gallery with CLIP on their pixels
       (runs in this tab; downloads the model once, ~90 MB)</label>
     <p>The key stays in this browser (localStorage) and goes only to api.anthropic.com. With it, Claude
       writes the answer and <em>sees</em> your photo and the top images. Without one, the answer is the
@@ -128,12 +132,17 @@
   <a href="https://github.com/sugeerth/clip-vlm-101/blob/main/answer.py">answer.py</a> scrapes the whole web with
   <a href="https://github.com/D4Vinci/Scrapling">Scrapling</a>
   &nbsp;·&nbsp; <a href="capstone.html">the capstone write-up</a>
-  &nbsp;·&nbsp; <a href="index.html">image search</a>
+  &nbsp;·&nbsp; <a href="index.html">CLIP·search, your gallery</a>
   &nbsp;·&nbsp; <a href="https://github.com/sugeerth/clip-vlm-101">github</a>
 </footer>
 
 <script type="module">
 import { gather, retrieve, extractive, claudeAnswer, rankImages, clipRerank, clipTags, photoBlock, visionQuery } from './js/ask.js';
+import { gallerySearch } from './js/bridge.js';
+
+// the CLIP·search gallery (db.json: 14 photos with stored CLIP vectors) — loaded once, lazily
+let galleryP = null;
+const gallery = () => (galleryP ??= fetch('db.json').then(r => r.json()).then(d => d.items).catch(() => []));
 
 const $ = id => document.getElementById(id);
 const store = {
@@ -159,9 +168,11 @@ function paint(text, sources) {
 
 // ---- the photo: button, drop anywhere, or paste ----
 let photo = null;      // File
-function setPhoto(file) {
+let photoItem = null;  // the gallery item, when the photo came from CLIP·search
+function setPhoto(file, item = null) {
   if (file && !file.type.startsWith('image/')) return;
   photo = file || null;
+  photoItem = photo ? item : null;
   $('photoChip').classList.toggle('hidden', !photo);
   if (photo) { $('photoThumb').src = URL.createObjectURL(photo); $('q').focus(); }
 }
@@ -180,7 +191,7 @@ async function ask(question) {
   const me = ++run, t0 = performance.now();
   const key = $('key').value.trim(), model = $('model').value, words = +$('words').value;
   document.body.classList.add('searched');
-  for (const id of ['meta', 'srcs', 'ledger', 'imgs']) $(id).innerHTML = '';
+  for (const id of ['meta', 'srcs', 'ledger', 'imgs', 'gallery']) $(id).innerHTML = '';
   $('answer').className = 'answer empty';
   const status = t => { if (me === run) $('status').textContent = t; };
 
@@ -190,7 +201,9 @@ async function ask(question) {
     status('reading your photo…');
     try {
       block = await photoBlock(photo);
-      photoQuery = key ? await visionQuery({ key, model, photo: block, question })
+      // a gallery photo was already tagged by CLIP (db.json) — no model, no key
+      photoQuery = photoItem ? photoItem.tags.slice(0, 3).join(' ')
+        : key ? await visionQuery({ key, model, photo: block, question })
         : (await clipTags(photo, 3, t => status(t + ' (first time only)'))).join(' ');
     } catch (e) { status(`couldn't read the photo: ${e.message ?? e}`); return; }
     if (me !== run) return;
@@ -211,6 +224,7 @@ async function ask(question) {
   let text = extractive(query, top, words), mode = 'extractive';
   paint(text, sources);
   drawImages(images);
+  drawGallery(query, me);
   if ($('clip').checked && images.length) {
     status('ranking images with CLIP…');
     try { images = await clipRerank(query, images, t => status(t + ' (first time only)')); } catch { /* keep word ranking */ }
@@ -246,6 +260,24 @@ async function ask(question) {
   if (!docs.length) $('answer').textContent = 'No source answered — are you offline?';
 }
 
+// see ⇄ read: the same question against your CLIP gallery — words by default, pixels with CLIP on
+async function drawGallery(query, me) {
+  const items = await gallery();
+  if (!items.length || me !== run) return;
+  let hits = gallerySearch(query, items, 4);
+  if ($('clip').checked) {
+    try {
+      const { getTextEncoder } = await import('./js/clip.js');
+      const [qv] = await (await getTextEncoder(() => {}, () => {}))([`a photo of ${query}`]);
+      hits = gallerySearch(query, items, 4, qv).filter(h => h.score > 0.2);
+    } catch { /* keep the word match */ }
+  }
+  if (me !== run) return;
+  $('gallery').innerHTML = hits.length ? `<div class="glabel">from your CLIP gallery</div>` + hits.map(h =>
+    `<a href="explore.html?pick=${h.index}#lab" title="${esc(h.tags.join(', '))} — see why it matched">` +
+    `<img src="${esc(h.file)}" alt="${esc(h.tags.join(', '))}" loading="lazy"><span class="lbl">${esc(h.tags.slice(0, 2).join(' · '))}</span></a>`).join('') : '';
+}
+
 function drawImages(images) {
   $('imgs').innerHTML = images.slice(0, 6).map(im => {
     const lbl = im.n ? `[${im.n}] ${host(im.page)}` : [im.source, im.license].filter(Boolean).join(' · ');
@@ -257,8 +289,15 @@ function drawImages(images) {
 
 $('form').addEventListener('submit', e => { e.preventDefault(); ask($('q').value); });
 $('chips').addEventListener('click', e => { if (e.target.tagName === 'BUTTON') { $('q').value = e.target.textContent; ask($('q').value); } });
-const q0 = new URLSearchParams(location.search).get('q');
-if (q0) { $('q').value = q0; ask(q0); }
+const params = new URLSearchParams(location.search);
+const q0 = params.get('q'), p0 = params.get('photo');
+if (p0 && /^images\/[\w.-]+$/.test(p0)) {          // a gallery photo, handed over by CLIP·search
+  const blob = await (await fetch(p0)).blob();
+  const item = (await gallery()).find(it => it.file === p0) ?? null;
+  setPhoto(new File([blob], p0.split('/').pop(), { type: blob.type || 'image/jpeg' }), item);
+  $('q').value = q0 ?? '';
+  ask($('q').value);
+} else if (q0) { $('q').value = q0; ask(q0); }
 </script>
 </body>
 </html>

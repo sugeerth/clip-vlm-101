@@ -41,6 +41,7 @@
       <a href="#decisions">Decisions</a>
       <a href="#evaluation">Evaluation</a>
       <a href="#expand">Images, MCP &amp; tools</a>
+      <a href="#bridge">See ⇄ read</a>
       <a href="#limits">Limits</a>
       <a href="#reproduce">Reproduce</a>
     </div>
@@ -65,11 +66,13 @@
     </p>
     <div class="cta-row">
       <a class="btn primary" href="ask.html">Try the live demo</a>
+      <a class="btn ghost" href="./?q=a%20fluffy%20animal">Try it with CLIP·search</a>
       <a class="btn ghost" href="https://github.com/sugeerth/clip-vlm-101/blob/main/answer.py">Read answer.py</a>
       <a class="btn ghost" href="https://github.com/sugeerth/clip-vlm-101/blob/main/docs/js/ask.js">Read the browser twin</a>
     </div>
     <p class="fine">This is the capstone of <a href="./">CLIP VLM 101</a>. The rest of the site
-      ranks 14 images by meaning; this project points the same retrieval ideas at the open web.</p>
+      ranks images by meaning with CLIP; this project points the same retrieval ideas at the open web,
+      and <a href="#bridge">section 06</a> joins the two into one system that both sees and reads.</p>
   </div>
 
   <!-- ============================================================== problem -->
@@ -169,7 +172,7 @@
         <div class="stat"><b>200/200</b><span>local pages scraped and parsed by Scrapling</span></div>
         <div class="stat"><b>1.22 s</b><span>median, question to answer over 200 pages (3 runs)</span></div>
         <div class="stat"><b>1,000</b><span>passages ranked per question in that run</span></div>
-        <div class="stat"><b>26/26</b><span>browser twin checks pass, including exact parity with Python</span></div>
+        <div class="stat"><b>32/32</b><span>browser twin checks pass, including exact parity with Python</span></div>
       </div>
       <p class="hint">The timing comes from <code>python3 answer.py --bench</code>: 200 generated
         pages served on localhost, on a 4-core cloud container, no LLM. It measures the engine's own
@@ -258,9 +261,61 @@
       Claude API here, and CLIP was not run on real web images.</p>
   </section>
 
+  <!-- =============================================================== bridge -->
+  <section id="bridge">
+    <p class="eyebrow">06 · One system</p>
+    <h2>CLIP·search ⇄ ask·200: a gallery that sees, an engine that reads</h2>
+    <p class="sub">
+      CLIP·search finds images by what they show; ask·200 finds answers by what pages say. Joined,
+      each covers the other's blind spot: CLIP can say a photo is "a cat" but not what breed it is
+      or how to care for it, and a web answer can explain Rayleigh scattering but not find the
+      photo of the sky already in your gallery. The bridge is small on purpose: two shared
+      functions plus links between the pages.
+    </p>
+    <div class="card">
+      <div class="pipe" style="grid-template-columns:repeat(4,1fr)">
+        <div class="step"><b>Search → answer</b><span>Every text search on the
+          <a href="./">CLIP·search home page</a> also runs ask·200 and shows the web's cited
+          answer above the gallery results. It's keyless, never delays the gallery, and follows the
+          page's web toggle.</span></div>
+        <div class="step"><b>Photo → answer</b><span>Search by a photo and its nearest gallery
+          images name it (<code>knnTags</code>: their tags, weighted by similarity and tag
+          position). That name becomes a web question. No text model and no key are needed.</span></div>
+        <div class="step"><b>Gallery → web</b><span>Every gallery photo has an "ask the web ↗"
+          link. ask·200 opens with the photo and reads it from its stored CLIP tags, again without a
+          model or key.</span></div>
+        <div class="step"><b>Web → gallery</b><span>Every ask·200 question also searches your gallery
+          (BM25 on captions and tags, or CLIP on the pixels), and
+          <code>answer.py --save-images</code> downloads the web's top images with a manifest so
+          <code>ingest.py</code> can add them: answers grow the gallery.</span></div>
+      </div>
+      <p class="hint">Also exposed as tools: the MCP server's <code>gallery_search</code> and the
+        agent's <code>gallery_search</code> let Claude check your photos and the web in one session.</p>
+    </div>
+    <div class="card table-wrap">
+      <table>
+        <tr><th>measured on the committed gallery</th><th>result</th></tr>
+        <tr><td>A photo's vector alone, named by its gallery neighbours</td>
+          <td><b>13 of 14</b> get their own head tag. The castle is outvoted by "tower": its
+            nearest neighbours are the Eiffel Tower and Westminster.</td></tr>
+        <tr><td>Voting rule</td>
+          <td>Plain similarity voting named only <b>2 of 14</b> correctly (the cat came out as "pet",
+            the bear as "wildlife"): shared, generic tags pile up votes.
+            Weighting each tag by 0.5<sup>position</sup> fixed that, because a tag listed first is the
+            most specific.</td></tr>
+        <tr><td>Python ↔ browser parity</td>
+          <td><code>knnTags</code> on all 14 captions and <code>gallerySearch</code> on 4 queries
+            match <code>multimodal.py</code> exactly.</td></tr>
+        <tr><td>Grow the gallery from answers</td>
+          <td><code>save_images</code> keeps an image once per pixel hash, skips images smaller than
+            160 px and dead links, and records URL, page, license and the question.</td></tr>
+      </table>
+    </div>
+  </section>
+
   <!-- =============================================================== limits -->
   <section id="limits">
-    <p class="eyebrow">06 · Limitations</p>
+    <p class="eyebrow">07 · Limitations</p>
     <h2>What this does not show yet</h2>
     <ul class="tight">
       <li><b>No answer-quality benchmark.</b> The tests prove the pipeline is correct and
@@ -289,7 +344,7 @@
 
   <!-- ============================================================ reproduce -->
   <section id="reproduce">
-    <p class="eyebrow">07 · Reproduce</p>
+    <p class="eyebrow">08 · Reproduce</p>
     <h2>Run it yourself</h2>
 <pre class="cmd">git clone https://github.com/sugeerth/clip-vlm-101 && cd clip-vlm-101
 pip install "scrapling[fetchers]" anthropic
@@ -305,7 +360,9 @@ python3 sources.py "vector quantization"          # all 7 APIs at once
 python3 mcp_server.py                             # ask·200 as an MCP server (stdio)
 python3 research.py "..." --server-tools --mcp-stdio "scrapling mcp"   # agent mode
 python3 answer.py --image photo.jpg "what is this and where?"          # ask with a photo
-python3 answer.py "northern lights" --clip                             # rank images by CLIP (needs torch)</pre>
+python3 answer.py "northern lights" --clip                             # rank images by CLIP (needs torch)
+python3 answer.py "why do cats purr" --gallery --save-images web_imgs/  # + your gallery, then grow it
+python3 ingest.py web_imgs/web_*.jpg                                     # the web's images, now searchable by meaning</pre>
     <p class="hint">Without <code>ANTHROPIC_API_KEY</code>, answers are extractive. Everything
       above runs on a laptop.</p>
   </section>

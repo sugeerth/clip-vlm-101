@@ -27,6 +27,7 @@ import argparse
 import asyncio
 import json
 import math
+import pathlib
 import re
 import sys
 import time
@@ -274,15 +275,18 @@ def _claude(client, model, max_tokens, system, user, on_text=None):
 
 async def ask_async(question, pages=200, k=10, words=45, engines=None, model="claude-opus-5-5",
                     concurrency=40, timeout=10, use_llm=True, stream=None, apis=None,
-                    image=None, use_clip=False, n_images=6):
+                    image=None, use_clip=False, n_images=6, gallery=None, save_images=None):
     """The whole pipeline. `apis`: source names from sources.py (None = all, () = none).
-    `image`: a local photo to ask about; `use_clip`: re-rank result images by CLIP pixels."""
+    `image`: a local photo to ask about; `use_clip`: re-rank result images by CLIP pixels.
+    `gallery`: a CLIP·search db.json path (or its items) to search alongside the web;
+    `save_images`: a directory to download the top web images into, ready for ingest.py."""
     import multimodal
     import sources as api_sources
     t0 = time.time()
     engines = ENGINES if engines is None else engines
     client = _client() if use_llm else None
-    image_query = multimodal.image_to_query(image, question, client, model) if image else None
+    items = multimodal.load_gallery(gallery) if isinstance(gallery, str) else gallery
+    image_query = multimodal.image_to_query(image, question, client, model, items) if image else None
     question = " ".join(x for x in (question, image_query) if x) if image_query else question
     queries = subqueries(question, client, model)
     per_engine = max(10, math.ceil(pages / max(1, len(queries) * max(1, len(engines)))) * 2)
@@ -320,6 +324,11 @@ async def ask_async(question, pages=200, k=10, words=45, engines=None, model="cl
     images = multimodal.rank_images(question, docs, api_images, num, k=n_images)
     if use_clip and images:
         images = await multimodal.clip_rerank(question, images)
+    from_gallery = []
+    if items:
+        from_gallery = (multimodal.clip_gallery_search(question, items) if use_clip
+                        else multimodal.gallery_search(question, items))
+    saved = await multimodal.save_images(images, save_images, question) if save_images and images else []
     mode = "extractive"
     answer = extractive(question, top, words)
     if client and top:
@@ -340,7 +349,7 @@ async def ask_async(question, pages=200, k=10, words=45, engines=None, model="cl
                 print(f"  (LLM answer failed: {e})", file=sys.stderr)
     n_api = sum(map(len, api_docs.values()))
     return {"question": question, "answer": answer, "mode": mode, "sources": sources,
-            "images": images, "image_query": image_query,
+            "images": images, "image_query": image_query, "gallery": from_gallery, "saved": saved,
             "passages": top, "queries": queries, "ledger": ledger,
             "stats": {"urls": len(urls), "scraped": len(docs) - n_api, "api_docs": n_api,
                       "passages": len(passages), "seconds": round(time.time() - t0, 2)}}
@@ -359,6 +368,11 @@ def show(r, streamed=False):
     for im in r.get("images", [])[:3]:
         cite = f"[{im['n']}]" if im.get("n") else f"({im['source']})"
         print(f"  img {cite} {im['url'][:90]}  — {(im['alt'] or im.get('caption', ''))[:50]}")
+    for g in r.get("gallery", [])[:3]:
+        print(f"  gallery {g['file']}  — {', '.join(g['tags'][:3])}  ({g['score']})")
+    if r.get("saved"):
+        print(f"  saved {len(r['saved'])} images → ingest them: python3 ingest.py "
+              f"{pathlib.Path(r['saved'][0]['file']).parent}/web_*.jpg")
     if r.get("image_query"):
         print(f"  your photo was read as: {r['image_query']!r}")
     st = r["stats"]
@@ -406,7 +420,12 @@ def twin_fixture():
                 "license": "CC0", "source": "commons"},
                {"url": "https://a/sky.jpg", "page": "https://dup", "alt": "duplicate", "license": "", "source": "openverse"}]
     images = multimodal.rank_images("why is the sky blue", img_docs, img_api, {"https://a": 1}, k=3)
+    gal = multimodal.load_gallery()
+    bridge = {"knn": [multimodal.knn_tags(it["text_emb"], gal) for it in gal],
+              "search": {q: [[g["file"], g["score"]] for g in multimodal.gallery_search(q, gal)]
+                         for q in ["a fluffy pet", "famous tower in paris", "food", "outer space planet"]}}
     return {"passages": passages, "cases": cases, "chunk_text": text, "chunk": chunk(text, 20),
+            "bridge": bridge,
             "images": {"docs": img_docs, "api": img_api, "cited": {"https://a": 1},
                        "ranked": [[im["url"], im["n"], im["score"]] for im in images]},
             "tokens": tokens("Why is the Sky blue? It's Rayleigh-scattering, 4th power!")}
@@ -525,6 +544,9 @@ if __name__ == "__main__":
     ap.add_argument("--apis", help="comma-separated API sources from sources.py (default: all)")
     ap.add_argument("--image", help="a photo to ask about (Claude vision, or CLIP tags with torch)")
     ap.add_argument("--clip", action="store_true", help="re-rank result images with CLIP (needs torch)")
+    ap.add_argument("--gallery", nargs="?", const="docs/db.json",
+                    help="also search a CLIP·search gallery (default docs/db.json)")
+    ap.add_argument("--save-images", metavar="DIR", help="download top web images for ingest.py")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--bench", action="store_true", help="time 200 local pages end to end")
@@ -544,7 +566,7 @@ if __name__ == "__main__":
     live = not a.json and sys.stdout.isatty()
     out = ask(" ".join(a.question), pages=a.pages, k=a.k, words=a.words, model=a.model,
               use_llm=not a.no_llm, apis=a.apis.split(",") if a.apis else None,
-              image=a.image, use_clip=a.clip,
+              image=a.image, use_clip=a.clip, gallery=a.gallery, save_images=a.save_images,
               stream=(lambda t: print(t, end="", flush=True)) if live else None)
     if a.json:
         print(json.dumps(out, indent=2))

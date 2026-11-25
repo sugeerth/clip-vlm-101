@@ -19,6 +19,7 @@ import { STRONG, MODERATE, WEAK } from './explain.js';
 import { OnlineRanker } from './learn.js';
 import { looScores, calibrate } from './conformal.js';
 import { flip } from './motion.js';
+import { askCard, knnTags } from './bridge.js';
 
 const $ = id => document.getElementById(id);
 const EXAMPLES = ['a fluffy animal', 'famous landmark in europe',
@@ -83,6 +84,12 @@ function show(entries, note = '', feedback = false) {
       fig.tabIndex = 0;
       fig.title = 'see why this matched — open it in the Lab';
       const openLab = () => { location.href = `explore.html?pick=${idx}#lab`; };
+      // the bridge: any gallery photo can ask the web what it is (ask·200, keyless)
+      const ask = Object.assign(document.createElement('a'), {
+        className: 'askit', href: `ask.html?photo=${encodeURIComponent(item.file)}`,
+        textContent: 'ask the web ↗', title: 'ask·200: read the web about this photo' });
+      ask.addEventListener('click', e => e.stopPropagation());
+      fig.append(ask);
       fig.addEventListener('click', openLab);
       fig.addEventListener('keydown', e => { if (e.key === 'Enter') openLab(); });
     }
@@ -194,6 +201,8 @@ async function search() {
       show(DB.items
         .map(item => ({ item, score: dot(item.image_emb, imageQuery.emb) }))
         .sort((a, b) => b.score - a.score).slice(0, TOP_K));
+      // see → read: the photo's CLIP neighbours name it, then ask·200 asks the web
+      askPhase(knnTags(imageQuery.emb, DB.items).join(' '), 'your photo');
     } else {
       // the encoder must belong to the ACTIVE brain — if the user switches
       // mid-download, the loop re-resolves instead of caching a stale one
@@ -218,6 +227,7 @@ async function search() {
       renderExplain(query, ranker.rank(candCtx.cand, { k: TOP_K })
         .map(c => ({ item: c.item, score: c.base_score })));  // why (gated)
       webPhase(query);               // fire-and-forget: local results never wait
+      askPhase(query);               // …and neither do they wait for the web's answer
     }
   } catch (err) {
     console.error(err);
@@ -229,6 +239,7 @@ async function search() {
     const hits = keywordResults(query);
     show(hits, hits.length ? 'model unavailable here — showing keyword matches'
                            : 'model unavailable and no keyword matches');
+    if (query) askPhase(query);      // the web answer needs no model at all
   }
   searching = false;
   if (rerun) { rerun = false; search(); }
@@ -689,6 +700,17 @@ const webOn = () => localStorage.getItem('websearch') !== 'off';
 let webToken = 0;
 const webCache = new Map();          // thumb_url -> { emb, obj } per session
 
+// ------------------------------------------------- ask·200, inline --
+// The web's one cited line, above the gallery's results. Keyless (extractive);
+// Claude writes it when a key was saved on the ask page. Rides the web toggle.
+let askToken = 0;
+function askPhase(query, label = '') {
+  const token = ++askToken;
+  if (!webOn() || !query) { $('askCard').classList.add('hidden'); return; }
+  askCard($('askCard'), query, { label, isCurrent: () => token === askToken })
+    .catch(() => { if (token === askToken) $('askCard').classList.add('hidden'); });
+}
+
 function clearWeb() {
   webToken++;
   $('webHead').classList.add('hidden');
@@ -800,7 +822,7 @@ webBtn.addEventListener('click', () => {
   localStorage.setItem('websearch', webOn() ? 'off' : 'on');
   paintWebBtn();
   const q = $('q').value.trim();
-  if (!webOn()) clearWeb();
+  if (!webOn()) { clearWeb(); $('askCard').classList.add('hidden'); askToken++; }
   else if (q && encodeText && !imageQuery) webPhase(q);
 });
 $('chips').append(webBtn);

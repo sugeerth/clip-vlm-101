@@ -1,6 +1,6 @@
 """research.py — agent mode: Claude drives the toolbelt, plus any MCP servers you plug in.
 
-pipeline: question ─► Claude (tool runner loop) ─┬─► local tools: scrape_search · read_page · search_sources · find_images
+pipeline: question ─► Claude (tool runner loop) ─┬─► local tools: scrape_search · read_page · search_sources · find_images · gallery_search
                                                   ├─► Anthropic server tools: web_search · web_fetch  (--server-tools)
                                                   ├─► remote MCP servers via the MCP connector   (--mcp NAME=URL)
                                                   └─► local MCP servers over stdio               (--mcp-stdio "CMD")
@@ -98,7 +98,21 @@ def local_tools():
         imgs, errors = await multimodal.image_search(query)
         return json.dumps({"images": multimodal.rank_images(query, [], imgs, {}, k=limit), "errors": errors})
 
-    return [scrape_search, read_page, search_sources, find_images]
+    @beta_async_tool
+    async def gallery_search(query: str, k: int = 6) -> str:
+        """Search the user's own CLIP·search image gallery (docs/db.json) by caption and tags.
+        Use it to connect the question to photos the user already has.
+
+        Args:
+            query: What to look for in the gallery.
+            k: Maximum number of photos.
+        """
+        import pathlib
+        import multimodal
+        items = multimodal.load_gallery(str(pathlib.Path(__file__).with_name("docs") / "db.json"))
+        return json.dumps({"hits": multimodal.gallery_search(query, items, k)})
+
+    return [scrape_search, read_page, search_sources, find_images, gallery_search]
 
 
 SERVER_TOOLS = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 5},

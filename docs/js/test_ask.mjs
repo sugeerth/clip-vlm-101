@@ -65,5 +65,19 @@ check(plain('<p>a &amp; b&#x27;s</p><p>c &#x2F; d</p>') === "a & b's. c / d.", '
     'image ranking (words + cited bonus, dedup) matches multimodal.rank_images');
 }
 
+// the bridge to CLIP·search: same tags and same gallery ranking as multimodal.py, on the real gallery
+{
+  const { knnTags, gallerySearch } = await import('./bridge.js');
+  const items = JSON.parse(readFileSync(new URL('../db.json', import.meta.url))).items;
+  const knn = items.map(it => knnTags(it.text_emb, items));
+  check(JSON.stringify(knn) === JSON.stringify(fx.bridge.knn), 'knnTags: a caption\'s CLIP neighbours vote the same tags as Python (14/14)');
+  for (const [q, want] of Object.entries(fx.bridge.search)) {
+    const got = gallerySearch(q, items).map(g => [g.file, g.score]);
+    check(JSON.stringify(got) === JSON.stringify(want), `gallerySearch matches multimodal.gallery_search — "${q}"`);
+  }
+  const qv = items[4].text_emb;                    // the cat's caption, as a CLIP query vector
+  check(gallerySearch('', items, 1, qv)[0].file === 'images/004_cat.jpg', 'with a CLIP vector, the gallery ranks by pixels');
+}
+
 if (failed) { console.log('ask twin: FAILED'); process.exit(1); }
 console.log('ask twin: all checks passed');

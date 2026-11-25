@@ -1185,9 +1185,11 @@ def test_web_tools():
 
         async def via_mcp():
             async with Client(mcp_server.server) as c:
-                assert {t.name for t in (await c.list_tools()).tools} == {"ask", "web_search", "read_page", "search_sources", "find_images"}
+                assert {t.name for t in (await c.list_tools()).tools} == {"ask", "web_search", "read_page", "search_sources", "find_images", "gallery_search"}
                 page = json.loads((await c.call_tool("read_page", {"url": base + "/page"})).content[0].text)
                 ans = json.loads((await c.call_tool("ask", {"question": "why is the sky blue", "pages": 10})).content[0].text)
+                gal = json.loads((await c.call_tool("gallery_search", {"query": "outer space planet"})).content[0].text)
+                assert gal["hits"][0]["file"] == "images/011_pluto.jpg"
                 return page, ans
         page, ans = asyncio.run(via_mcp())
         assert page["title"] == "Rayleigh scattering" and "footer" not in page["text"].lower()
@@ -1215,7 +1217,8 @@ def test_web_tools():
     out = asyncio.run(research.research("q", server_tools=True, mcp=[("docs", "https://e.x/mcp")], client=fake))
     names = [getattr(t, "name", None) or t.get("name") or t["type"] for t in seen["tools"]]
     assert out.startswith("Blue [1]")
-    assert names == ["scrape_search", "read_page", "search_sources", "find_images", "web_search", "web_fetch", "mcp_toolset"]
+    assert names == ["scrape_search", "read_page", "search_sources", "find_images", "gallery_search",
+                     "web_search", "web_fetch", "mcp_toolset"]
     assert "mcp-client-2025-11-20" in seen["betas"] and seen["mcp_servers"][0]["name"] == "docs"
     asyncio.run(research.research("where is this?", image="https://x/photo.jpg", client=fake))
     assert seen["messages"][0]["content"][0] == {"type": "image", "source": {"type": "url", "url": "https://x/photo.jpg"}}
@@ -1322,6 +1325,58 @@ def test_multimodal():
     finally:
         multimodal.IMAGE_SOURCES.update(saved)
         srv.shutdown()
+
+
+def test_bridge():
+    """CLIP·search ⇄ ask·200: gallery photos name themselves, web answers search the gallery
+    and grow it — all on the committed gallery, no model, no network."""
+    import json
+    import multimodal
+    items = multimodal.load_gallery()
+    cat = next(it for it in items if it["file"].endswith("004_cat.jpg"))
+    # a gallery photo becomes a web query with NO model and NO key: its stored CLIP tags
+    q = multimodal.image_to_query("anything/004_cat.jpg", "what breed?", gallery=items)
+    assert q == "cat pet animal breed"
+    # a photo's VECTOR alone is named by its gallery neighbours: the right head tag for 13 of 14
+    # (the castle is outvoted by "tower" — the Eiffel Tower and Westminster are its neighbours)
+    named = [multimodal.knn_tags(it["image_emb"], items)[0] == it["tags"][0] for it in items]
+    assert sum(named) == 13 and not named[3]
+    # …versus 2/14 for plain similarity voting — why tags are weighted by 0.5^position
+    def plain(emb):
+        sims = [multimodal._dot(it["image_emb"], emb) for it in items]
+        votes = {}
+        for i in sorted(range(len(items)), key=lambda i: -sims[i])[:3]:
+            for t in items[i]["tags"]:
+                votes[t] = votes.get(t, 0.0) + sims[i]
+        return max(votes, key=votes.get)
+    assert sum(plain(it["image_emb"]) == it["tags"][0] for it in items) == 2
+    # the twin fixture still matches (JS pins the same numbers)
+    fx = json.loads(pathlib.Path("docs/js/ask_fixture.json").read_text())["bridge"]
+    assert [multimodal.knn_tags(it["text_emb"], items) for it in items] == fx["knn"]
+    # CLIP path: a query vector ranks by pixels (the cat's own caption finds the cat)
+    assert multimodal.gallery_search("", items, 1, qvec=cat["text_emb"])[0]["file"] == cat["file"]
+    try:
+        import scrapling.fetchers  # noqa: F401 — the download half needs the optional extra
+    except ImportError:
+        return
+    import asyncio
+    import io
+    import answer
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (320, 240), (90, 150, 235)).save(buf, "PNG")
+    srv, base = answer._serve({"/big.png": buf.getvalue(), "/dup.png": buf.getvalue()})
+    out = pathlib.Path(tempfile.mkdtemp())
+    try:
+        imgs = [{"url": base + "/big.png", "page": "https://p", "alt": "blue", "license": "CC0"},
+                {"url": base + "/dup.png", "page": "https://q", "alt": "same pixels"},
+                {"url": base + "/missing.png", "page": "https://r", "alt": "404"}]
+        wrote = asyncio.run(multimodal.save_images(imgs, out, "why is the sky blue"))
+        again = asyncio.run(multimodal.save_images(imgs, out))
+    finally:
+        srv.shutdown()
+    assert len(wrote) == 1 and wrote[0]["license"] == "CC0" and pathlib.Path(wrote[0]["file"]).exists()
+    assert again == [] and len(json.loads((out / "web_manifest.json").read_text())) == 1   # dedup by pixels
 
 
 if __name__ == "__main__":

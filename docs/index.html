@@ -29,7 +29,7 @@
 
 <main class="stage" id="stage">
   <h1 class="logo">CLIP<span>·search</span></h1>
-  <p class="tag">search images by <em>meaning</em> — a real vision-language model, in your browser</p>
+  <p class="tag">search images by <em>meaning</em> — a real vision-language model, in your browser — and get the web's answer in one cited line</p>
 
   <div class="pill" id="pill">
     <span class="mag" aria-hidden="true">⌕</span>
@@ -52,6 +52,7 @@
     <div class="body" id="traceBody"></div>
   </details>
 
+  <div class="answer-card hidden" id="askCard" aria-live="polite"></div>
   <div class="rgrid" id="results" aria-live="polite"></div>
   <div class="learn hidden" id="learnPanel" aria-live="polite"></div>
   <div class="explain hidden" id="explain" aria-live="polite"></div>
@@ -62,7 +63,7 @@
 </main>
 
 <footer>
-  every search runs locally — nothing leaves your machine
+  gallery search runs locally; with 🌐 web on, your query also goes to public search APIs
   &nbsp;·&nbsp; <a href="capstone.html"><b>capstone: ask·200</b></a>
   &nbsp;·&nbsp; <a href="ask.html">ask the web ⚡</a>
   &nbsp;·&nbsp; <a href="explore.html">how it works ↗</a>

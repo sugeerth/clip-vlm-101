@@ -4,12 +4,12 @@
 
 [![python](https://img.shields.io/badge/python-3.12-blue)](.github/workflows/test.yml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-43%20python%20%2B%2013%20JS%20twins-brightgreen)](test_smoke.py)
+[![tests](https://img.shields.io/badge/tests-44%20python%20%2B%2013%20JS%20twins-brightgreen)](test_smoke.py)
 [![demo](https://img.shields.io/badge/demo-live%20in%20your%20browser-orange)](https://sugeerth.github.io/clip-vlm-101/)
 
 **Live demo → [sugeerth.github.io/clip-vlm-101](https://sugeerth.github.io/clip-vlm-101/)**
 Real CLIP inference in the tab via [transformers.js](https://huggingface.co/docs/transformers.js).
-No install, no API key, and nothing you type or upload leaves your machine.
+No install, no API key; photos and embeddings never leave your machine (with web results on, the text query is sent to public search APIs).
 
 > Vector search is usually taken on faith: an embedding model you did not write, an
 > index you cannot inspect, and a ranked list with no way to ask *why*. This repo
@@ -30,7 +30,7 @@ git clone https://github.com/sugeerth/clip-vlm-101 && cd clip-vlm-101
 pip install numpy pillow    # numpy does the math; pillow is for one crawler test
 
 python3 similarity.py --json docs/db.json      # the modality gap, measured
-python3 test_smoke.py                          # 43 tests, ~2 seconds
+python3 test_smoke.py                          # 44 tests, ~2 seconds
 ```
 
 Tail of the first command, verbatim:
@@ -105,6 +105,14 @@ photo using `answer.py --image photo.jpg "what is this?"`: Claude vision turns i
 (or CLIP tags do, without a key), and Claude sees the photo and the top cited images when it
 answers. The browser page does the same: 📷, drop or paste a photo, and an image strip under
 each answer.
+
+**One system — CLIP·search ⇄ ask·200** (`docs/js/bridge.js`, twin in `multimodal.py`): every
+search on the [home page](https://sugeerth.github.io/clip-vlm-101/) also shows ask·200's cited web
+answer; a photo search names the photo from its nearest gallery images (`knnTags`, 13 of 14
+gallery photos named correctly from their vectors alone, against 2 of 14 for plain voting) and asks the web; every gallery
+photo links to "ask the web ↗"; every ask·200 question also searches your gallery; and
+`answer.py --gallery --save-images DIR` downloads the web's top images so `ingest.py` can add
+them to the gallery. `gallery_search` is a tool in the MCP server and the agent too.
 
 `answer.py` sends each question (plus up to 3 rewrites) to DuckDuckGo, Bing, Wikipedia and
 Mojeek at once, fetches up to 200 result pages concurrently with
@@ -205,7 +213,7 @@ Same algorithm, an order of magnitude apart — the win came from moving the byt
 | `opq.py`, `pq.py` | product quantization to 64 bytes/vector — the learned rotation, and the browser twin. IVF (`ivf_train`/`ivf_search`) and per-dimension int8 (`build_i8`) live inside `scale.py`; 1-bit binary (`binary_encode`) inside `cascade.py` |
 | `judge.py`, `conformal.py`, `trust.py`, `drift.py` | the evaluation layer: judges, coverage guarantees, drift gates |
 | `docs/` | the GitHub Pages demo (`main:/docs`) + 13 JS twin test suites |
-| `test_smoke.py` | 43 model-free tests; stubs the CLIP encoder so CI never installs torch |
+| `test_smoke.py` | 44 model-free tests; stubs the CLIP encoder so CI never installs torch |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | the four stages of billion-scale visual search, and which file shows each |
 
 CI ([`.github/workflows/test.yml`](.github/workflows/test.yml)) runs the smoke suite,

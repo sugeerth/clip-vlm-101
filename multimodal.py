@@ -219,8 +219,13 @@ def clip_tags(path, k=3, embedder=None):
     return tagger.top_tags(embedder.embed_images([path])[0], tag_embs, templates.TAG_VOCABULARY, k)
 
 
-def image_to_query(path, question="", client=None, model="claude-opus-5-5"):
-    """Photo → a short web-search query. Claude vision if possible, else CLIP tags."""
+def image_to_query(path, question="", client=None, model="claude-opus-5-5", gallery=None):
+    """Photo → a short web-search query. A gallery photo is described by its stored CLIP tags
+    (no model, no key); otherwise Claude vision, else CLIP zero-shot tags."""
+    import pathlib
+    for it in gallery or []:
+        if pathlib.Path(it["file"]).name == pathlib.Path(path).name:   # the photo IS in the gallery
+            return " ".join(dict.fromkeys(it["tags"][:3] + answer.tokens(question)))
     if client:
         try:
             return answer._claude(
@@ -236,3 +241,84 @@ def image_to_query(path, question="", client=None, model="claude-opus-5-5"):
     except ImportError as e:
         raise SystemExit(f"--image needs an Anthropic key (Claude vision) or torch for CLIP: {e}")
     return " ".join(dict.fromkeys(tags + answer.tokens(question)))
+
+
+# --- the bridge to CLIP·search: the gallery and the web, feeding each other ---
+# Twins of docs/js/bridge.js (knnTags, gallerySearch), pinned by test_ask.mjs.
+
+def _dot(a, b):
+    s = 0.0
+    for x, y in zip(a, b):
+        s += x * y
+    return s
+
+
+def knn_tags(emb, items, k=3, n=3):
+    """An image embedding → words: vote the tags of its k nearest gallery images, each vote
+    weighted by similarity × 0.5^position (a tag's rank in its image's list — the first is the
+    most specific). The gallery already knows how to describe what it holds."""
+    sims = [_dot(it["image_emb"], emb) for it in items]
+    votes = {}
+    for i in sorted(range(len(items)), key=lambda i: -sims[i])[:k]:
+        for pos, t in enumerate(items[i]["tags"]):
+            votes[t] = votes.get(t, 0.0) + sims[i] * 0.5 ** pos
+    tags = list(votes)
+    return [tags[i] for i in sorted(range(len(tags)), key=lambda i: -votes[tags[i]])][:n]
+
+
+def gallery_search(query, items, k=6, qvec=None):
+    """Words → gallery items: BM25 over caption + tags (keyless), or CLIP when given a query vector."""
+    scores = ([_dot(it["image_emb"], qvec) for it in items] if qvec is not None else
+              answer.bm25(query, [f"{it['caption']} {' '.join(it['tags'])}" for it in items]))
+    order = [i for i in sorted(range(len(items)), key=lambda i: -scores[i]) if qvec is not None or scores[i] > 0]
+    return [{"index": i, "file": items[i]["file"], "tags": items[i]["tags"], "score": round(scores[i], 4)}
+            for i in order[:k]]
+
+
+def load_gallery(path="docs/db.json"):
+    import json
+    return json.load(open(path))["items"]
+
+
+def clip_gallery_search(query, items, k=6, embedder=None):
+    """The real thing: embed the question with CLIP's text tower, rank gallery pixels (needs torch)."""
+    if embedder is None:
+        import embedder as emb_mod
+        embedder = emb_mod.ClipEmbedder()
+    return gallery_search(query, items, k, qvec=list(embedder.embed_texts([f"a photo of {query}"])[0]))
+
+
+async def save_images(images, outdir, question=""):
+    """Download ranked web images into `outdir` with a manifest, ready for `ingest.py outdir/*`:
+    the web's answer grows the CLIP gallery. Returns the manifest entries written."""
+    import io
+    import json
+    import pathlib
+    import hashlib
+    from PIL import Image
+    out = pathlib.Path(outdir)
+    out.mkdir(parents=True, exist_ok=True)
+    mpath = out / "web_manifest.json"
+    manifest = json.loads(mpath.read_text()) if mpath.exists() else []
+    have = {m["sha1"] for m in manifest}
+    written = []
+    for im, blob in zip(images, await _download([im["url"] for im in images])):
+        try:
+            sha = hashlib.sha1(blob).hexdigest()
+            if sha in have:
+                continue                                  # same pixels already saved
+            pic = Image.open(io.BytesIO(blob)).convert("RGB")
+            if min(pic.size) < 160:
+                continue                                  # too small to be worth embedding
+            f = out / f"web_{sha[:10]}.jpg"
+            pic.save(f, quality=90)
+            entry = {"file": str(f), "sha1": sha, "url": im["url"], "page": im.get("page", ""),
+                     "alt": im.get("alt", ""), "license": im.get("license") or "unknown — check the page",
+                     "question": question}
+            manifest.append(entry)
+            written.append(entry)
+            have.add(sha)
+        except Exception:
+            continue
+    mpath.write_text(json.dumps(manifest, indent=1) + "\n")
+    return written
