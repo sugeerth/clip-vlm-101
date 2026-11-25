@@ -150,13 +150,32 @@ async def web_search(query, limit=20, timeout=10):
     return urls[:limit], ledger
 
 
-async def read_page(url, max_chars=8000, timeout=15):
-    """Fetch one page with Scrapling → {url, title, text} with nav/footer stripped."""
-    page = await answer._get(url, timeout)
-    if page.status >= 400:
-        raise RuntimeError(f"HTTP {page.status} for {url}")
-    title, text = answer.readable(page)
-    return {"url": url, "title": title, "text": text[:max_chars], "truncated": len(text) > max_chars}
+async def read_page(url, max_chars=8000, timeout=15, engine="auto"):
+    """One page → {url, title, text, engine}, nav/footer stripped. engine: "scrapling",
+    "firecrawl", or "auto" — Scrapling first, Firecrawl when Scrapling is blocked or the page
+    is JS-only/near-empty and FIRECRAWL_API_KEY is set."""
+    import firecrawl as fc
+    title, text, err = "", "", None
+    if engine != "firecrawl":
+        try:
+            page = await answer._get(url, timeout)
+            if page.status >= 400:
+                raise RuntimeError(f"HTTP {page.status} for {url}")
+            title, text = answer.readable(page)
+        except Exception as e:
+            err = e
+    if engine == "firecrawl" or (engine == "auto" and fc.enabled() and len(text) < fc.WEAK):
+        try:
+            d = await fc.scrape(url)
+            if len(d["text"]) > len(text):
+                return {"url": url, "title": d["title"], "text": d["text"][:max_chars],
+                        "truncated": len(d["text"]) > max_chars, "engine": "firecrawl"}
+        except Exception as e:
+            err = err or e
+    if err and not text:
+        raise err
+    return {"url": url, "title": title, "text": text[:max_chars], "truncated": len(text) > max_chars,
+            "engine": "scrapling"}
 
 
 if __name__ == "__main__":

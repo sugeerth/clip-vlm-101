@@ -2,7 +2,7 @@
 
 pipeline: question ─► Claude (tool runner loop) ─┬─► local tools: scrape_search · read_page · search_sources · find_images · gallery_search
                                                   ├─► Anthropic server tools: web_search · web_fetch  (--server-tools)
-                                                  ├─► remote MCP servers via the MCP connector   (--mcp NAME=URL)
+                                                  ├─► remote MCP servers via the MCP connector   (--mcp NAME=URL, --firecrawl-mcp)
                                                   └─► local MCP servers over stdio               (--mcp-stdio "CMD")
                   ◄── one answer, ≤N words, every claim [n]-cited, then its sources
 
@@ -17,6 +17,7 @@ same Scrapling + API tools as answer.py, and whatever other tools MCP brings:
     python3 research.py "..." --mcp-stdio "python3 mcp_server.py" --no-local
     python3 research.py "..." --mcp docs=https://example.com/mcp # + any remote MCP server
     python3 research.py "where is this and when was it built" --image photo.jpg   # vision
+    python3 research.py "..." --firecrawl-mcp                    # + Firecrawl's hosted MCP tools
 
 Needs an Anthropic credential (ANTHROPIC_API_KEY or `ant auth login`) and
 `pip install "anthropic[mcp]" "scrapling[fetchers]"`. Every tool call is
@@ -144,7 +145,7 @@ def _trace(msg):
 
 
 async def research(question, words=45, model=MODEL, local=True, server_tools=False,
-                   mcp=(), mcp_stdio=(), max_iterations=14, client=None, image=None):
+                   mcp=(), mcp_stdio=(), max_iterations=14, client=None, image=None, firecrawl_mcp=False):
     from anthropic import AsyncAnthropic
     client = client or AsyncAnthropic()
     async with contextlib.AsyncExitStack() as stack:
@@ -155,10 +156,17 @@ async def research(question, words=45, model=MODEL, local=True, server_tools=Fal
             tools += SERVER_TOOLS
         betas = ["server-side-fallback-2026-07-01"]
         extra = {}
-        if mcp:
+        servers = [{"type": "url", "name": n, "url": u} for n, u in mcp]
+        if firecrawl_mcp:
+            import firecrawl as fc
+            # Firecrawl's hosted MCP server: the key goes in the Authorization header (never the
+            # URL); without one the endpoint still serves its keyless scrape/search/parse tools
+            servers.append({"type": "url", "name": "firecrawl", "url": fc.MCP_URL,
+                            **({"authorization_token": fc.key()} if fc.enabled() else {})})
+        if servers:
             betas.append("mcp-client-2025-11-20")
-            extra["mcp_servers"] = [{"type": "url", "name": n, "url": u} for n, u in mcp]
-            tools += [{"type": "mcp_toolset", "mcp_server_name": n} for n, _ in mcp]
+            extra["mcp_servers"] = servers
+            tools += [{"type": "mcp_toolset", "mcp_server_name": srv["name"]} for srv in servers]
         if not tools:
             raise SystemExit("no tools: drop --no-local or add --server-tools / --mcp / --mcp-stdio")
         runner = client.beta.messages.tool_runner(
@@ -207,6 +215,9 @@ if __name__ == "__main__":
     ap.add_argument("--no-local", action="store_true", help="drop the built-in Scrapling/API tools")
     ap.add_argument("--max-iterations", type=int, default=14)
     ap.add_argument("--image", help="a photo (path or URL) Claude sees with the question")
+    ap.add_argument("--firecrawl-mcp", action="store_true",
+                    help="add Firecrawl's hosted MCP server (uses FIRECRAWL_API_KEY if set)")
     a = ap.parse_args()
     print(asyncio.run(research(" ".join(a.question), a.words, a.model, not a.no_local,
-                               a.server_tools, a.mcp, a.mcp_stdio, a.max_iterations, image=a.image)))
+                               a.server_tools, a.mcp, a.mcp_stdio, a.max_iterations, image=a.image,
+                               firecrawl_mcp=a.firecrawl_mcp)))

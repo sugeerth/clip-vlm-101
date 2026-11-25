@@ -172,7 +172,7 @@
         <div class="stat"><b>200/200</b><span>local pages scraped and parsed by Scrapling</span></div>
         <div class="stat"><b>1.22 s</b><span>median, question to answer over 200 pages (3 runs)</span></div>
         <div class="stat"><b>1,000</b><span>passages ranked per question in that run</span></div>
-        <div class="stat"><b>32/32</b><span>browser twin checks pass, including exact parity with Python</span></div>
+        <div class="stat"><b>47/47</b><span>browser twin checks pass, including exact parity with Python</span></div>
       </div>
       <p class="hint">The timing comes from <code>python3 answer.py --bench</code>: 200 generated
         pages served on localhost, on a 4-core cloud container, no LLM. It measures the engine's own
@@ -200,7 +200,7 @@
   <!-- =============================================================== expand -->
   <section id="expand">
     <p class="eyebrow">05 · Expansion</p>
-    <h2>More of the web: seven APIs, images, an MCP server, and an agent</h2>
+    <h2>More of the web: seven APIs, Firecrawl, images, an MCP server, and an agent</h2>
     <p class="sub">
       The fixed pipeline reads one round of search results, as text. Four additions widen what
       it can reach, let it work with images, and let other tools use it.
@@ -222,6 +222,13 @@
             into a search query, using Claude vision with a key or CLIP tags without one.
             <b>Images read:</b> when Claude writes the answer it also sees your photo and up to
             three images from cited sources.</td></tr>
+        <tr><td><code>firecrawl.py</code></td>
+          <td><b>Firecrawl as a second engine</b>, on whenever <code>FIRECRAWL_API_KEY</code> is set. One
+            search call returns web pages already scraped to markdown by Firecrawl's browser, plus dated
+            news and images. Pages Scrapling can't read (blocked, JavaScript-only, near-empty) are re-read
+            through Firecrawl, capped by <code>--firecrawl-rescue</code> so credits can't run away.
+            <code>read_page</code> falls back to it automatically, and <code>research.py --firecrawl-mcp</code>
+            attaches Firecrawl's hosted MCP server. Verified against the live API.</td></tr>
         <tr><td><code>mcp_server.py</code></td>
           <td>ask·200 as an MCP server with five tools: <code>ask</code>, <code>web_search</code>,
             <code>read_page</code>, <code>search_sources</code> and <code>find_images</code>. Any MCP client can call it,
@@ -245,7 +252,23 @@
       required citations are the same in both.
     </p>
     <p class="sub">
-      <b>In the browser:</b> the demo page shows an image strip under each answer, drawn from
+      <b>The whole live web, in the browser:</b> Firecrawl's API accepts browser requests, so with a
+      Firecrawl key in the demo's settings every question also reads the live web: scraped pages, dated
+      news and images. Paste a link and Firecrawl's browser reads that page. The home page's answer card
+      uses the same key.
+    </p>
+    <p class="sub">
+      <b>Search that learns from its own results:</b> live pages often use different words from the
+      question ("aurora" for "northern lights"). Both twins now run pseudo-relevance feedback: the
+      words that dominate the top hits, appear in at least two of them, and are not filler are searched
+      again at half weight, and shown as "also searched". On a live Firecrawl result set for "why do
+      the northern lights happen", the keyless answer went from stitched headings ("What are the
+      Northern Lights. Even though the northern lights are.") to "The solar wind is what makes the
+      northern lights appear [3]". Two further fixes made that possible: markdown paragraphs are joined
+      instead of split at every line break, and Title Case headings are never used as answer sentences.
+    </p>
+    <p class="sub">
+      <b>Images in the browser:</b> the demo page shows an image strip under each answer, drawn from
       Wikipedia's article images and five image libraries (Openverse, Commons, the Art Institute
       of Chicago, the Met and iNaturalist). Ask with a photo by clicking 📷, dropping one on the
       page or pasting it. With a key, Claude reads the photo; without one, CLIP reads it in the
@@ -362,7 +385,10 @@ python3 research.py "..." --server-tools --mcp-stdio "scrapling mcp"   # agent m
 python3 answer.py --image photo.jpg "what is this and where?"          # ask with a photo
 python3 answer.py "northern lights" --clip                             # rank images by CLIP (needs torch)
 python3 answer.py "why do cats purr" --gallery --save-images web_imgs/  # + your gallery, then grow it
-python3 ingest.py web_imgs/web_*.jpg                                     # the web's images, now searchable by meaning</pre>
+python3 ingest.py web_imgs/web_*.jpg                                     # the web's images, now searchable by meaning
+FIRECRAWL_API_KEY=fc-... python3 answer.py "..."                           # + Firecrawl: live search, news, images, rescue
+claude mcp add --transport http firecrawl https://mcp.firecrawl.dev/v2/mcp-oauth   # Firecrawl's tools in Claude Code
+claude mcp login firecrawl</pre>
     <p class="hint">Without <code>ANTHROPIC_API_KEY</code>, answers are extractive. Everything
       above runs on a laptop.</p>
   </section>

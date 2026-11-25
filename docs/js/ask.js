@@ -5,6 +5,8 @@
 //            ─► Claude streams ≤N words with [n] cites   (no key: extractive)
 //   images:  Wikipedia thumbnails + 5 image APIs ─► rankImages (words; CLIP pixels opt-in)
 //   photo:   drop one in ─► Claude vision (with a key) or CLIP tags (keyless) ─► the query
+//   firecrawl (viewer's key): the WHOLE web live — search + scraped pages + news + images;
+//            paste a URL and Firecrawl's browser reads that page
 //
 // A browser cannot scrape arbitrary sites (CORS forbids reading another
 // origin's HTML), so the page reads the sources that DO allow it: Wikipedia
@@ -59,8 +61,34 @@ export function bm25(query, docs, k1 = 1.2, b = 0.75) {
 // stable sort by descending score, ties keep input order — same as Python's sorted()
 const argsortDesc = s => s.map((_, i) => i).sort((a, b) => s[b] - s[a] || a - b);
 
-export function rank(query, passages, k = 10, perSource = 2) {
-  const scores = bm25(query, passages.map(p => p.text));
+// Twin of answer.EXP_STOP (generated from it) — words too common to say what a page is ABOUT.
+const EXP_STOP = new Set('about above after again against all also although always amazing among another any anyone anything around awesome back beautiful because been before being below best between both breathtaking but came can cannot come could day days did does doing done down during each either else even ever every few first for from further get gets getting give given goes going gone good got great guide had has have having her here hers him his how however incredible into its just keep know last least less let like likely made magical make makes making many may maybe more most much must near need needs never new next not nothing now often once one only onto other others our ours out over own part per perhaps place put rather ready really right said same say see seen several shall she should show since some something sometimes soon spectacular still stunning such sure take than that the their them then there these they thing things think this those though through thus time times tips today together tonight too toward ultimate under until upon use used uses using very want was way ways well went were what whatever when where whether which while who whom whose why will with within without would year years yet you your yours'.split(' '));
+
+// Pseudo-relevance feedback (RM3-lite), twin of answer.expand_query: words that dominate the
+// top-m hits, appear in ≥ minDocs of them, and aren't in the question.
+export function expandQuery(query, docs, m = 8, n = 6, minDocs = 2) {
+  const scores = bm25(query, docs);
+  const top = argsortDesc(scores).filter(i => scores[i] > 0).slice(0, m);
+  const q = new Set(tokens(query)), toks = docs.map(tokens), sets = toks.map(t => new Set(t));
+  const N = docs.length, w = new Map(), hits = new Map(), df = new Map();
+  for (const i of top) {
+    const tf = new Map();
+    for (const t of toks[i]) tf.set(t, (tf.get(t) ?? 0) + 1);
+    for (const [t, c] of tf) {
+      if (q.has(t) || t.length < 4 || /^\d+$/.test(t) || EXP_STOP.has(t)) continue;
+      if (!df.has(t)) df.set(t, sets.filter(st => st.has(t)).length);
+      w.set(t, (w.get(t) ?? 0) + c / toks[i].length * Math.log(1 + (N - df.get(t) + 0.5) / (df.get(t) + 0.5)));
+      hits.set(t, (hits.get(t) ?? 0) + 1);
+    }
+  }
+  return [...w.keys()].filter(t => hits.get(t) >= minDocs)
+    .sort((a, b) => w.get(b) - w.get(a) || (a < b ? -1 : a > b ? 1 : 0)).slice(0, n);
+}
+
+export function rank(query, passages, k = 10, perSource = 2, expansion = []) {
+  const texts = passages.map(p => p.text);
+  let scores = bm25(query, texts);
+  if (expansion.length) { const e = bm25(expansion.join(' '), texts); scores = scores.map((a, i) => a + 0.5 * e[i]); }
   const out = [], seen = new Map();
   for (const i of argsortDesc(scores)) {
     if (scores[i] <= 0 || out.length >= k) break;
@@ -81,11 +109,24 @@ export function numberSources(top) {
 
 const words = s => s.split(/\s+/).filter(Boolean).length;
 
-export function extractive(query, top, budget = 45) {
+const JUNK = /^(watch|click|subscribe|sign up|read more|learn more|share|follow|see also|related|advertisement|cookie|skip to|jump to|fun fact|learn how|discover|book|sign in|log in)\b/i;
+const CUE = /\b(because|caused by|due to|occurs? when|happens? when|results? from|is called|are called|which means)\b/i;
+// Title Case lines are headings, not answers (twin of answer.headline)
+export function headline(s) {
+  const long = s.split(/\s+/).filter(w => w.length >= 4 && /^\p{L}/u.test(w));
+  return long.length >= 3 && long.filter(w => w[0] !== w[0].toLowerCase()).length / long.length >= 0.7;
+}
+
+export function extractive(query, top, budget = 45, expansion = []) {
   const cands = [];
-  for (const p of top) for (const s of p.text.split(SENT)) if (words(s) >= 5 && !s.trimEnd().endsWith('?')) cands.push([s, p.n]);
+  for (const p of top) for (const s of p.text.split(SENT)) {
+    if (words(s) >= 8 && !s.trimEnd().endsWith('?') && !JUNK.test(s.trim()) && !headline(s)) cands.push([s, p.n]);
+  }
   if (!cands.length) return 'Not in sources.';
-  const scores = bm25(query, cands.map(c => c[0]));
+  const sents = cands.map(c => c[0]);
+  let base = bm25(query, sents);
+  if (expansion.length) { const e = bm25(expansion.join(' '), sents); base = base.map((a, i) => a + 0.5 * e[i]); }
+  const scores = base.map((x, i) => x * (CUE.test(sents[i]) ? 1.3 : 1.0));
   const picked = [], used = [];
   for (const i of argsortDesc(scores)) {
     const [s, n] = cands[i];
@@ -176,12 +217,93 @@ export const SOURCES = {
   },
 };
 
+// ---- Firecrawl: the whole web, live, from the browser (viewer's own key; CORS-open API) ----
+// Twins of firecrawl.md_text / md_images, pinned by test_ask.mjs.
+const MD_IMAGE = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+const MD_LINK = /\[([^\]]*)\]\([^)]*\)/g;
+const ICON = /(^data:|\.svg(\?|$)|logo|icon|sprite|avatar|badge|pixel|spacer|blank|button|emoji|\/ads?\/|banner|tracking|gravatar)/i;
+
+const MD_MARK = /^\s{0,3}([-*+>]|\d+\.)\s+/;
+
+// Twin of firecrawl.md_text: paragraph lines JOINED (a line break isn't a sentence end),
+// headings dropped, list items / quotes / table rows standalone, short blocks discarded.
+export function mdText(md, minChars = 40) {
+  const blocks = [], cur = [];
+  const flush = () => { if (cur.length) { blocks.push(cur.join(' ')); cur.length = 0; } };
+  for (let line of String(md ?? '').replace(MD_IMAGE, '').split(/\r\n|\r|\n/)) {
+    line = line.replace(MD_LINK, '$1');
+    if (!line.trim()) flush();
+    else if (/^\s{0,3}#{1,6}\s/.test(line)) flush();
+    else if (MD_MARK.test(line) || line.trimStart().startsWith('|')) { flush(); blocks.push(line.replace(MD_MARK, '')); }
+    else cur.push(line);
+  }
+  flush();
+  const keep = [];
+  for (let b of blocks) {
+    b = b.replace(/[*_`|]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (b.length >= minChars && !/^[-: ]+$/.test(b)) keep.push(/[.!?]$/.test(b) ? b : b + '.');
+  }
+  return [...new Set(keep)].join(' ');
+}
+
+export function mdImages(md) {
+  const out = [], seen = new Set();
+  for (const [, rawAlt, url] of String(md ?? '').matchAll(MD_IMAGE)) {
+    const alt = rawAlt.split(/\s+/).filter(Boolean).join(' ');
+    if (/^https?:/.test(url) && alt && !seen.has(url) && !ICON.test(url)) { seen.add(url); out.push({ url, alt, caption: '' }); }
+  }
+  return out.slice(0, 8);
+}
+
+const FIRECRAWL = 'https://api.firecrawl.dev/v2';
+async function fcPost(path, body, key, fetchFn) {
+  const r = await fetchFn(FIRECRAWL + path, { method: 'POST', signal: AbortSignal.timeout?.(60000),
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.success) throw new Error(r.status === 402 ? 'out of Firecrawl credits' : `HTTP ${r.status}`);
+  return d.data ?? {};
+}
+const fcDoc = (it, source = 'firecrawl') => {
+  const meta = it.metadata ?? {}, url = it.url || meta.sourceURL || meta.url || '';
+  return { url, title: it.title || meta.title || url, text: mdText(it.markdown) || it.description || '',
+    images: mdImages(it.markdown), source };
+};
+
+// One call, three result types: web pages scraped to markdown, dated news, images (twin of search_all).
+export async function firecrawlSearch(q, key, limit = 8, fetchFn = fetch) {
+  const d = await fcPost('/search', { query: q, limit, sources: ['web', 'news', 'images'],
+    scrapeOptions: { formats: ['markdown'], onlyMainContent: true } }, key, fetchFn);
+  const docs = [...(d.web ?? []).map(it => fcDoc(it)), ...(d.news ?? []).map(it => ({
+    url: it.url, title: `${it.title ?? ''} (${it.date ?? 'news'})`, text: mdText(it.snippet, 1) || it.title || '',
+    images: [], source: 'firecrawl-news' }))].filter(x => x.url && x.text);
+  const images = (d.images ?? []).filter(i => /^https?:/.test(i.imageUrl ?? '') && i.title)
+    .map(i => ({ url: i.imageUrl, page: i.url, alt: i.title, license: '', source: 'firecrawl' }));
+  return { docs, images };
+}
+
+// Any URL, read by Firecrawl's browser (JS rendered) — paste a link, ask about the page.
+export async function firecrawlScrape(url, key, fetchFn = fetch) {
+  const d = await fcPost('/scrape', { url, formats: ['markdown'], onlyMainContent: true }, key, fetchFn);
+  return fcDoc({ ...d, url: d.metadata?.sourceURL || url }, 'firecrawl');
+}
+
 // Fan every query to every source at once; one source failing costs only its own docs.
-export async function gather(question, { limit = 200, fetchFn = fetch, onProgress, imageFn = discoverImages } = {}) {
+export async function gather(question, { limit = 200, fetchFn = fetch, onProgress, imageFn = discoverImages,
+  firecrawlKey = '', firecrawlLimit = 8 } = {}) {
   const queries = subqueries(question);
   const ledger = {};
   const jobs = [];
   const images = imageFn(question, fetchFn).catch(() => ({ records: [], tried: [] }));
+  let fcImages = [];
+  if (firecrawlKey) {
+    ledger.firecrawl = { docs: 0, error: null };
+    // a pasted URL is read directly; anything else is searched (web + news + images)
+    const isUrl = /^https?:\/\/\S+$/.test(question.trim());
+    jobs.push((isUrl ? firecrawlScrape(question.trim(), firecrawlKey, fetchFn).then(d => ({ docs: [d], images: [] }))
+      : firecrawlSearch(question, firecrawlKey, firecrawlLimit, fetchFn)).then(({ docs, images }) => {
+      ledger.firecrawl.docs = docs.length; fcImages = images; onProgress?.(ledger); return docs;
+    }).catch(err => { ledger.firecrawl.error = String(err?.message ?? err); onProgress?.(ledger); return []; }));
+  }
   for (const [name, fn] of Object.entries(SOURCES)) {
     ledger[name] = { docs: 0, error: null };
     // Wikipedia is cheap and deep: every sub-query; the rest: the question itself
@@ -197,7 +319,7 @@ export async function gather(question, { limit = 200, fetchFn = fetch, onProgres
   }
   const { records, tried } = await images;
   for (const t of tried) ledger[t.provider] = { docs: t.count ?? 0, error: t.ok ? null : t.error, images: true };
-  const apiImages = records.map(r => ({ url: r.thumb_url, page: r.source, alt: r.name, license: r.license, source: r.provider }));
+  const apiImages = [...fcImages, ...records.map(r => ({ url: r.thumb_url, page: r.source, alt: r.name, license: r.license, source: r.provider }))];
   return { docs, ledger, queries, apiImages };
 }
 
@@ -251,11 +373,12 @@ export async function clipTags(blob, k = 3, onStatus = () => {}) {
 
 export function retrieve(question, docs, k = 10) {
   const passages = docs.flatMap(d => chunk(d.text).map(text => ({ text, src: d.url, title: d.title, source: d.source })));
-  const top = rank(question, passages, k);
+  const expansion = expandQuery(question, passages.map(p => p.text));
+  const top = rank(question, passages, k, 2, expansion);
   const num = numberSources(top);
   const byUrl = new Map(top.map(p => [p.src, p]));
   const sources = [...num].map(([url, n]) => ({ n, url, title: byUrl.get(url).title, source: byUrl.get(url).source }));
-  return { top, sources, passages: passages.length };
+  return { top, sources, passages: passages.length, expansion };
 }
 
 // ---- Claude: the official SDK, straight from the browser with the viewer's own key ----
