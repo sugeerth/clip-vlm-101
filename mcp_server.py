@@ -9,7 +9,7 @@ Six tools, all thin wrappers over answer.py, sources.py and multimodal.py:
                     return a cited extractive answer, the numbered passages and
                     the ranked images, so the calling model writes its own answer
     web_search      4 search engines at once → result URLs
-    read_page       one URL → readable text (Scrapling, nav/footer stripped)
+    read_page       one URL → readable text (Scrapling; Firecrawl when blocked/JS-only)
     search_sources  7 keyless APIs at once → whole documents
     find_images     Commons + Openverse → licensed images, ranked
     gallery_search  the CLIP·search gallery (docs/db.json) by meaning — the bridge
@@ -59,10 +59,11 @@ async def web_search(query: str, limit: int = 20) -> str:
 
 
 @server.tool()
-async def read_page(url: str, max_chars: int = 8000) -> str:
-    """Fetch one web page with Scrapling (Chrome TLS fingerprint) and return its readable
-    text — navigation, headers, footers and forms stripped."""
-    return json.dumps(await sources.read_page(url, max_chars), indent=1)
+async def read_page(url: str, max_chars: int = 8000, engine: str = "auto") -> str:
+    """Fetch one web page and return its readable text — navigation, headers, footers and forms
+    stripped. engine: "scrapling" (local, Chrome TLS fingerprint), "firecrawl" (JS-rendering
+    browser; needs FIRECRAWL_API_KEY), or "auto" (Scrapling, then Firecrawl if blocked/empty)."""
+    return json.dumps(await sources.read_page(url, max_chars, engine=engine), indent=1)
 
 
 @server.tool()

@@ -36,6 +36,7 @@ export function gallerySearch(query, items, k = 6, qvec = null) {
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const host = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };
 const key = () => { try { return localStorage.getItem('ask_key') || ''; } catch { return ''; } };
+const fcKey = () => { try { return localStorage.getItem('ask_fc_key') || ''; } catch { return ''; } };
 const model = () => { try { return localStorage.getItem('ask_model') || 'claude-opus-5-5'; } catch { return 'claude-opus-5-5'; } };
 
 // ask·200 inside another page: one cited line + 3 web images + "open in ask·200".
@@ -43,9 +44,11 @@ const model = () => { try { return localStorage.getItem('ask_model') || 'claude-
 export async function askCard(el, query, { label = '', isCurrent = () => true, words = 30, fetchFn } = {}) {
   el.classList.remove('hidden');
   el.innerHTML = `<div class="ac-head">⚡ ask·200 — reading the web${label ? ` for <b>${esc(label)}</b>` : ''}…</div>`;
-  const { docs, apiImages } = await gather(query, { limit: 120, ...(fetchFn ? { fetchFn } : {}) });
+  // with a Firecrawl key saved on the ask page, the home page reads the live web too (5 results)
+  const { docs, apiImages } = await gather(query, { limit: 120, firecrawlKey: fcKey(), firecrawlLimit: 5,
+    ...(fetchFn ? { fetchFn } : {}) });
   if (!isCurrent()) return;
-  const { top, sources } = retrieve(query, docs);
+  const { top, sources, expansion } = retrieve(query, docs);
   if (!top.length) { el.innerHTML = '<div class="ac-head">⚡ ask·200 — the web had nothing on this</div>'; return; }
   const images = rankImages(query, docs, apiImages, new Map(sources.map(s => [s.url, s.n])), 3);
   const by = new Map(sources.map(s => [s.n, s]));
@@ -62,7 +65,7 @@ export async function askCard(el, query, { label = '', isCurrent = () => true, w
       `<div class="ac-foot">${sources.slice(0, 3).map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">[${s.n}] ${esc(host(s.url))}</a>`).join(' ')}` +
       ` <a class="ac-more" href="ask.html?q=${encodeURIComponent(query)}">full answer ↗</a></div>`;
   };
-  paint(extractive(query, top, words), 'extractive');
+  paint(extractive(query, top, words, expansion), 'extractive');
   if (key()) {
     let acc = '';
     try {

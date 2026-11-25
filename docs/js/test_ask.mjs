@@ -79,5 +79,49 @@ check(plain('<p>a &amp; b&#x27;s</p><p>c &#x2F; d</p>') === "a & b's. c / d.", '
   check(gallerySearch('', items, 1, qv)[0].file === 'images/004_cat.jpg', 'with a CLIP vector, the gallery ranks by pixels');
 }
 
+// Firecrawl in the browser: markdown cleaning matches firecrawl.py; search + scrape against a mock
+{
+  const { mdText, mdImages, firecrawlSearch } = await import('./ask.js');
+  fx.firecrawl.forEach((c, i) => {
+    check(mdText(c.md) === c.text, `mdText matches firecrawl.md_text (case ${i + 1})`);
+    check(JSON.stringify(mdImages(c.md)) === JSON.stringify(c.images), `mdImages matches firecrawl.md_images (case ${i + 1})`);
+  });
+  let sent = null;
+  const fcFetch = async (url, init) => {
+    sent = { url, init };
+    if (url.endsWith('/scrape')) return { ok: true, status: 200, json: async () => ({ success: true, data: {
+      markdown: 'A page that only renders with JavaScript, read by Firecrawl for this test run.', metadata: { title: 'JS app', sourceURL: 'https://app/x' } } }) };
+    return { ok: true, status: 200, json: async () => ({ success: true, data: {
+      web: [{ url: 'https://nasa/sky', title: 'Why Is the Sky Blue?', markdown: '![Blue sky and clouds](https://nasa/sky.png)\nBlue light is scattered more than the other colors because it travels as shorter waves.' }],
+      news: [{ url: 'https://news/1', title: 'Red sky over Sydney', date: '2 days ago', snippet: 'Smoke scattered the blue light.' }],
+      images: [{ title: 'Aurora', imageUrl: 'https://img/a.jpg', url: 'https://img/page' }, { title: '', imageUrl: 'https://img/b.jpg' }] } }) };
+  };
+  const { docs, images } = await firecrawlSearch('sky', 'fc-k', 5, fcFetch);
+  check(sent.url === 'https://api.firecrawl.dev/v2/search' && sent.init.headers.Authorization === 'Bearer fc-k' &&
+    JSON.parse(sent.init.body).sources.join() === 'web,news,images', 'Firecrawl search: v2 endpoint, Bearer key, web+news+images');
+  check(docs.map(d => d.source).join() === 'firecrawl,firecrawl-news' && docs[1].title === 'Red sky over Sydney (2 days ago)' &&
+    docs[0].images[0].url === 'https://nasa/sky.png', 'web pages + dated news become documents, page images ride along');
+  check(images.length === 1 && images[0].url === 'https://img/a.jpg', 'Firecrawl images join the strip (untitled dropped)');
+  const g = await gather('https://app/x', { fetchFn: async (u, i) => u.includes('firecrawl') ? fcFetch(u, i) : { ok: false, status: 500 },
+    imageFn: async () => ({ records: [], tried: [] }), firecrawlKey: 'fc-k' });
+  check(g.docs.some(d => d.title === 'JS app') && g.ledger.firecrawl.docs === 1, 'a pasted URL is read by Firecrawl\'s browser');
+  const g2 = await gather('sky', { fetchFn: async () => ({ ok: false, status: 402, json: async () => ({}) }),
+    imageFn: async () => ({ records: [], tried: [] }), firecrawlKey: 'fc-k' });
+  check(g2.ledger.firecrawl.error === 'out of Firecrawl credits', 'out of credits is said plainly, other sources unaffected');
+}
+
+// pseudo-relevance feedback + heading filter: identical to answer.py
+{
+  const { expandQuery, headline } = await import('./ask.js');
+  const f = fx.feedback;
+  const exp = expandQuery(f.q, f.passages.map(p => p.text));
+  check(JSON.stringify(exp) === JSON.stringify(f.expansion), `expandQuery learns the same words as Python: ${exp.join(', ')}`);
+  const top = rank(f.q, f.passages.map(p => ({ ...p })), 4, 2, exp);
+  numberSources(top);
+  check(JSON.stringify(top.map(p => [p.src, p.n, p.score])) === JSON.stringify(f.rank), 'expanded ranking matches Python');
+  check(extractive(f.q, top, 40, exp) === f.extractive, 'expanded extractive answer is byte-identical');
+  check(f.headline.every(([h, want]) => headline(h) === want), 'headline() flags the same Title Case lines');
+}
+
 if (failed) { console.log('ask twin: FAILED'); process.exit(1); }
 console.log('ask twin: all checks passed');

@@ -1129,6 +1129,7 @@ def test_answer():
 
 def test_web_tools():
     """sources.py's 7 API parsers, the MCP server, and research.py's tool wiring — all local."""
+    os.environ.pop("FIRECRAWL_API_KEY", None)   # never spend real Firecrawl credits in tests
     try:
         import mcp  # noqa: F401
         import scrapling.fetchers  # noqa: F401
@@ -1226,6 +1227,7 @@ def test_web_tools():
 
 def test_multimodal():
     """Images out (page + API images, ranked, CLIP re-rank), images in (photo → query → vision)."""
+    os.environ.pop("FIRECRAWL_API_KEY", None)   # never spend real Firecrawl credits in tests
     try:
         import scrapling.fetchers  # noqa: F401
     except ImportError:
@@ -1377,6 +1379,131 @@ def test_bridge():
         srv.shutdown()
     assert len(wrote) == 1 and wrote[0]["license"] == "CC0" and pathlib.Path(wrote[0]["file"]).exists()
     assert again == [] and len(json.loads((out / "web_manifest.json").read_text())) == 1   # dedup by pixels
+
+
+def test_firecrawl():
+    """Firecrawl as a second engine — search, rescue of a blocked page, read_page fallback, the
+    hosted MCP wiring — against a local mock of the v2 API (shapes checked against the live API)."""
+    try:
+        import scrapling.fetchers  # noqa: F401
+    except ImportError:
+        return
+    import asyncio
+    import http.server
+    import json
+    import threading
+    import types
+    import answer
+    import firecrawl
+    import research
+    import sources
+
+    # markdown → text/images: menus and link targets dropped, icons filtered
+    md = ("[Jump to content](#x)\n# Rayleigh scattering\n![Blue sky over a field](https://u/sky.jpg)\n"
+          "![](https://u/noalt.jpg) ![logo](https://u/logo.png)\n"
+          "**Rayleigh scattering** makes the [sky](https://w/sky) blue because short wavelengths scatter more.\n"
+          "| a | b |\n|---|---|")
+    assert firecrawl.md_text(md) == "Rayleigh scattering makes the sky blue because short wavelengths scatter more."
+    assert [im["url"] for im in firecrawl.md_images(md)] == ["https://u/sky.jpg"]
+
+    seen = []
+
+    class FC(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            seen.append((self.path, self.headers.get("authorization"), body))
+            if body.get("query") == "broke":
+                out, code = {"success": False, "error": "Insufficient credits"}, 402
+            elif self.path == "/v2/search":
+                out, code = {"success": True, "data": {
+                    "news": [{"title": "Sky turns red over Sydney", "url": "https://news/1", "date": "2 days ago",
+                              "snippet": "Bushfire smoke scattered the blue light, leaving the sky red."}],
+                    "images": [{"title": "Blue sky over a field", "imageUrl": "https://img/sky.jpg", "url": "https://img/page"},
+                               {"title": "", "imageUrl": "https://img/untitled.jpg", "url": "https://img/p2"}],
+                    "web": [
+                    {"url": "https://nasa/sky", "title": "Why Is the Sky Blue?", "description": "short",
+                     "markdown": "# Why\nBlue light is scattered more than the other colors because it travels "
+                                 "as shorter, smaller waves. This is why we see a blue sky most of the time.",
+                     "metadata": {"sourceURL": "https://nasa/sky"}},
+                    {"url": "https://bare/x", "title": "No markdown", "description": "only a description here"}]}}, 200
+            else:
+                out, code = {"success": True, "data": {
+                    "markdown": "The blocked page explains that the sky is blue because air molecules scatter "
+                                "blue sunlight far more strongly than red sunlight, which is Rayleigh scattering.",
+                    "metadata": {"title": "Blocked but rescued", "sourceURL": body["url"]}}}, 200
+            data = json.dumps(out).encode()
+            self.send_response(code)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(data)
+
+    fc_srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FC)
+    threading.Thread(target=fc_srv.serve_forever, daemon=True).start()
+    fixtures = dict(answer.FIXTURE)
+    fixtures["/blocked"] = ""                     # 404s for Scrapling — a page it cannot read
+    web, base = answer._serve(fixtures)
+    old = {k: os.environ.get(k) for k in ("FIRECRAWL_API_KEY", "FIRECRAWL_API_URL")}
+    os.environ.update(FIRECRAWL_API_KEY="fc-test", FIRECRAWL_API_URL=f"http://127.0.0.1:{fc_srv.server_port}")
+    try:
+        docs = asyncio.run(firecrawl.search("why is the sky blue", 2))
+        assert [d["url"] for d in docs] == ["https://nasa/sky", "https://bare/x"]
+        both, imgs = asyncio.run(firecrawl.search_all("why is the sky blue", 2))
+        assert [d["source"] for d in both] == ["firecrawl", "firecrawl", "firecrawl-news"]
+        assert seen[-1][2]["sources"] == ["web", "news", "images"]
+        del seen[1:]
+        assert docs[1]["text"] == "only a description here"           # no markdown → the description
+        path, auth, body = seen[0]
+        assert path == "/v2/search" and auth == "Bearer fc-test"
+        assert body["scrapeOptions"] == {"formats": ["markdown"], "onlyMainContent": True}
+
+        # the pipeline: Firecrawl search adds a page; the page Scrapling can't read is rescued
+        engines = {"local": (base + "/search?q={q}", "a.hit", None)}
+        r = answer.ask("why is the sky blue", pages=10, use_llm=False, apis=(), engines=engines)
+        fl = r["ledger"]["firecrawl"]
+        assert fl["docs"] == 3 and fl["rescued"] == 1 and fl["images"] == 1 and not fl["errors"], fl
+        assert any(s_["title"] == "Sky turns red over Sydney (2 days ago)" for s_ in r["sources"]) or \
+            any(p_["src"] == "https://news/1" for p_ in r["passages"])          # dated news ranks with pages
+        assert "https://img/sky.jpg" in [im["url"] for im in r["images"]]       # untitled image dropped
+        assert r["stats"]["firecrawl"] == 4 and "[1]" in r["answer"]
+        rescued = [b["url"] for path, _, b in seen if path == "/v2/scrape"]
+        assert len(rescued) == 1 and rescued[0].endswith("/blocked")    # readable short pages cost nothing
+
+        # out of credits: the ledger says so and the answer still comes from Scrapling
+        r2 = answer.ask("broke", pages=5, use_llm=False, apis=(), engines=engines, firecrawl_rescue=0)
+        assert "402" in r2["ledger"]["firecrawl"]["errors"][0] and r2["stats"]["scraped"] == 3
+        assert r["stats"]["scraped"] == 3          # Scrapling's pages, counted apart from Firecrawl's
+
+        # read_page: Scrapling first, Firecrawl when the page is unreadable
+        page = asyncio.run(sources.read_page(base + "/blocked"))
+        assert page["engine"] == "firecrawl" and page["title"] == "Blocked but rescued"
+        assert asyncio.run(sources.read_page(base + "/a"))["engine"] == "scrapling"
+        # opt-out: --no-firecrawl spends nothing
+        n = len(seen)
+        answer.ask("why is the sky blue", pages=5, use_llm=False, apis=(), engines=engines, firecrawl=False)
+        assert len(seen) == n
+
+        # research.py --firecrawl-mcp: the hosted server, key in the Authorization header, never the URL
+        kw = {}
+
+        class Runner:
+            def __init__(self, k):
+                kw.update(k)
+
+            async def __aiter__(self):
+                yield types.SimpleNamespace(stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text="ok")])
+        fake = types.SimpleNamespace(beta=types.SimpleNamespace(messages=types.SimpleNamespace(tool_runner=lambda **k: Runner(k))))
+        asyncio.run(research.research("q", client=fake, firecrawl_mcp=True))
+        assert kw["mcp_servers"] == [{"type": "url", "name": "firecrawl", "url": "https://mcp.firecrawl.dev/v2/mcp",
+                                      "authorization_token": "fc-test"}]
+        assert {"type": "mcp_toolset", "mcp_server_name": "firecrawl"} in kw["tools"]
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        fc_srv.shutdown()
+        web.shutdown()
 
 
 if __name__ == "__main__":

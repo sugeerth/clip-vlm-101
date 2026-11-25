@@ -84,9 +84,42 @@ def bm25(query, docs, k1=1.2, b=0.75):
     return scores
 
 
-def rank(query, passages, k=10, per_source=2):
-    """passages: [{text, src}] → top-k by BM25, at most `per_source` per source."""
-    scores = bm25(query, [p["text"] for p in passages])
+# words too common to say what a page is ABOUT — never used as feedback terms
+EXP_STOP = set("""about above after again against all also although always among another any anyone anything around back because been before being below best between both but came can cannot come could did does doing done down during each either else even ever every few first for from further get gets getting give given goes going gone good got great had has have having her here hers him his how however into its just keep know last least less let like likely made make makes making many may maybe more most much must near need needs never new next not nothing now often once one only onto other others our ours out over own part per perhaps place put rather really right said same say see seen several shall she should show since some something sometimes soon still such sure take than that the their them then there these they thing things think this those though through thus time times today together too toward under until upon use used uses using very want was way ways well went were what whatever when where whether which while who whom whose why will with within without would yet you your yours year years day days tonight amazing beautiful ready tips guide breathtaking stunning incredible magical spectacular ultimate awesome""".split())
+
+
+def expand_query(query, docs, m=8, n=6, min_docs=2):
+    """Pseudo-relevance feedback (RM3-lite): words that dominate the top-m BM25 hits, appear
+    in at least `min_docs` of them, and are not in the question — "why do the northern lights
+    happen" → appear, wind, solar, southern, australis — so pages that explain the thing in
+    other words rank too. docs: list of strings. Twin: ask.js expandQuery."""
+    scores = bm25(query, docs)
+    top = [i for i in sorted(range(len(docs)), key=lambda i: -scores[i]) if scores[i] > 0][:m]
+    q = set(tokens(query))
+    toks = [tokens(d) for d in docs]
+    sets = [set(d) for d in toks]
+    N, w, hits, df = len(docs), {}, {}, {}
+    for i in top:
+        tf = {}
+        for t in toks[i]:
+            tf[t] = tf.get(t, 0) + 1
+        for t, c in tf.items():
+            if t in q or len(t) < 4 or t.isdigit() or t in EXP_STOP:
+                continue
+            if t not in df:
+                df[t] = sum(1 for s_ in sets if t in s_)
+            w[t] = w.get(t, 0.0) + c / len(toks[i]) * math.log(1 + (N - df[t] + 0.5) / (df[t] + 0.5))
+            hits[t] = hits.get(t, 0) + 1
+    return sorted((t for t in w if hits[t] >= min_docs), key=lambda t: (-w[t], t))[:n]
+
+
+def rank(query, passages, k=10, per_source=2, expansion=()):
+    """passages: [{text, src}] → top-k by BM25 (+ 0.5 × BM25 of the feedback terms),
+    at most `per_source` per source."""
+    texts = [p["text"] for p in passages]
+    scores = bm25(query, texts)
+    if expansion:
+        scores = [a + 0.5 * b for a, b in zip(scores, bm25(" ".join(expansion), texts))]
     order = sorted(range(len(passages)), key=lambda i: -scores[i])
     out, seen = [], {}
     for i in order:
@@ -108,13 +141,32 @@ def number_sources(top):
     return num
 
 
-def extractive(query, top, words=45):
-    """No LLM: the best novel sentences, verbatim, each with its [n]."""
+JUNK = re.compile(r"^(watch|click|subscribe|sign up|read more|learn more|share|follow|see also|related|"
+                  r"advertisement|cookie|skip to|jump to|fun fact|learn how|discover|book|sign in|log in)\b", re.I)
+CUE = re.compile(r"\b(because|caused by|due to|occurs? when|happens? when|results? from|is called|"
+                 r"are called|which means)\b", re.I)
+
+
+def headline(s):
+    """Title Case lines ('When to See the Northern Lights in Norway') are headings, not answers."""
+    long = [w for w in s.split() if len(w) >= 4 and w[0].isalpha()]
+    return len(long) >= 3 and sum(w[0].isupper() for w in long) / len(long) >= 0.7
+
+
+def extractive(query, top, words=45, expansion=()):
+    """No LLM: the best novel sentences, verbatim, each with its [n]. Candidates must read like
+    statements (≥ 8 words, not a question, not page chrome); explanations (because, caused by,
+    occurs when…) get a 1.3× lift — a search answer should say WHY, not repeat the title."""
     cands = [(s, p["n"]) for p in top for s in SENT.split(p["text"])
-             if len(s.split()) >= 5 and not s.rstrip().endswith("?")]   # questions aren't answers
+             if len(s.split()) >= 8 and not s.rstrip().endswith("?") and not JUNK.match(s.strip())
+             and not headline(s)]
     if not cands:
         return "Not in sources."
-    scores = bm25(query, [s for s, _ in cands])
+    sents = [s for s, _ in cands]
+    base = bm25(query, sents)
+    if expansion:
+        base = [a + 0.5 * b for a, b in zip(base, bm25(" ".join(expansion), sents))]
+    scores = [x * (1.3 if CUE.search(s) else 1.0) for x, s in zip(base, sents)]
     order = sorted(range(len(cands)), key=lambda i: -scores[i])
     picked, used, budget = [], [], words
     for i in order:
@@ -275,11 +327,17 @@ def _claude(client, model, max_tokens, system, user, on_text=None):
 
 async def ask_async(question, pages=200, k=10, words=45, engines=None, model="claude-opus-5-5",
                     concurrency=40, timeout=10, use_llm=True, stream=None, apis=None,
-                    image=None, use_clip=False, n_images=6, gallery=None, save_images=None):
+                    image=None, use_clip=False, n_images=6, gallery=None, save_images=None,
+                    firecrawl=None, firecrawl_limit=10, firecrawl_rescue=5):
     """The whole pipeline. `apis`: source names from sources.py (None = all, () = none).
     `image`: a local photo to ask about; `use_clip`: re-rank result images by CLIP pixels.
     `gallery`: a CLIP·search db.json path (or its items) to search alongside the web;
-    `save_images`: a directory to download the top web images into, ready for ingest.py."""
+    `save_images`: a directory to download the top web images into, ready for ingest.py.
+    `firecrawl`: add Firecrawl search (+ rescue of unreadable pages); None = on iff
+    FIRECRAWL_API_KEY is set. Capped at `firecrawl_limit` results + `firecrawl_rescue` pages."""
+    import firecrawl as fc
+    use_fc = fc.enabled() if firecrawl is None else firecrawl
+    fc_ledger = {"docs": 0, "rescued": 0, "errors": []}
     import multimodal
     import sources as api_sources
     t0 = time.time()
@@ -293,7 +351,32 @@ async def ask_async(question, pages=200, k=10, words=45, engines=None, model="cl
 
     async def scraped():
         urls, ledger = await search(queries, engines, per_engine, timeout) if engines else ([], {})
-        return urls[:pages], ledger, await scrape(urls[:pages], concurrency, timeout)
+        docs = await scrape(urls[:pages], concurrency, timeout)
+        if use_fc and firecrawl_rescue:
+            # pages Scrapling fetched but couldn't read (blocked, JS-only, near-empty) → Firecrawl
+            got = {d["url"]: d for d in docs}
+            weak = [u for u in urls[:pages] if u not in got or len(got[u]["text"]) < fc.WEAK][:firecrawl_rescue]
+
+            async def rescue(u):
+                try:
+                    return await fc.scrape(u)
+                except Exception as e:
+                    fc_ledger["errors"].append(str(e)[:80])
+                    return None
+            for d in await asyncio.gather(*map(rescue, weak)):
+                if d and d["text"] and len(d["text"]) > len(got.get(d["url"], {}).get("text", "")):
+                    docs = [x for x in docs if x["url"] != d["url"]] + [d]
+                    fc_ledger["rescued"] += 1
+        return urls[:pages], ledger, docs
+
+    async def from_firecrawl():
+        if not use_fc or not firecrawl_limit:
+            return [], []
+        try:
+            return await fc.search_all(question, firecrawl_limit)   # web + news + images, one call
+        except Exception as e:
+            fc_ledger["errors"].append(str(e)[:80])
+            return [], []
 
     async def from_apis():
         if apis is not None and not apis:
@@ -305,8 +388,21 @@ async def ask_async(question, pages=200, k=10, words=45, engines=None, model="cl
             return [], {}
         return await multimodal.image_search(question, timeout=timeout)
 
-    (urls, ledger, docs), (api_docs, api_errors), (api_images, img_errors) = await asyncio.gather(
-        scraped(), from_apis(), from_image_apis())
+    (urls, ledger, docs), (api_docs, api_errors), (api_images, img_errors), (fc_docs, fc_images) = \
+        await asyncio.gather(scraped(), from_apis(), from_image_apis(), from_firecrawl())
+    api_images = api_images + fc_images
+    fc_ledger["images"] = len(fc_images)
+    have = {d["url"]: i for i, d in enumerate(docs)}
+    for d in fc_docs:                                     # same page from both engines: keep the fuller text
+        if d["url"] not in have:
+            have[d["url"]] = len(docs)
+            docs.append(d)
+            fc_ledger["docs"] += 1
+        elif len(d["text"]) > len(docs[have[d["url"]]]["text"]):
+            docs[have[d["url"]]] = d
+            fc_ledger["docs"] += 1
+    if use_fc:
+        ledger["firecrawl"] = fc_ledger
     for name in multimodal.IMAGE_SOURCES:
         if apis is None or apis:
             ledger[name] = {"images": sum(im["source"] == name for im in api_images),
@@ -317,7 +413,8 @@ async def ask_async(question, pages=200, k=10, words=45, engines=None, model="cl
     docs += [d for ds in api_docs.values() for d in ds if d["url"] not in seen and not seen.add(d["url"])]
     passages = [{"text": c, "src": d["url"], "title": d["title"]}
                 for d in docs for c in chunk(d["text"])]
-    top = rank(question, passages, k=k)
+    expansion = expand_query(question, [p["text"] for p in passages])
+    top = rank(question, passages, k=k, expansion=expansion)
     num = number_sources(top)
     titles = {p["src"]: p["title"] for p in top}
     sources = [{"n": n, "url": u, "title": titles[u]} for u, n in num.items()]
@@ -330,7 +427,7 @@ async def ask_async(question, pages=200, k=10, words=45, engines=None, model="cl
                         else multimodal.gallery_search(question, items))
     saved = await multimodal.save_images(images, save_images, question) if save_images and images else []
     mode = "extractive"
-    answer = extractive(question, top, words)
+    answer = extractive(question, top, words, expansion)
     if client and top:
         ctx = "\n\n".join(f"[{p['n']}] {p['title']}\n{p['text']}" for p in top)
         text = {"type": "text", "text": f"Sources:\n{ctx}\n\nQuestion: {question}"}
@@ -350,8 +447,10 @@ async def ask_async(question, pages=200, k=10, words=45, engines=None, model="cl
     n_api = sum(map(len, api_docs.values()))
     return {"question": question, "answer": answer, "mode": mode, "sources": sources,
             "images": images, "image_query": image_query, "gallery": from_gallery, "saved": saved,
+            "expansion": expansion,
             "passages": top, "queries": queries, "ledger": ledger,
-            "stats": {"urls": len(urls), "scraped": len(docs) - n_api, "api_docs": n_api,
+            "stats": {"urls": len(urls), "scraped": len(docs) - n_api - fc_ledger["docs"] - fc_ledger["rescued"], "api_docs": n_api,
+                      "firecrawl": fc_ledger["docs"] + fc_ledger["rescued"],
                       "passages": len(passages), "seconds": round(time.time() - t0, 2)}}
 
 
@@ -376,7 +475,8 @@ def show(r, streamed=False):
     if r.get("image_query"):
         print(f"  your photo was read as: {r['image_query']!r}")
     st = r["stats"]
-    print(f"\n  read {st['scraped']}/{st['urls']} pages + {st.get('api_docs', 0)} API docs · {st['passages']:,} passages · "
+    fc_note = f" (+{st['firecrawl']} via Firecrawl)" if st.get("firecrawl") else ""
+    print(f"\n  read {st['scraped']}/{st['urls']} pages{fc_note} + {st.get('api_docs', 0)} API docs · {st['passages']:,} passages · "
           f"{len(r['queries'])} queries · {r['mode']} · {st['seconds']}s")
 
 
@@ -424,8 +524,41 @@ def twin_fixture():
     bridge = {"knn": [multimodal.knn_tags(it["text_emb"], gal) for it in gal],
               "search": {q: [[g["file"], g["score"]] for g in multimodal.gallery_search(q, gal)]
                          for q in ["a fluffy pet", "famous tower in paris", "food", "outer space planet"]}}
+    import firecrawl
+    mds = ["[Jump to content](#x)\n# Rayleigh scattering\n![Blue sky over a field](https://u/sky.jpg)\n"
+           "![](https://u/noalt.jpg) ![site logo](https://u/logo.png)\n"
+           "**Rayleigh scattering** makes the [sky](https://w/sky) blue because short wavelengths scatter more.\n"
+           "| col a | col b |\n|---|---|\n- A list item long enough to be kept as a sentence of the page\n"
+           "1. Numbered steps also keep their words but lose the number marker entirely\n"
+           "> Quoted text that is long enough to survive the forty character threshold!\n"
+           "Short line\nA repeated line that appears twice in the markdown body here.\n"
+           "A repeated line that appears twice in the markdown body here.",
+           "", "Just one sentence without terminal punctuation that is long enough"]
+    fcfx = [{"md": m, "text": firecrawl.md_text(m), "images": firecrawl.md_images(m)} for m in mds]
+    # pseudo-relevance feedback: a question in one vocabulary, answers in another
+    aur = [("https://t1", "The Northern Lights Are Visible Tonight Across Canada. Northern lights tours sell out "
+            "fast, so book your northern lights trip early. The aurora appears when solar wind particles "
+            "reach the magnetic field."),
+           ("https://t2", "Northern lights photography tips: use a tripod. The aurora borealis glows green when "
+            "solar particles strike oxygen high in the atmosphere."),
+           ("https://s1", "Auroras happen because charged particles from the solar wind are caught by the "
+            "magnetic field and collide with atmospheric gases, which then glow."),
+           ("https://s2", "The magnetic field funnels solar particles toward the poles, which is why auroras "
+            "are seen at high latitudes."),
+           ("https://x", "Pizza ovens reach very high temperatures in about ninety seconds of baking time.")]
+    aps = [{"text": t, "src": u, "title": u} for u, t in aur]
+    exq = "why do the northern lights happen"
+    exp = expand_query(exq, [x["text"] for x in aps], m=8, n=6, min_docs=2)
+    etop = rank(exq, [dict(x) for x in aps], k=4, expansion=exp)
+    number_sources(etop)
+    feedback = {"q": exq, "passages": aps, "expansion": exp,
+                "rank": [[x["src"], x["n"], x["score"]] for x in etop],
+                "extractive": extractive(exq, etop, 40, exp),
+                "headline": [[h, headline(h)] for h in [
+                    "When to See the Northern Lights in Norway", "The aurora appears when solar wind hits.",
+                    "Why Is the Sky Blue? A Short Answer", "Rayleigh scattering is strongest for short waves"]]}
     return {"passages": passages, "cases": cases, "chunk_text": text, "chunk": chunk(text, 20),
-            "bridge": bridge,
+            "bridge": bridge, "firecrawl": fcfx, "feedback": feedback,
             "images": {"docs": img_docs, "api": img_api, "cited": {"https://a": 1},
                        "ranked": [[im["url"], im["n"], im["score"]] for im in images]},
             "tokens": tokens("Why is the Sky blue? It's Rayleigh-scattering, 4th power!")}
@@ -486,7 +619,7 @@ def bench(n=200, runs=3):
     srv, base = _serve(pages)
     times = []
     for _ in range(runs):
-        r = ask("what is the answer to question 42", pages=n, words=20, use_llm=False, apis=(),
+        r = ask("what is the answer to question 42", pages=n, words=20, use_llm=False, apis=(), firecrawl=False,
                 engines={"local": (base + "/search?q={q}", "a.hit", None)})
         times.append(r["stats"]["seconds"])
     srv.shutdown()
@@ -520,7 +653,7 @@ def selftest():
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_port}"
-    r = ask("why is the sky blue", pages=10, words=30, use_llm=False, apis=(),
+    r = ask("why is the sky blue", pages=10, words=30, use_llm=False, apis=(), firecrawl=False,
             engines={"local": (base + "/search?q={q}", "a.hit", None)})
     srv.shutdown()
     show(r)
@@ -547,6 +680,10 @@ if __name__ == "__main__":
     ap.add_argument("--gallery", nargs="?", const="docs/db.json",
                     help="also search a CLIP·search gallery (default docs/db.json)")
     ap.add_argument("--save-images", metavar="DIR", help="download top web images for ingest.py")
+    ap.add_argument("--firecrawl", action=argparse.BooleanOptionalAction, default=None,
+                    help="Firecrawl search + rescue of unreadable pages (default: on iff FIRECRAWL_API_KEY)")
+    ap.add_argument("--firecrawl-limit", type=int, default=10, help="Firecrawl search results (credits)")
+    ap.add_argument("--firecrawl-rescue", type=int, default=5, help="max pages re-read via Firecrawl")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--bench", action="store_true", help="time 200 local pages end to end")
@@ -567,6 +704,7 @@ if __name__ == "__main__":
     out = ask(" ".join(a.question), pages=a.pages, k=a.k, words=a.words, model=a.model,
               use_llm=not a.no_llm, apis=a.apis.split(",") if a.apis else None,
               image=a.image, use_clip=a.clip, gallery=a.gallery, save_images=a.save_images,
+              firecrawl=a.firecrawl, firecrawl_limit=a.firecrawl_limit, firecrawl_rescue=a.firecrawl_rescue,
               stream=(lambda t: print(t, end="", flush=True)) if live else None)
     if a.json:
         print(json.dumps(out, indent=2))
