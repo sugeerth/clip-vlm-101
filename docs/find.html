@@ -29,6 +29,12 @@
   #q:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
   .qmeta { font-size: 0.76rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+  .kgline { margin-top: 8px; font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
+  .kgline b { color: var(--ink, inherit); }
+  .kgtag { font-family: var(--mono, ui-monospace, monospace); font-size: 0.64rem; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--accent-ink); border: 1px solid var(--border); border-radius: 999px;
+    padding: 1px 8px; margin-right: 6px; }
+  .kgid { font-family: var(--mono, ui-monospace, monospace); font-size: 0.7rem; color: var(--muted); }
   .chip { font-size: 0.76rem; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border);
     background: var(--surface); cursor: pointer; color: inherit; }
   .chip:hover { border-color: var(--accent); color: var(--accent-ink); }
@@ -114,6 +120,7 @@
     <span class="qmeta" id="qmeta">—</span>
   </div>
   <div class="chips" id="chips"></div>
+  <div class="kgline" id="kgline" hidden><span id="kgslice"></span><span id="kglive"></span></div>
 </div>
 
 <div class="rq" id="rq" aria-live="polite">

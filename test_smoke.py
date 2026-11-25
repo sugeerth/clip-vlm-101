@@ -625,6 +625,26 @@ def test_validate_db():
         assert v.validate(grow.build_payload(merged), verbose=False) == []
 
 
+def test_kg():
+    """kg.py: knowledge-graph grounding — entity resolution, slice build, and the
+    alias→tag expansion hot path, all against canned Wikidata responses."""
+    import kg
+
+    ent = kg.resolve("cat", opener=kg._fake_opener)
+    assert ent["id"] == "Q146" and ent["description"] == "domesticated feline"
+    assert "feline" in ent["aliases"] and ent["related"] == ["pet"]
+    assert kg.resolve("unknownium", opener=kg._fake_opener) is None
+
+    built = kg.build(["cat", "unknownium"], opener=kg._fake_opener)
+    assert set(built["entities"]) == {"cat"} and built["source"] == "wikidata"
+    exp = kg.expansions(built)
+    assert exp["feline"] == "cat" and exp["house cat"] == "cat" and "cat" not in exp
+
+    # the committed gallery's tags are what --build grounds; they must be readable
+    tags = kg.gallery_tags()
+    assert len(tags) >= 10 and "cat" in tags
+
+
 def test_softmax():
     from temperature import softmax
     scores = [0.3, 0.2, 0.1]

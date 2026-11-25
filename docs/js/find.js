@@ -10,11 +10,20 @@ import { dot } from './rank.js';
 import { getTextEncoder } from './clip.js';
 import { rankingQuality, FREE } from './rankquality.js';
 import { OnlineRanker } from './learn.js';
+import { expansions as kgExpansions, expandWords, liveResolve } from './kg.js';
 
 const $ = id => document.getElementById(id);
 const grid = $('grid'), qInput = $('q'), qmeta = $('qmeta');
 const rqFill = $('rqfill'), rqVerdict = $('rqverdict'), rqMetrics = $('rqmetrics'), rqNudge = $('rqnudge');
 const rqLearn = $('rqlearn');
+const kgLine = $('kgline'), kgSlice = $('kgslice'), kgLive = $('kglive');
+
+// the external knowledge graph (Wikidata), two speeds: EXP is the committed
+// slice's alias→tag map (docs/kg.json, built by `kg.py --build`) — the 0ms hot
+// path that lets "feline" find the cat; liveResolve grounds unknown terms against
+// Wikidata itself, one cached CORS round-trip per term, ever.
+let EXP = {};
+let kgDebounce = 0;
 
 // the on-device personal ranker: four floats in localStorage, trained by your
 // 👍/👎 AND by the ranking-quality agent's failure case — clicking a result you
@@ -53,7 +62,10 @@ function lexical(item, words) {
 
 function rankNow() {
   const query = qInput.value.trim();
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const typed = query.toLowerCase().split(/\s+/).filter(Boolean);
+  // ground the query in the knowledge graph BEFORE scoring: aliases the captions
+  // never used ("feline", "housecat") map to the canonical tag, instantly.
+  const { words, mapped } = expandWords(typed, EXP);
   const scored = DB.items.map(item => {
     let s = lexical(item, words);
     let cosI = 0, cosT = 0;
@@ -91,6 +103,32 @@ function rankNow() {
   qmeta.textContent = words.length
     ? `${results.filter(r => r.base_score > 0).length} match${results.filter(r => r.base_score > 0).length === 1 ? '' : 'es'}`
     : `${DB.items.length} images`;
+  renderKG(query, mapped);
+}
+
+// --- the knowledge-graph line: what the external graph contributed, and why ---
+function renderKG(query, mapped) {
+  clearTimeout(kgDebounce);
+  kgSlice.innerHTML = mapped.length
+    ? `<span class="kgtag">knowledge graph</span>`
+      + mapped.map(m => `<b>${m.from}</b> → <b>${m.to}</b>`).join(' · ')
+      + ` <span class="kgid">(wikidata slice · 0 ms)</span>`
+    : '';
+  kgLive.innerHTML = '';
+  kgLine.hidden = !mapped.length;
+  if (!query) return;
+  // ground the whole query against live Wikidata — debounced, cached forever,
+  // and silently absent when offline. Reference, not a dependency.
+  const term = query.toLowerCase();
+  kgDebounce = setTimeout(async () => {
+    const ent = await liveResolve(term);
+    if (!ent || qInput.value.trim().toLowerCase() !== term) return;
+    kgLine.hidden = false;
+    kgLive.innerHTML = (kgSlice.innerHTML ? '<br>' : '')
+      + `<span class="kgtag">wikidata</span><b>${ent.label}</b> <span class="kgid">${ent.id}</span>`
+      + (ent.description ? ` — ${ent.description}` : '')
+      + (ent.related.length ? ` · is a: ${ent.related.join(', ')}` : '');
+  }, 450);
 }
 
 // --- the relevance-scaled, gap-free grid (quantized tiers, top-aligned) ---
@@ -251,6 +289,9 @@ async function main() {
   // teaching gallery — the pinned lessons always reference db.json, search grows.
   DB = await fetch('db_grown.json').then(r => r.ok ? r.json() : null).catch(() => null)
     || await fetch('db.json').then(r => r.json());
+  // the committed knowledge-graph slice (absent until kg.py --build has run)
+  const kg = await fetch('kg.json').then(r => r.ok ? r.json() : null).catch(() => null);
+  EXP = kgExpansions(kg || {});
   $('chips').replaceChildren(...CHIPS.map(c => {
     const b = document.createElement('button'); b.className = 'chip'; b.textContent = c;
     b.addEventListener('click', () => { qInput.value = c; onInput(); qInput.focus(); });
