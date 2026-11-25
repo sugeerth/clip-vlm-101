@@ -101,9 +101,12 @@ def build_payload(records):
     }
 
 
-def _seed_records():
-    """The committed gallery as records (for --merge and --selftest), model-free."""
-    db = json.loads((DOCS / "db.json").read_text())
+def _seed_records(base=None):
+    """A gallery export as records (for --merge and --selftest), model-free.
+    `base` defaults to the committed teaching gallery; the automated grow
+    pipeline passes docs/db_grown.json so each run grows on top of the last."""
+    path = pathlib.Path(base) if base else DOCS / "db.json"
+    db = json.loads(path.read_text())
     return [{"file": it["file"], "caption": it["caption"], "tags": it["tags"],
              "image_emb": it["image_emb"], "text_emb": it["text_emb"],
              "attr": it.get("attr")} for it in db["items"]]
@@ -134,6 +137,9 @@ def main():
     ap.add_argument("--per", type=int, default=12, help="images to fetch per topic")
     ap.add_argument("--topics", nargs="*", help="override the built-in topic list")
     ap.add_argument("--merge", action="store_true", help="keep the current gallery and add to it")
+    ap.add_argument("--base", default=None,
+                    help="gallery to merge on top of (default docs/db.json; the "
+                         "automated pipeline passes docs/db_grown.json to grow cumulatively)")
     ap.add_argument("--out", default=str(DOCS / "db.json"))
     ap.add_argument("--dedup", type=float, default=0.985, help="near-duplicate cosine cutoff")
     ap.add_argument("--selftest", action="store_true",
@@ -159,7 +165,7 @@ def main():
     fx = FeatureExtractor()
     records = grow(topics, args.per, fx)
     if args.merge:
-        records = _seed_records() + records
+        records = _seed_records(args.base) + records
     before = len(records)
     records = dedup(records, args.dedup)
     payload = build_payload(records)

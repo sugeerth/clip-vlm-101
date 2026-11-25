@@ -252,6 +252,399 @@ def test_cascade():
     assert h[0] == 0 and h.argmin() == 0
 
 
+def test_hnsw():
+    """hnsw.py: the navigable-small-world graph is well-formed and, at matched
+    work, keeps more of the truth than IVF — the whole reason the graph exists."""
+    from ann import build as ivf_build, recall_at_k, search as ivf_search, synthetic
+    from hnsw import HNSW
+
+    X, Q = synthetic(n=1500, n_queries=60)
+    exact = np.argsort(Q @ X.T, axis=1)[:, ::-1][:, :10]
+    idx = HNSW(X, M=16, ef_construction=48)
+
+    # a well-formed HNSW: every node lives on layer 0, layers shrink going up,
+    # and the entry point sits on the top layer.
+    assert len(idx.layers[0]) == len(X)
+    sizes = [len(l) for l in idx.layers]
+    assert all(a >= b for a, b in zip(sizes, sizes[1:]))     # a pyramid, not a wall
+    assert idx.entry in idx.layers[idx.top]
+    assert idx.top == len(idx.layers) - 1
+
+    # the entry must be present on its own top layer even when it is the SOLE node
+    # that tall — a small n produces a unique-max level and would expose a gap.
+    for n in (50, 200):
+        small = HNSW(synthetic(n=n, n_queries=1)[0], M=16, ef_construction=48)
+        assert small.entry in small.layers[small.top]
+        for layer in small.layers:                  # no layer has a missing/void key
+            assert all(0 <= node < n for node in layer)
+
+    # every node is pruned to the per-layer budget (M0 on layer 0), no self-loops,
+    # and every neighbour id is a real node — the graph stays sparse and valid.
+    for node, nbrs in idx.layers[0].items():
+        assert len(nbrs) <= idx.M0
+        assert node not in nbrs
+        assert len(set(nbrs)) == len(nbrs)              # no duplicate edges
+        assert all(0 <= nb < len(X) for nb in nbrs)
+    # links start bidirectional; pruning may drop the far side, so most (not all)
+    # edges survive both ways — the graph is well-connected, not a set of one-way streets.
+    both = sum(node in idx.layers[0][nb] for node, nbrs in idx.layers[0].items() for nb in nbrs)
+    total = sum(len(nbrs) for nbrs in idx.layers[0].values())
+    assert both > 0.5 * total
+
+    # deterministic: same seed, same graph, same answers
+    idx2 = HNSW(X, M=16, ef_construction=48)
+    assert idx.layers[0] == idx2.layers[0]
+
+    def hnsw_recall(ef):
+        idx.dist_calls = 0
+        rec = sum(recall_at_k(idx.search(q, ef=ef), exact[qi]) for qi, q in enumerate(Q))
+        return rec / len(Q), idx.dist_calls / len(Q)
+
+    sweep = {ef: hnsw_recall(ef) for ef in (8, 16, 32, 64)}
+    r_lo, w_lo = sweep[8]
+    r_hi, w_hi = sweep[64]
+    assert r_hi > r_lo and w_hi > w_lo          # ef is a dial: more truth, more work
+    assert r_hi > 0.9                            # and it genuinely finds the truth
+
+    # apples-to-apples: give IVF its best shot here, then show HNSW reaches the
+    # SAME recall for FEWER distance computations — the graph's whole reason to exist.
+    C, lists = ivf_build(X, n_lists=64)
+    ivf_rec = ivf_scan = 0
+    for qi, q in enumerate(Q):
+        found, n = ivf_search(q, X, C, lists, probes=16)
+        ivf_rec += recall_at_k(found, exact[qi])
+        ivf_scan += n + len(C)
+    ivf_rec /= len(Q); ivf_scan /= len(Q)
+    # the cheapest HNSW pass that matches IVF's recall costs strictly less work
+    matched = [w for r, w in sweep.values() if r >= ivf_rec]
+    assert matched and min(matched) < ivf_scan
+
+
+def test_diskann():
+    """diskann.py: the Vamana graph is sparse and valid, the search navigates on
+    the PQ sketch and reads only ~L full vectors from 'disk', and reranking
+    recovers essentially all the recall — the billion-on-one-box trick."""
+    from ann import recall_at_k, synthetic
+    from diskann import DiskANN
+
+    X, Q = synthetic(n=900, n_queries=40)
+    exact = np.argsort(Q @ X.T, axis=1)[:, ::-1][:, :10]
+    idx = DiskANN(X, R=24, L=32, alpha=1.2, m=16)
+
+    # a valid Vamana graph: degree-bounded, no self-loops, no dup edges, real ids,
+    # a PQ sketch with one code row per vector, and a medoid entry point.
+    assert idx.medoid in range(len(X))
+    assert idx.codes.shape[0] == len(X)
+    for node, nbrs in enumerate(idx.nbrs):
+        assert len(nbrs) <= idx.R
+        assert node not in nbrs
+        assert len(set(nbrs)) == len(nbrs)
+        assert all(0 <= nb < len(X) for nb in nbrs)
+    # the graph is actually connected outward from the medoid (a BFS reaches most
+    # of it) — robust-prune must not have severed it into islands.
+    seen, frontier = {idx.medoid}, [idx.medoid]
+    while frontier:
+        nxt = []
+        for u in frontier:
+            for v in idx.nbrs[u]:
+                if v not in seen:
+                    seen.add(v); nxt.append(v)
+        frontier = nxt
+    assert len(seen) > 0.9 * len(X)             # reachable, not fragmented
+
+    # deterministic: same seed → same graph
+    idx2 = DiskANN(X, R=24, L=32, alpha=1.2, m=16)
+    assert idx.nbrs == idx2.nbrs
+
+    # search: L is a dial (more truth, more disk), and it reads only ~L of N.
+    def run(L):
+        rec = reads = pq = 0
+        for qi, q in enumerate(Q):
+            found, cost = idx.search(q, L=L)
+            assert len(found) == 10
+            assert cost["ssd_reads"] <= L        # the rerank cap: never more than L reads
+            rec += recall_at_k(found, exact[qi])
+            reads += cost["ssd_reads"]
+            pq += cost["pq_dists"]
+        return rec / len(Q), reads / len(Q), pq / len(Q)
+
+    r_lo, reads_lo, pq_lo = run(16)
+    r_hi, reads_hi, pq_hi = run(64)
+    assert r_hi > r_lo                          # bigger L keeps more of the truth
+    assert r_hi > 0.9                           # and reranking recovers it
+    assert reads_hi < 0.1 * len(X)              # a rounding error against N — the point
+    # navigation must happen on the PQ sketch, not full vectors: the walk touches
+    # strictly more candidates via PQ than it ever reads from 'disk'. (If someone
+    # rewired search to navigate on self.X, disk reads would balloon and this fails.)
+    assert pq_hi > reads_hi
+
+
+def test_orchestrate():
+    """orchestrate.py: the supervisor routes up the escalation ladder — easy cases
+    stop at a glance, uncertain ones convene the panel, deadlocked ones debate,
+    contested ones abstain — and it spends strictly fewer calls than the naive
+    panel-on-everything while never over-ruling a split panel."""
+    import orchestrate
+    import db
+
+    items = db.load_json_gallery("docs/db.json")
+    by = lambda s: next(it for it in items if s in it["path"])
+
+    # a decisive glance rules in ONE call and records only the glance
+    easy = orchestrate.orchestrate(by("004_cat"), by("005_dog"))
+    assert easy["tier"] == 1 and easy["decision"] == "relevant" and easy["llm_calls"] == 1
+    assert [p["name"] for p in easy["path"]] == ["glance"]
+
+    # an uncertain glance escalates to the panel, which rules (3 calls)
+    mid = orchestrate.orchestrate(by("004_cat"), by("001_bear"))
+    assert mid["tier"] == 2 and mid["reason"] == "panel" and mid["llm_calls"] == 3
+    assert [p["name"] for p in mid["path"]] == ["glance", "panel"]
+
+    # a deadlocked panel escalates to debate; a contested split abstains with factions
+    hard = orchestrate.orchestrate(by("000_apple"), by("010_pizza"))
+    assert hard["tier"] == 3 and hard["decision"] == "abstain" and hard["reason"] == "contested"
+    assert [p["name"] for p in hard["path"]] == ["glance", "panel", "debate"]
+    assert len(hard["factions"]) > 1                # dissenters named, not averaged away
+
+    # routing is monotone in the glance: extreme signals never escalate
+    lo = orchestrate.orchestrate(by("004_cat"), by("002_bicycle"))
+    assert lo["tier"] == 1 and lo["decision"] == "not relevant"
+
+    # the adaptive-compute payoff over the gallery: strictly cheaper than the
+    # panel-on-everything baseline, and every abstention is a genuine tier-3 split.
+    def fused(it):
+        v = np.asarray(it["image_emb"], np.float64); w = np.asarray(it["text_emb"], np.float64)
+        return np.concatenate([v, w]) / np.sqrt(2.0)
+    def top1(q):
+        qv = fused(q)
+        return max((it for it in items if it is not q), key=lambda it: float(fused(it) @ qv))
+    # empty input is coherent and matches the JS twin (no fabricated baseline):
+    empty = orchestrate.route_stats([])
+    assert empty == {"n": 0, "tiers": {1: 0, 2: 0, 3: 0}, "spent": 0,
+                     "naive": 0, "saved": 0, "abstains": 0}
+
+    stats = orchestrate.route_stats([(q, top1(q)) for q in items])
+    assert stats["spent"] < stats["naive"]          # escalation genuinely saves calls
+    assert stats["saved"] == stats["naive"] - stats["spent"] > 0
+    assert stats["tiers"][1] + stats["tiers"][2] + stats["tiers"][3] == stats["n"]
+    # cost is monotone by tier: only tier-1 cases cost 1 call, the rest cost 3
+    assert stats["spent"] == stats["tiers"][1] * 1 + (stats["tiers"][2] + stats["tiers"][3]) * 3
+
+
+def test_flow():
+    """flow.py: the structured orchestration runtime — deterministic topo order,
+    contract-gated handoffs (off-contract → quarantine → fail closed), fan-out
+    sub-agents that drop off-spec workers — and the demo graph agrees with the
+    council/debate agents it wires."""
+    import flow
+    import db
+
+    # deterministic topological order, tie-broken by insertion order
+    mk = lambda name, needs=(), contract=(), out=None: flow.Node(
+        name, (lambda i, c, _o=out or {}: dict(_o)), needs=needs, contract=contract)
+    diamond = flow.Flow([mk("a"), mk("b", ("a",)), mk("c", ("a",)), mk("d", ("b", "c"))])
+    assert diamond.order() == ["a", "b", "c", "d"]
+
+    # a cycle raises rather than hanging
+    try:
+        flow.Flow([mk("x", ("y",)), mk("y", ("x",))]).order()
+        assert False, "cycle should raise"
+    except ValueError:
+        pass
+
+    # off-contract output is quarantined and its dependents are skipped (fail closed)
+    bad = flow.Flow([
+        flow.Node("src", lambda i, c: {"nope": 1}, contract=("value",)),
+        flow.Node("sink", lambda i, c: {"ok": 1}, needs=("src",)),
+    ])
+    res = bad.run()
+    assert res["trace"][0]["status"] == "off-contract" and res["trace"][0]["missing"] == ["value"]
+    assert res["trace"][1]["status"] == "skipped" and res["trace"][1]["blocked_by"] == ["src"]
+    assert res["quarantined"] == ["sink", "src"]
+
+    # fan_out keeps contract-satisfying sub-agents, drops the off-spec ones
+    fo = flow.fan_out("p", [("good", lambda i, c: {"score": 0.5}),
+                            ("rogue", lambda i, c: {"opinion": "x"})],
+                      worker_contract=("score",))
+    out = fo.run({}, {})
+    assert len(out["workers"]) == 1 and out["workers"][0]["worker"] == "good"
+    assert out["dropped"] == ["rogue"]
+
+    # prototype-member names/keys must behave like ordinary strings — this is the
+    # reference the JS twin's own-key checks must match (in Python they just work).
+    proto = flow.Flow([
+        flow.Node("src", lambda i, c: {}, contract=("constructor",)),
+        flow.Node("sink", lambda i, c: {"ok": 1}, needs=("src",)),
+    ]).run()
+    assert proto["trace"][0]["status"] == "off-contract" and proto["quarantined"] == ["sink", "src"]
+    assert flow.Flow([flow.Node("toString", lambda i, c: {})]).order() == ["toString"]
+    try:
+        flow.Flow([flow.Node("a", lambda i, c: {}, needs=("toString",))])
+        assert False, "a need on an unknown node must raise"
+    except ValueError:
+        pass
+    pf = flow.fan_out("p", [("w", lambda i, c: {})], worker_contract=("toString",)).run({}, {})
+    assert pf["workers"] == [] and pf["dropped"] == ["w"]
+
+    # the demo graph on the committed gallery, agreeing with the wired agents
+    items = db.load_json_gallery("docs/db.json")
+    by = lambda s: next(it for it in items if s in it["path"])
+    assert flow.verdict_flow().order() == ["panel", "council", "decide"]
+
+    catdog = flow.run_verdict(by("004_cat"), by("005_dog"))
+    assert all(s["status"] == "ok" for s in catdog["trace"])
+    assert catdog["outputs"]["decide"] == {"decision": "relevant", "reason": "ruled", "via": "council"}
+
+    # a hung panel escalates through the graph to a debate → contested
+    ap = flow.run_verdict(by("000_apple"), by("010_pizza"))
+    dec = ap["outputs"]["decide"]
+    assert dec["decision"] == "abstain" and dec["reason"] == "contested" and dec["via"] == "debate"
+    assert len(dec["factions"]) > 1
+
+    # a rogue sub-agent injected into the real graph is dropped; the graph still rules
+    rogue = ("rogue", lambda i, c: {"name": "rogue", "opinion": "trust me"})
+    wr = flow.run_verdict(by("000_apple"), by("010_pizza"), extra_workers=[rogue])
+    assert wr["outputs"]["panel"]["dropped"] == ["rogue"]
+    assert len(wr["outputs"]["panel"]["workers"]) == 3      # the three real judges survive
+    assert wr["outputs"]["decide"]["decision"] == "abstain" and wr["quarantined"] == []
+
+
+def test_rankquality():
+    """rankquality.py: the answer belongs in the top 1-3 — the metrics reward
+    front-loading (P@3, MRR, nDCG) and penalize scrolling, into one 0-1 score."""
+    import rankquality as rq
+
+    # MRR / precision building blocks
+    assert abs(rq.reciprocal_rank([False, False, True]) - 1 / 3) < 1e-9
+    assert rq.reciprocal_rank([False, False]) == 0
+    assert abs(rq.precision_at_k([True, False, True, True], 3) - 2 / 3) < 1e-9
+
+    # nDCG: ideal order scores 1.0; worst-first scores lower
+    assert abs(rq.ndcg_at_k([1.0, 0.6, 0.5, 0.2, 0.1]) - 1.0) < 1e-9
+    assert rq.ndcg_at_k([0.1, 0.2, 0.3, 0.6, 1.0]) < 0.8
+
+    # scroll penalty: free within the top-3, linear past it, 1 at the bottom
+    assert rq.scroll_penalty(1, 10) == 0 and rq.scroll_penalty(3, 10) == 0
+    assert rq.scroll_penalty(10, 10) == 1 and rq.scroll_penalty(None, 10) == 1
+    assert rq.scroll_penalty(4, 5, 3) == 0.5
+
+    # the composite verdict: a perfect click-#1 ranking is quality 1.0 / top-3,
+    # a buried answer the user had to scroll to is penalized and "scrolled".
+    perfect = rq.ranking_quality([1.0, 0.6, 0.5, 0.2, 0.1], engaged_rank=1)
+    assert abs(perfect["quality"] - 1.0) < 1e-9 and perfect["verdict"] == "top-3"
+    buried = rq.ranking_quality([0.2, 0.2, 0.3, 0.4, 1.0], engaged_rank=5)
+    assert buried["verdict"] == "scrolled" and buried["quality"] < 0.5
+    assert abs(buried["mrr"] - 0.2) < 1e-9 and buried["precision_at_3"] == 0
+    # scrolling strictly lowers quality vs the same results engaged at the top
+    assert buried["quality"] < rq.ranking_quality([0.2, 0.2, 0.3, 0.4, 1.0], engaged_rank=1)["quality"]
+
+
+def test_web():
+    """web.py: the internet-scale clip-retrieval client — parse + dedup + sort +
+    retry — exercised end to end against a canned backend, no network."""
+    import json
+    import web
+
+    # the whole path against the fake backend: dedup by url, sort by similarity,
+    # drop blank-url hits (this IS web.py's own selftest assertion set).
+    got = web.search("cat", n=10, opener=web._fake_backend)
+    assert [r["url"] for r in got] == ["https://ex.com/b.jpg", "https://ex.com/c.jpg", "https://ex.com/a.jpg"]
+    assert all(r["url"] for r in got) and got[0]["similarity"] >= got[-1]["similarity"]
+
+    # dedup keeps the first occurrence of each url
+    assert len(web.dedup([{"url": "x"}, {"url": "x"}, {"url": "y"}])) == 2
+
+    # retries: a backend that fails twice then succeeds still returns
+    calls = {"n": 0}
+    def flaky(url, body, headers, timeout):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise OSError("connection reset")
+        return web._fake_backend(url, body, headers, timeout)
+    assert len(web.search("dog", opener=flaky)) == 3 and calls["n"] == 3
+
+    # an image_url routes as image→image (no text field)
+    seen = {}
+    def capture(url, body, headers, timeout):
+        seen.update(json.loads(body))
+        return web._fake_backend(url, body, headers, timeout)
+    web.search("", image_url="https://ex.com/q.jpg", opener=capture)
+    assert seen.get("image_url") == "https://ex.com/q.jpg" and "text" not in seen
+
+
+def test_validate_db():
+    """validate_db.py: the automated grow pipeline's gate — passes the committed
+    gallery, catches every corruption class, and gates the cumulative merge path
+    (grow --base) end to end, model-free."""
+    import copy
+    import json as _json
+    import tempfile
+    import pathlib
+
+    import grow
+    import validate_db as v
+
+    db = _json.loads(pathlib.Path("docs/db.json").read_text())
+    assert v.validate(db, verbose=False) == []          # the committed gallery passes
+
+    def probs(mut):
+        d = copy.deepcopy(db)
+        mut(d)
+        return v.validate(d, verbose=False)
+
+    # each corruption class is caught, by name
+    assert any("norm" in p for p in probs(
+        lambda d: d["items"][0]["image_emb"].__setitem__(slice(0, 256), [0.0] * 256)))
+    assert any("duplicate file" in p for p in probs(
+        lambda d: d["items"].__setitem__(1, dict(d["items"][0]))))
+    def neardup(d): d["items"][1]["image_emb"] = list(d["items"][0]["image_emb"])
+    assert any("near-duplicate" in p for p in probs(neardup))
+    def remote(d): d["items"][0]["file"] = "https://x.com/a.jpg"; d["items"][0].pop("attr", None)
+    assert any("attribution" in p for p in probs(remote))
+    assert any("map" in p for p in probs(lambda d: d["items"][0].__setitem__("map", [2.0, 0.5])))
+    assert any("seed" in p for p in probs(lambda d: d.__setitem__("items", d["items"][:5])))
+
+    # the cumulative path grow.yml runs, rehearsed offline: seed → payload →
+    # written as db_grown.json → merged on top of ITSELF via --base → still valid.
+    seed = grow._seed_records()
+    with tempfile.TemporaryDirectory() as td:
+        grown = pathlib.Path(td) / "db_grown.json"
+        grown.write_text(_json.dumps(grow.build_payload(seed)))
+        again = grow._seed_records(base=str(grown))     # next run's --base load
+        assert len(again) == len(seed)
+        payload2 = grow.build_payload(grow.dedup(again))
+        assert v.validate(payload2, verbose=False) == []
+        # a remote crawled record that duplicates an existing embedding must be
+        # DROPPED by dedup (keeping the gate green), receipts and all
+        fake = dict(seed[0])
+        fake["file"] = "https://commons.example/thumb.jpg"
+        fake["image_emb"] = list(seed[0]["image_emb"])
+        fake["attr"] = {"author": "a", "license": "cc-by", "source": "https://commons.example/p"}
+        merged = grow.dedup(again + [fake])
+        assert len(merged) == len(seed)
+        assert v.validate(grow.build_payload(merged), verbose=False) == []
+
+
+def test_kg():
+    """kg.py: knowledge-graph grounding — entity resolution, slice build, and the
+    alias→tag expansion hot path, all against canned Wikidata responses."""
+    import kg
+
+    ent = kg.resolve("cat", opener=kg._fake_opener)
+    assert ent["id"] == "Q146" and ent["description"] == "domesticated feline"
+    assert "feline" in ent["aliases"] and ent["related"] == ["pet"]
+    assert kg.resolve("unknownium", opener=kg._fake_opener) is None
+
+    built = kg.build(["cat", "unknownium"], opener=kg._fake_opener)
+    assert set(built["entities"]) == {"cat"} and built["source"] == "wikidata"
+    exp = kg.expansions(built)
+    assert exp["feline"] == "cat" and exp["house cat"] == "cat" and "cat" not in exp
+
+    # the committed gallery's tags are what --build grounds; they must be readable
+    tags = kg.gallery_tags()
+    assert len(tags) >= 10 and "cat" in tags
+
+
 def test_softmax():
     from temperature import softmax
     scores = [0.3, 0.2, 0.1]

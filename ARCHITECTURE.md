@@ -66,8 +66,22 @@ vector stores do:
 - **ANN / IVF** (`ann.py`): cluster the corpus, scan only the nearest few
   clusters — ~2% of vectors, ~75% of the true neighbours. This is what FAISS
   IVF and ScaNN do ([FAISS](https://arxiv.org/abs/2401.08281),
-  [ScaNN](https://arxiv.org/abs/1908.10396); HNSW/DiskANN for graph and
-  on-SSD variants).
+  [ScaNN](https://arxiv.org/abs/1908.10396)).
+- **ANN / HNSW** (`hnsw.py`): the graph index modern vector databases (Qdrant,
+  Weaviate, pgvector, Vespa, FAISS-HNSW) actually default to — a layered
+  navigable-small-world graph you *walk* toward the query instead of cells you
+  scan. Hops grow like log N, not √N, so at matched work it keeps more of the
+  truth than IVF (measured, same vectors: same recall for ~20% fewer distance
+  computations, and it reaches recall IVF can't touch)
+  ([Malkov & Yashunin 2016](https://arxiv.org/abs/1603.09320)).
+- **ANN / DiskANN** (`diskann.py`): a billion vectors on ONE 64 GB box. HNSW
+  needs the whole graph and every full vector in RAM; DiskANN keeps a ~64-byte
+  PQ sketch + the graph in RAM and the full-precision vectors on SSD. A Vamana
+  graph — built by *robust-prune* with a slack α>1 that spares long edges to
+  keep the diameter short — is navigated on the RAM sketch, then only the ~L
+  finalists' true vectors are read from disk and reranked (measured, same
+  vectors: reranking recovers ~all the recall while reading ~L of N)
+  ([Subramanya et al. 2019 / DiskANN](https://proceedings.neurips.cc/paper/2019/hash/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Abstract.html)).
 - **Compression** (`quantize.py`, `pq.py`): int8 is 4× smaller;
   **product quantization** is ~32× smaller (64 bytes/vector) and searches by
   table lookup with no multiplies — small enough that `pq.js` ships a
@@ -266,9 +280,9 @@ afternoon.
 | stage | files | run it |
 |---|---|---|
 | encode | `embedder.py` `models.py` `fusion.py` `templates.py` | `python3 features.py images/cat.jpg` |
-| retrieve | `search.py` `ann.py` `pq.py` `quantize.py` `scale.py` | `python3 ann.py` · `python3 pq.py` |
+| retrieve | `search.py` `ann.py` `hnsw.py` `diskann.py` `pq.py` `quantize.py` `scale.py` `cascade.py` | `python3 ann.py` · `python3 hnsw.py` · `python3 diskann.py` · `python3 pq.py` |
 | rank | `dcn.py` `learn2rank.py` `hermes.py` | `python3 dcn.py --image images/004_cat.jpg` · `python3 learn2rank.py` |
-| explain+gate | `explain.py` `conformal.py` `judge.py` `trust.py` `agent.py` | `python3 explain.py --image images/004_cat.jpg` · `python3 conformal.py --json docs/db.json` · `python3 judge.py … --image images/004_cat.jpg` · `python3 trust.py … --image images/004_cat.jpg` |
+| explain+gate | `explain.py` `conformal.py` `judge.py` `trust.py` `agent.py` `debate.py` `orchestrate.py` `flow.py` | `python3 explain.py --image images/004_cat.jpg` · `python3 conformal.py --json docs/db.json` · `python3 judge.py … --image images/004_cat.jpg` · `python3 trust.py … --image images/004_cat.jpg` · `python3 orchestrate.py --json docs/db.json --eval` · `python3 flow.py --json docs/db.json --demo-contract` |
 
 Sources: DCN v2 [arXiv:2008.13535], DCN v1 [arXiv:1708.05123], RankNet (Burges et
 al., ICML 2005), YouTube two-stage (Covington et al., RecSys 2016), Wide&Deep

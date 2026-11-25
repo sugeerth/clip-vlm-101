@@ -30,6 +30,11 @@ jobs:
       - run: node docs/js/test_drift.mjs    # drift detectors: PSI/KS/coverage stream verdicts, pinned to drift.py
       - run: node docs/js/test_debate.mjs   # multi-agent debate: bounded-confidence consensus/factions, pinned to debate.py
       - run: node docs/js/test_reason.mjs   # the reasoning layer: end-to-end trace + consequence map, pinned to reason.py
+      - run: node docs/js/test_orchestrate.mjs # the escalation orchestrator: glance▸panel▸debate routing, pinned to orchestrate.py
+      - run: node docs/js/test_flow.mjs     # the structured orchestration runtime: typed DAG + contract gate, pinned to flow.py
+      - run: node docs/js/test_rankquality.mjs # ranking quality: P@3/MRR/nDCG/scroll penalty, pinned to rankquality.py
+      - run: node docs/js/test_web.mjs      # internet-scale clip-retrieval client: parse+dedup+retry, mocked, pinned to web.py
+      - run: node docs/js/test_kg.mjs       # knowledge-graph grounding: resolve + alias→tag expansion + cache, mocked, pinned to kg.py
       # the model-free CLI demos must keep running on the committed gallery
       - run: python temperature.py
       - run: python similarity.py --json docs/db.json
@@ -38,16 +43,26 @@ jobs:
       - run: python quantize.py --json docs/db.json
       - run: python similarity.py --json docs/db.json --centered
       - run: python ann.py
+      - run: python hnsw.py               # the navigable-small-world graph index: recall beats IVF at matched work
+      - run: python diskann.py            # Vamana graph + PQ-in-RAM: a billion on one box, reads only ~L vectors from disk
       - run: python learn2rank.py           # on-device learning-to-rank, model-free demo
       - run: python conformal.py --json docs/db.json  # conformal coverage table on the gallery
       - run: python judge.py --json docs/db.json --image images/004_cat.jpg  # council of judges, model-free
       - run: python trust.py --json docs/db.json --image images/004_cat.jpg  # compose the honesty lenses into one verdict
       - run: python drift.py --json docs/db.json --selftest  # drift detectors fire in order on a simulated stream
       - run: python debate.py --json docs/db.json --eval      # multi-agent debate as evaluation, model-free
+      - run: python orchestrate.py --json docs/db.json --eval  # adaptive escalation: compute follows difficulty, honest abstain
+      - run: python flow.py --json docs/db.json --demo-contract # structured orchestration: a rogue sub-agent is quarantined, graph fails closed
+      - run: python rankquality.py         # ranking quality: front-loading vs scroll penalty, one 0-1 score
+      - run: python web.py --selftest      # internet-scale search client: parse+dedup+sort+retry, network-free
+      - run: python kg.py --selftest       # knowledge-graph grounding: resolve + build + expansion, network-free
+      - run: test ! -f docs/kg.json || python -c "import json,kg; exp=kg.expansions(json.load(open('docs/kg.json'))); assert exp, 'empty kg slice'; print(len(exp),'expansions ok')"
       - run: python scaling.py             # the two-billion back-of-envelope, pure arithmetic
       - run: python cascade.py             # the approximation cascade: recall retained at every level
       - run: python reason.py --json docs/db.json --image images/004_cat.jpg  # end-to-end reasoning trace → consequence
       - run: python grow.py --selftest     # bulk gallery-growth: dedup + db.json export, model-free
+      - run: python validate_db.py         # the grow pipeline's gate: schema/norms/dups/receipts on the frozen gallery
+      - run: test ! -f docs/db_grown.json || python validate_db.py --json docs/db_grown.json  # …and on the grown one when present
       - run: python scale.py selftest       # the million-row machinery, synthetic + model-free
       - run: python pq.py selftest          # product quantization: the browser index's math
       - run: python opq.py selftest         # optimised PQ: the learned rotation earns its recall

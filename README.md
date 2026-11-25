@@ -4,7 +4,7 @@
 
 [![python](https://img.shields.io/badge/python-3.12-blue)](.github/workflows/test.yml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-45%20python%20%2B%2013%20JS%20twins-brightgreen)](test_smoke.py)
+[![tests](https://img.shields.io/badge/tests-53%20python%20%2B%2018%20JS%20twins-brightgreen)](test_smoke.py)
 [![demo](https://img.shields.io/badge/demo-live%20in%20your%20browser-orange)](https://sugeerth.github.io/clip-vlm-101/)
 
 **Live demo → [sugeerth.github.io/clip-vlm-101](https://sugeerth.github.io/clip-vlm-101/)**
@@ -147,6 +147,37 @@ in the page's settings to get Claude-written answers; the key stays in your brow
 
 ---
 
+## Find, fast — retrieval at scale, plus the agents that grade it
+
+This layer turns the demo into a production-shaped search system, each piece model-free,
+twin-tested, and live on GitHub Pages:
+
+- **[find.html](https://sugeerth.github.io/clip-vlm-101/find.html)** — real-time search: the
+  grid re-ranks on every keystroke, the most relevant images render largest with no gaps, and a
+  **ranking-quality agent** (`rankquality.py` ⇄ `docs/js/rankquality.js`: precision@3, MRR,
+  nDCG@5, a scroll penalty) treats scrolling as failure — the answer belongs in the top 1-3.
+  👍/👎 feed the on-device learner so the ranking improves with use, and queries are grounded in
+  an **external knowledge graph** (`kg.py` ⇄ `docs/js/kg.js`: a committed Wikidata slice expands
+  "feline" → *cat* in 0 ms, with live cached entity lookups on top).
+- **[flow.html](https://sugeerth.github.io/clip-vlm-101/flow.html)** — watch the agents run:
+  `orchestrate.py` routes each case up an escalation ladder (glance → panel → debate → abstain),
+  and `flow.py` executes a typed DAG whose handoffs are contract-checked — an off-spec sub-agent
+  is quarantined and the graph fails closed.
+- **[web.html](https://sugeerth.github.io/clip-vlm-101/web.html)** — the same query against
+  internet-scale indexes for free: `web.py` speaks the clip-retrieval protocol used by the
+  LAION-5B / Re-LAION public indexes, and the page documents the $0 self-host recipe.
+- **`hnsw.py` + `diskann.py`** — the two graph ANN indexes production systems actually run
+  (HNSW: 0.99 recall where IVF stalls; DiskANN/Vamana: 0.99 recall reading 64 of 1,200 vectors
+  from "SSD"), measured against `ann.py`'s IVF on the same vectors.
+- **Growing the gallery is automated**: `.github/workflows/grow.yml` crawls a rotating topic
+  slice weekly into `docs/db_grown.json` (the frozen teaching gallery never changes), gated by
+  `validate_db.py` (schema, unit norms, near-duplicates, attribution receipts) and delivered as
+  a draft PR; `.github/workflows/pr-agents.yml` adds a reviewer → distiller → meta-judge pass on
+  every PR. **[inside.html](https://sugeerth.github.io/clip-vlm-101/inside.html)** tells the
+  whole story.
+
+---
+
 ## How it works
 
 ```mermaid
@@ -229,12 +260,16 @@ Same algorithm, an order of magnitude apart — the win came from moving the byt
 | `scale.py` | the 690k engine — `ingest`, `search`, `bench`, `serve`, `selftest` |
 | `opq.py`, `pq.py` | product quantization to 64 bytes/vector — the learned rotation, and the browser twin. IVF (`ivf_train`/`ivf_search`) and per-dimension int8 (`build_i8`) live inside `scale.py`; 1-bit binary (`binary_encode`) inside `cascade.py` |
 | `judge.py`, `conformal.py`, `trust.py`, `drift.py` | the evaluation layer: judges, coverage guarantees, drift gates |
-| `docs/` | the GitHub Pages demo (`main:/docs`) + 13 JS twin test suites |
-| `test_smoke.py` | 45 model-free tests; stubs the CLIP encoder so CI never installs torch |
+| `hnsw.py`, `diskann.py` | the graph ANN indexes: HNSW and DiskANN/Vamana, measured against IVF on the same vectors |
+| `orchestrate.py`, `flow.py` | agent orchestration: the escalation cascade, and the typed DAG with contract-checked handoffs |
+| `rankquality.py`, `kg.py`, `web.py` | the ranking-quality agent (scrolling = failure), Wikidata grounding, and the internet-scale clip-retrieval client — all with JS twins behind `find.html` / `web.html` |
+| `grow.py`, `validate_db.py` | gallery growth and its gate; automated weekly by `.github/workflows/grow.yml` into `docs/db_grown.json` |
+| `docs/` | the GitHub Pages demo (`main:/docs`) + 18 JS twin test suites |
+| `test_smoke.py` | 53 model-free tests; stubs the CLIP encoder so CI never installs torch |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | the four stages of billion-scale visual search, and which file shows each |
 
 CI ([`.github/workflows/test.yml`](.github/workflows/test.yml)) runs the smoke suite,
-13 Node twin suites that pin the browser JS to the Python math, and 21 model-free CLI
+18 Node twin suites that pin the browser JS to the Python math, and 29 model-free CLI
 demos on the committed gallery — on numpy and pillow alone.
 
 ---

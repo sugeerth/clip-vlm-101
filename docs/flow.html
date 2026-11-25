@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLIP VLM 101 — watch the agents work</title>
+<meta name="description" content="A live, in-browser trace of one case flowing through a structured agent graph: parallel sub-agents fan out, a council fans in, contracts are checked, and a rogue agent is quarantined — animated as it runs, with a span waterfall.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="CLIP VLM 101 — watch the agents work">
+<meta property="og:description" content="A structured agent graph, traced live: fan-out sub-agents, contract gates, escalation, and graceful quarantine — the same shapes production agent-observability tools show.">
+<meta property="og:url" content="https://sugeerth.github.io/clip-vlm-101/flow.html">
+<meta property="og:image" content="https://sugeerth.github.io/clip-vlm-101/images/004_cat.jpg">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
+<link rel="preload" href="db.json" as="fetch" crossorigin>
+<link rel="stylesheet" href="style.css">
+<script>
+  const saved = localStorage.getItem('theme');
+  if (saved) document.documentElement.dataset.theme = saved;
+</script>
+<style>
+  /* ---- the live agent-graph trace ---- */
+  .fwrap { display: grid; gap: 20px; }
+  .fcontrols { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .fcase {
+    font: inherit; font-size: 0.82rem; padding: 7px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--ink, inherit);
+    cursor: pointer; transition: border-color .12s, background .12s;
+  }
+  .fcase:hover { border-color: var(--accent); }
+  .fcase.on { background: var(--accent-wash); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .frun {
+    font: inherit; font-size: 0.82rem; font-weight: 600; padding: 7px 16px; border-radius: 999px;
+    border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; margin-left: auto;
+  }
+  .frun:disabled { opacity: .5; cursor: default; }
+
+  /* the graph: tiers left→right, fan-out shown as stacked sub-agent chips */
+  .fgraph {
+    display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding: 6px 2px 10px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .ftier { display: flex; flex-direction: column; justify-content: center; gap: 8px; min-width: 168px; }
+  .fedge { display: flex; align-items: center; color: var(--muted); font-size: 1.2rem; padding: 0 6px; flex: 0 0 auto; }
+  .fnode {
+    border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+    padding: 11px 13px; position: relative; transition: border-color .2s, box-shadow .2s, opacity .2s;
+  }
+  .fnode .fname { font-family: var(--mono, ui-monospace, monospace); font-weight: 650; font-size: 0.82rem; display: flex; align-items: center; gap: 7px; }
+  .fnode .fmeta { font-size: 0.72rem; color: var(--muted); margin-top: 4px; min-height: 1em; font-variant-numeric: tabular-nums; }
+  .fdot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; transition: background .2s; }
+
+  .fnode { cursor: pointer; }
+  .fnode.sel { box-shadow: 0 0 0 2px var(--accent); }
+  .fnode.is-pending { opacity: .5; }
+  /* amber "running" is the CI/Airflow convention users already read as in-flight */
+  .fnode.is-running { border-color: #e0a526; box-shadow: 0 0 0 3px color-mix(in srgb, #e0a526 20%, transparent); }
+  .fnode.is-running .fdot { background: #e0a526; animation: fpulse 1s ease-in-out infinite; }
+  .fcontract { font-family: var(--mono, ui-monospace, monospace); font-size: 0.64rem; color: var(--muted); margin-top: 6px; letter-spacing: .01em; }
+  .fnode.is-ok .fdot { background: var(--good); }
+  .fnode.is-ok { border-color: color-mix(in srgb, var(--good) 45%, var(--border)); }
+  .fnode.is-bad .fdot { background: var(--bad); }
+  .fnode.is-bad { border-color: color-mix(in srgb, var(--bad) 55%, var(--border)); }
+  .fnode.is-skip { opacity: .4; }
+  .fnode.is-skip .fdot { background: var(--muted); }
+  @keyframes fpulse { 0%,100% { transform: scale(1); opacity: 1 } 50% { transform: scale(1.5); opacity: .5 } }
+
+  /* sub-agent chips inside the panel node */
+  .fsubs { display: flex; flex-direction: column; gap: 5px; margin-top: 9px; }
+  .fsub {
+    display: flex; align-items: center; gap: 7px; font-family: var(--mono, ui-monospace, monospace);
+    font-size: 0.72rem; padding: 4px 8px; border-radius: 7px; background: var(--accent-wash);
+    opacity: .35; transition: opacity .2s, background .2s; color: var(--ink, inherit);
+  }
+  .fsub.in { opacity: 1; }
+  .fsub .fsv { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .fsub.dropped { background: color-mix(in srgb, var(--bad) 14%, transparent); text-decoration: line-through; color: var(--muted); }
+  .fsub.dropped .fsv { color: var(--bad); }
+
+  /* the verdict pill */
+  .fverdict { align-self: center; }
+  .fpill {
+    font-family: var(--mono, ui-monospace, monospace); font-weight: 650; font-size: 0.8rem;
+    padding: 8px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface);
+    opacity: 0; transition: opacity .3s; white-space: nowrap;
+  }
+  .fpill.show { opacity: 1; }
+  .fpill.relevant { background: color-mix(in srgb, var(--good) 14%, transparent); border-color: var(--good); color: var(--good); }
+  .fpill.abstain { background: color-mix(in srgb, var(--bad) 12%, transparent); border-color: var(--bad); color: var(--bad); }
+
+  /* the span waterfall — one row per hop, appears as it resolves */
+  .fwaterfall { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); overflow: hidden; }
+  .fwrow { display: grid; grid-template-columns: 132px 1fr; gap: 10px; align-items: center; padding: 8px 14px; border-top: 1px solid var(--hairline); font-size: 0.78rem; }
+  .fwrow:first-child { border-top: none; }
+  .fwrow .fwname { font-family: var(--mono, ui-monospace, monospace); display: flex; align-items: center; gap: 7px; }
+  .fwbar { height: 8px; border-radius: 4px; background: var(--accent); transform-origin: left; animation: fgrow .32s ease-out; }
+  .fwbar.ok { background: var(--good); } .fwbar.bad { background: var(--bad); } .fwbar.skip { background: var(--muted); opacity: .4; }
+  .fwrow .fwtag { font-size: 0.72rem; color: var(--muted); }
+  @keyframes fgrow { from { transform: scaleX(0) } to { transform: scaleX(1) } }
+  .fmark { width: 15px; text-align: center; font-weight: 700; }
+  .fmark.ok { color: var(--good); } .fmark.bad { color: var(--bad); } .fmark.skip { color: var(--muted); }
+
+  /* drill-down: click any node or span → its structured detail (needs / contract / output) */
+  .fdetails {
+    border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+    padding: 14px 16px; font-size: 0.8rem; min-height: 64px;
+  }
+  .fdetails .fdh { font-family: var(--mono, ui-monospace, monospace); font-weight: 650; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .fdetails .fspan { font-size: 0.68rem; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; }
+  .fdetails .fdgrid { display: grid; grid-template-columns: 88px 1fr; gap: 4px 12px; margin-top: 10px; }
+  .fdetails .fdk { color: var(--muted); font-size: 0.74rem; }
+  .fdetails .fdv { font-family: var(--mono, ui-monospace, monospace); font-size: 0.74rem; word-break: break-word; }
+  .fdetails .fdv .ok { color: var(--good); } .fdetails .fdv .bad { color: var(--bad); }
+  .fdhint { color: var(--muted); font-size: 0.76rem; }
+
+  .flegend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 0.76rem; color: var(--muted); }
+  .flegend span { display: inline-flex; align-items: center; gap: 6px; }
+  .flegend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  @media (prefers-reduced-motion: reduce) { .fnode, .fsub, .fpill, .fwbar, .fdot { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header>
+  <nav class="nav" aria-label="Sections">
+    <a class="wordmark" href="./">CLIP&nbsp;VLM&nbsp;<span class="dim">101</span></a>
+    <div class="nav-links">
+      <a href="#live" class="here">Watch it run</a>
+      <a href="#what">What you're seeing</a>
+    </div>
+    <a class="gh" href="./">← Simple search</a>
+    <a class="gh" href="explore.html">How it works</a>
+    <a class="gh" href="scale.html">A million rows</a>
+    <a class="gh" href="https://github.com/sugeerth/clip-vlm-101">GitHub ↗</a>
+  </nav>
+</header>
+
+<main id="top">
+
+<div class="hero">
+  <h1>Watch the <em>agents</em> work</h1>
+  <p class="lede">
+    Every other page shows a finished answer. This one plays the <b>structured agent
+    graph</b> as it runs: three judge <b>sub-agents</b> fan out in parallel, a
+    <b>council</b> fans their votes back in, and a supervisor decides — escalating to a
+    <b>debate</b> when the panel is split. Every hand-off is a <b>contract</b> the runtime
+    checks, so an agent that goes off-spec is <b>quarantined</b>, not trusted. Same shapes
+    a production agent-observability tool would show — running on the committed gallery,
+    no model, no backend.
+  </p>
+  <p class="fine">The graph and the span waterfall are driven by <code>flow.js</code> —
+    the byte-identical twin of <code>flow.py</code>, the same runtime CI tests on every push.</p>
+</div>
+
+<section id="live">
+  <h2>Run a case through the graph</h2>
+  <div class="fwrap">
+    <div class="fcontrols" id="fcases"><!-- case buttons injected --></div>
+    <div class="fgraph" id="fgraph" aria-label="Agent graph"></div>
+    <div class="flegend">
+      <span><i style="background:var(--muted)"></i> pending</span>
+      <span><i style="background:#e0a526"></i> running</span>
+      <span><i style="background:var(--good)"></i> ok</span>
+      <span><i style="background:var(--bad)"></i> quarantined / off-contract</span>
+      <span><i style="background:var(--muted);opacity:.4"></i> skipped</span>
+    </div>
+    <div class="fdetails" id="fdetails"><span class="fdhint">Click any node or span row to inspect its inputs, contract, and output.</span></div>
+    <div class="fwaterfall" id="fwaterfall" aria-label="Span waterfall"></div>
+    <p class="fine">Two linked views — a logical <b>node-graph</b> (structure &amp; fan-out) and a <b>span waterfall</b>
+      (order) — with the node states, drill-down, and <code>gen_ai.*</code> span kinds that production
+      agent-observability tools (LangSmith, Arize&nbsp;Phoenix, LangGraph&nbsp;Studio) converged on, modelled on the
+      <a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">OpenTelemetry GenAI</a> trace conventions.</p>
+  </div>
+</section>
+
+<section id="what">
+  <h2>What you're seeing</h2>
+  <p>
+    This is <b>structured orchestration</b>: a typed graph of agents where every hand-off
+    carries a <b>contract</b> (the output keys it must produce). The runtime topologically
+    orders the nodes, runs each once its inputs are ready, and <b>validates every output
+    against its contract</b>. A node that breaks its contract — or any node downstream of
+    one — is skipped: the graph <b>fails closed</b> instead of passing bad data along.
+  </p>
+  <p>
+    The <b>panel</b> is a <b>fan-out</b>: it spawns one sub-agent per rubric
+    (relevance, specificity, faithfulness), each returning a structured vote. Pick the
+    <b>rogue sub-agent</b> case and watch it emit the wrong shape and get <b>dropped</b> —
+    the council still rules from the surviving votes. When the panel is too split to rule,
+    the graph <b>escalates</b> to a bounded-confidence <b>debate</b>; if the judges still
+    split into factions, the honest answer is to <b>abstain</b>, dissenters named.
+    Nothing here is faked — it's <code>flow.js</code> executing live, the same code the
+    <a href="https://github.com/sugeerth/clip-vlm-101/blob/main/flow.py">Python twin</a> runs.
+  </p>
+</section>
+
+</main>
+
+<script type="module" src="./js/flowviz.js"></script>
+
+</body>
+</html>

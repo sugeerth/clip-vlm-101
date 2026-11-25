@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLIP VLM 101 — fourteen images, and the questions they asked</title>
+<meta name="description" content="The story of turning a 14-image CLIP demo into a fast, honest, agentic, internet-scale image search — one small, tested, twinned module at a time. Does it scale? Is it fast? Is it honest? Can agents run it? Can it reach the whole web, free?">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Fourteen images, and the questions they asked">
+<meta property="og:description" content="A 14-image CLIP demo, and everything it takes to make image search fast, honest, agentic, and internet-scale — for free. The whole system, told as a story.">
+<meta property="og:url" content="https://sugeerth.github.io/clip-vlm-101/inside.html">
+<meta property="og:image" content="https://sugeerth.github.io/clip-vlm-101/images/004_cat.jpg">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
+<link rel="stylesheet" href="style.css">
+<script>
+  const saved = localStorage.getItem('theme');
+  if (saved) document.documentElement.dataset.theme = saved;
+</script>
+<style>
+  article { max-width: 720px; }
+  .chapter { border-top: 1px solid var(--hairline); padding-top: 30px; margin-top: 40px; }
+  .chapter .num { font-family: var(--mono, ui-monospace, monospace); font-size: 0.76rem; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent-ink); font-weight: 600; }
+  .chapter h2 { font-size: clamp(1.35rem, 3.6vw, 1.9rem); letter-spacing: -.015em; margin: 8px 0 14px; }
+  article p { font-size: 1.02rem; line-height: 1.72; margin: 0 0 16px; }
+  article p code, li code { font-family: var(--mono, ui-monospace, monospace); font-size: 0.86em;
+    background: var(--accent-wash); padding: 1px 5px; border-radius: 5px; }
+  .runit { display: inline-flex; align-items: center; gap: 8px; margin: 6px 12px 6px 0; padding: 8px 14px;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: 0.86rem;
+    color: var(--accent-ink); text-decoration: none; font-weight: 600; }
+  .runit:hover { border-color: var(--accent); background: var(--accent-wash); }
+  .runit .k { font-family: var(--mono, ui-monospace, monospace); color: var(--muted); font-weight: 400; }
+  .runits { margin: 12px 0 4px; }
+  .pull { font-size: 1.14rem; line-height: 1.6; font-style: italic; color: var(--ink);
+    border-left: 3px solid var(--accent); padding: 4px 0 4px 18px; margin: 22px 0; }
+  .kicker { color: var(--accent-ink); font-weight: 650; font-style: normal; }
+</style>
+</head>
+<body>
+
+<header>
+  <nav class="nav" aria-label="Sections">
+    <a class="wordmark" href="./">CLIP&nbsp;VLM&nbsp;<span class="dim">101</span></a>
+    <div class="nav-links">
+      <a href="#scale">Scale</a>
+      <a href="#fast">Fast</a>
+      <a href="#honest">Honest</a>
+      <a href="#agents">Agents</a>
+      <a href="#web">The web</a>
+      <a href="#method">The method</a>
+    </div>
+    <a class="gh" href="./">← Simple search</a>
+    <a class="gh" href="https://github.com/sugeerth/clip-vlm-101">GitHub ↗</a>
+  </nav>
+</header>
+
+<main id="top">
+
+<article>
+  <div class="hero">
+    <p class="eyebrow">The story · a blog post</p>
+    <h1>Fourteen images, and the <em>questions</em> they asked.</h1>
+    <p class="lede">
+      It started as fourteen pictures and a search box. You type <i>“a cat”</i>, and a small model
+      that has never seen these exact photos ranks them by meaning, in your browser, offline. That
+      demo is honest but tiny — and a tiny honest thing has a way of asking bigger questions. Does
+      it scale? Is it fast? Is it <i>honest</i> when it isn't sure? Can agents run it? Can it reach
+      the whole web — for free? This is what happened when we answered each one, out loud, in code
+      you can read in an afternoon.
+    </p>
+  </div>
+
+  <section class="chapter" id="premise">
+    <p class="num">00 · the premise</p>
+    <h2>A search box that understands meaning</h2>
+    <p>
+      CLIP maps images and text into one shared space, so <i>“a cat”</i> lands near a photo of a cat
+      without any labels, tags, or training on this gallery. The whole demo is two dot products and a
+      sort. It runs on fourteen committed images with precomputed embeddings, and it works — you can
+      try it right now. But fourteen is a rounding error, and a rounding error is a good place to
+      start asking what a <em>real</em> search would need.
+    </p>
+    <div class="runits">
+      <a class="runit" href="./">Try the search <span class="k">index.html</span></a>
+      <a class="runit" href="explore.html">How it works <span class="k">explore.html</span></a>
+    </div>
+  </section>
+
+  <section class="chapter" id="scale">
+    <p class="num">01 · does it scale?</p>
+    <h2>From fourteen to a billion, on the back of an envelope</h2>
+    <p>
+      At fourteen images you scan everything. At a billion you cannot, so retrieval trades a sliver of
+      accuracy for enormous speed — exactly as production vector databases do. We built the whole
+      ladder: <code>ann.py</code> is IVF (scan ~2% of the data, keep ~75% of the truth); <code>hnsw.py</code>
+      is the navigable-small-world graph every modern vector DB defaults to (walk a map, log&nbsp;N hops,
+      more recall per distance computed than IVF); <code>diskann.py</code> is how a billion vectors fit
+      on one 64&nbsp;GB box — a PQ sketch in RAM, the truth on SSD, only ~L vectors read per query. On top,
+      <code>cascade.py</code> quantizes at every rung (binary → PQ → int8 → exact) and keeps ~all the
+      recall, and <code>scaling.py</code> does the two-billion arithmetic. Every number is measured on
+      synthetic clustered vectors, not asserted.
+    </p>
+    <p class="pull"><span class="kicker">The lesson:</span> “fast at scale” is a measurement, not an
+      adjective. So we counted every distance computation and every disk read, and printed them.</p>
+    <div class="runits">
+      <a class="runit" href="scale.html">A million real rows <span class="k">scale.html</span></a>
+      <a class="runit" href="blog.html">The billion-scale design <span class="k">blog.html</span></a>
+    </div>
+  </section>
+
+  <section class="chapter" id="fast">
+    <p class="num">02 · is it fast — and does the ranking earn its place?</p>
+    <h2>Real-time, and a ranking that never makes you scroll</h2>
+    <p>
+      Search has to <em>feel</em> instant — the grid re-ranks on every keystroke, under 100&nbsp;ms, and the
+      most relevant images render largest, edge-to-edge with no gaps. But speed isn't the hard part;
+      <em>ranking quality</em> is. Positions one, two and three take about half of all clicks, so a good
+      ranker puts the answer there — and if you have to scroll, it missed. So we built a ranking-quality
+      agent, <code>rankquality.py</code>: it scores the live ranking (precision@3, MRR, nDCG) and adds a
+      <em>scroll penalty</em> from your own behavior. Click the top result and quality stays high; scroll
+      past it and the verdict flips to “ranking missed.” The ranker is graded by the eyes it's trying to
+      satisfy.
+    </p>
+    <div class="runits">
+      <a class="runit" href="find.html">Find, fast <span class="k">find.html</span></a>
+    </div>
+  </section>
+
+  <section class="chapter" id="honest">
+    <p class="num">03 · is it honest when it isn't sure?</p>
+    <h2>The right to say “I don't know”</h2>
+    <p>
+      A search that always answers will confidently answer wrong. The most valuable thing we added is the
+      ability to <em>abstain</em>. <code>conformal.py</code> gives a calibrated confidence set with a
+      coverage guarantee. <code>judge.py</code> convenes a council of independent rubric-judges, gates
+      each vote, and <em>refuses to rule</em> on a hung jury or without a quorum. <code>debate.py</code>
+      lets those judges actually argue — bounded-confidence dynamics that either converge to consensus or
+      split into named factions. <code>trust.py</code> composes the honesty signals into one verdict, and
+      <code>drift.py</code> watches, on a schedule, whether the live world still matches the one we
+      calibrated for. Every layer can say less rather than bluff.
+    </p>
+    <p class="pull"><span class="kicker">The lesson:</span> honest disagreement is a result, not a bug —
+      so we surface the dissent instead of averaging it away.</p>
+  </section>
+
+  <section class="chapter" id="agents">
+    <p class="num">04 · can agents run it?</p>
+    <h2>A supervisor that spends compute only on doubt</h2>
+    <p>
+      The pipeline used to be static — every query paid for every stage. So we made it agentic the way
+      the 2025–2026 production systems are. <code>orchestrate.py</code> is an <em>escalation ladder</em>:
+      a cheap glance handles the easy cases, escalates to the full panel only when uncertain, and to a
+      debate only when the panel splits — resolving most cases in one call instead of three. And
+      <code>flow.py</code> is the general form: a typed <em>graph</em> of agents where every hand-off is a
+      schema-checked contract, so a sub-agent that goes off-spec is quarantined and the graph fails
+      closed. You can watch a case flow through it, live, node by node.
+    </p>
+    <div class="runits">
+      <a class="runit" href="flow.html">Watch the agents work <span class="k">flow.html</span></a>
+    </div>
+  </section>
+
+  <section class="chapter" id="web">
+    <p class="num">05 · can it reach the whole web — free?</p>
+    <h2>You don't crawl the internet. Someone already did.</h2>
+    <p>
+      The gallery is small because <em>we</em> didn't index more — but the internet's images are
+      <em>already</em> indexed, free, at billion scale, in this very CLIP space. LAION crawled ~5.5&nbsp;billion
+      image-text pairs from Common Crawl and released them CLIP-embedded (the safety-cleaned Re-LAION-5B);
+      <code>clip-retrieval</code> serves nearest-neighbour search over them. So searching the web isn't a
+      crawl you run — it's a query you send, and the index cost is <em>zero</em>, because someone already
+      paid it and gave it away. <code>web.py</code> is the client, in the same record shape as the local
+      gallery, so the same grid and ranking-quality agent work over fourteen images or five billion.
+    </p>
+    <div class="runits">
+      <a class="runit" href="web.html">Search the internet, free <span class="k">web.html</span></a>
+    </div>
+  </section>
+
+  <section class="chapter" id="method">
+    <p class="num">06 · the method</p>
+    <h2>Why you can trust any of this</h2>
+    <p>
+      None of it is a slide. Every capability ships as a <strong>Python module and a byte-identical
+      JavaScript twin</strong> — the same math in two languages, pinned against each other so the browser
+      never drifts from the reference. Everything runs <strong>model-free</strong> on the committed data,
+      so the tests need no downloads and no GPU. Each module was <strong>adversarially reviewed</strong>
+      before shipping — a skeptic agent whose only job was to break it — and real bugs were caught and
+      fixed in the open (a graph that failed <em>open</em> on a prototype-poisoned key; a twin that
+      diverged on empty input; an index that dropped a node from its own layer). And <strong>CI re-runs
+      all of it on every push</strong>: the Python suite, sixteen JS twins, and every model-free demo.
+    </p>
+    <p>
+      That's the whole trick. Not one big clever thing, but many small honest ones — each measured, each
+      testable, each readable — stacked until fourteen images became a fast, honest, agentic,
+      internet-scale search you can hold in your head.
+    </p>
+    <div class="runits">
+      <a class="runit" href="https://github.com/sugeerth/clip-vlm-101">Read the source <span class="k">github</span></a>
+      <a class="runit" href="https://github.com/sugeerth/clip-vlm-101/blob/main/ARCHITECTURE.md">The architecture <span class="k">ARCHITECTURE.md</span></a>
+    </div>
+  </section>
+
+  <p class="fine" style="margin-top:44px">
+    CLIP VLM 101 · every page on this site runs locally in your browser; every number is reproduced by a
+    command in the README, and CI checks them on every push. Take it, fork it, rebuild it with your own images.
+  </p>
+</article>
+
+</main>
+
+</body>
+</html>
