@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CLIP VLM 101 — one in a million</title>
-<meta name="description" content="The 14-image gallery grown to 1,000,000 real dishes: what changes in the database at a million rows — packed float16 matrices, IVF, int8 — with honest latency and recall numbers from one laptop.">
+<meta name="description" content="The 14-image gallery grown to 690,000 real dishes: what changes in the database at scale — packed float16 matrices, IVF, per-dim int8, and OPQ at 64 bytes/vector — with honest latency and recall numbers from one laptop.">
 <meta property="og:type" content="website">
 <meta property="og:title" content="CLIP VLM 101 — one in a million">
-<meta property="og:description" content="A million real image+text embeddings in the repo's own database design: brute force vs IVF vs int8, measured honestly on a laptop.">
+<meta property="og:description" content="690,000 real image+text embeddings in the repo's own database design: brute force vs IVF vs per-dim int8 vs OPQ (64 bytes/vector, 0.92 recall@10 with a re-rank), measured honestly on a laptop.">
 <meta property="og:url" content="https://sugeerth.github.io/clip-vlm-101/scale.html">
 <meta property="og:image" content="https://sugeerth.github.io/clip-vlm-101/images/004_cat.jpg">
 <meta name="twitter:card" content="summary">
@@ -43,11 +43,13 @@
   <h1>One in a <em>million</em></h1>
   <p class="lede">
     Everything else on this site runs on a gallery of 14 images. This page is what
-    happened when we grew the same database design to <b>1,000,000 real dishes</b> —
+    happened when we grew the same database design to <b>690,000 real dishes</b>
+    (of the dataset's 1M+, the slice this laptop has ingested so far) —
     Qdrant's public Wolt food dataset, image embeddings precomputed with the
-    <i>same</i> clip-ViT-B-32 checkpoint the browser demo runs, plus a million
+    <i>same</i> clip-ViT-B-32 checkpoint the browser demo runs, plus 690,000
     text embeddings we computed ourselves, one dish name at a time, on one laptop.
-    Same 512-d space. Same dot products. Honest numbers.
+    Same 512-d space. Same dot products. Honest numbers — the shape lessons are
+    identical at any scale.
   </p>
   <p class="fine">Nothing on this page is a simulation — every number below was measured
     by <code>scale.py bench</code> on an Apple-silicon laptop, and the machinery
@@ -57,15 +59,22 @@
 <section id="live">
   <h2>Search it — right here, right now</h2>
   <p>
-    A 100,000-dish slice of the million (every 10th row), <b>product-quantized to
+    A 100,000-dish slice of the corpus, <b>optimised-product-quantized to
     64 bytes per dish</b> (<code>pq.py</code> → <code>js/pq.js</code>): the whole index is a
     ~7&nbsp;MB download, your query is embedded by the same CLIP text tower the demo uses,
-    and the scan is pure table lookups in this tab — no server anywhere.
+    and the scan is pure table lookups in this tab — no server anywhere. Want the exact
+    top-10? Tap <b>＋ precision</b> to stream a 51&nbsp;MB int8 tier and re-rank on top.
     First search downloads the model (~65&nbsp;MB) + the pack, then it's milliseconds.
   </p>
   <div class="live-pill">
     <input id="liveq" type="search" placeholder="ramen with a soft-boiled egg…"
            aria-label="Search 100,000 dishes">
+  </div>
+  <div class="live-ctl">
+    <button id="precision" type="button" class="prec-btn" aria-pressed="false"
+            title="Load the int8 refine tier for a second, exact re-rank stage">
+      ＋ precision <span class="prec-cost">(loads ~51 MB)</span>
+    </button>
   </div>
   <p class="fine" id="liveStatus" style="margin-top:10px"></p>
   <div class="showcase" id="liveGrid" style="margin-top:6px"></div>
@@ -79,13 +88,36 @@
     border-radius: 999px; padding: 11px 20px; outline: none;
   }
   .live-pill input:focus { border-color: var(--accent); }
+  .live-ctl { margin-top: 10px; }
+  .prec-btn {
+    font: inherit; font-size: .82rem; color: var(--ink2); cursor: pointer;
+    background: var(--surface); border: 1px solid var(--hairline);
+    border-radius: 999px; padding: 5px 14px;
+  }
+  .prec-btn:hover { border-color: var(--accent); }
+  .prec-btn[aria-pressed="true"] {
+    color: #fff; background: var(--accent); border-color: var(--accent);
+  }
+  .prec-btn:disabled { opacity: .6; cursor: default; }
+  .prec-cost { opacity: .7; }
 </style>
 <script type="module">
   import { getTextEncoder } from './js/clip.js';
-  import { loadPack, adcTables, pqSearch } from './js/pq.js';
+  import { loadPack, loadRefine, search } from './js/pq.js';
 
   const $ = id => document.getElementById(id);
-  let pack = null, encode = null, loading = null, seq = 0, deb = 0;
+  let pack = null, encode = null, loading = null, refining = null, seq = 0, deb = 0;
+
+  const note = () => {
+    const m = pack.manifest;
+    $('liveNote').innerHTML = pack.refine
+      ? `honesty note: <b>two-stage</b> now — the 64-byte codes nominate ${m.rerank_cand} `
+        + `candidates, the int8 tier re-scores them exactly. Measured on this pack, that `
+        + `keeps <b>${m.recall10_rerank}</b> of the exact top-10 (self-queries, the hardest case).`
+      : `honesty note: 64 bytes a dish is a coarse filter — measured on this pack it keeps `
+        + `<b>${m.recall10}</b> of the exact top-10 (self-queries, the hardest case). `
+        + `Load precision for the exact re-rank stage → ${m.recall10_rerank}.`;
+  };
 
   const ensureReady = () => loading ??= (async () => {
     $('liveStatus').textContent = 'downloading the pack + the text tower — one time, cached after…';
@@ -93,11 +125,27 @@
       loadPack('million', f => { $('liveStatus').textContent = `loaded ${f}…`; }),
       getTextEncoder(t => { $('liveStatus').textContent = t; }, () => {}),
     ]);
-    pack = p; encode = e;
-    $('liveNote').textContent = `honesty note: pure PQ reshuffles a tightly-packed top-10 — `
-      + `measured on this pack, the exact scan's top-10 stays ${pack.manifest.recall10_in50}`
-      + ` inside PQ's top-50 (self-queries, the hardest case). 64 bytes a dish buys a lot, not everything.`;
+    pack = p; encode = e; note();
   })();
+
+  async function addPrecision() {
+    await ensureReady();
+    if (pack.refine || refining) return refining;
+    const btn = $('precision');
+    btn.disabled = true; btn.textContent = 'loading the int8 tier…';
+    refining = loadRefine(pack, 'million', f => { btn.textContent = `loading ${f}…`; })
+      .then(() => {
+        btn.disabled = false; btn.setAttribute('aria-pressed', 'true');
+        btn.innerHTML = '✓ precision on';
+        note(); if ($('liveq').value.trim()) liveSearch();
+      })
+      .catch(err => {
+        btn.disabled = false; btn.textContent = '＋ precision (retry)';
+        $('liveStatus').textContent = `could not load the refine tier: ${err?.message ?? err}`;
+        refining = null;
+      });
+    return refining;
+  }
 
   async function liveSearch() {
     const q = $('liveq').value.trim();
@@ -119,12 +167,14 @@
     norm = Math.sqrt(norm) || 1;
     for (let i = 0; i < qv.length; i++) qv[i] /= norm;
     const tEmbed = performance.now();
-    const hits = pqSearch(pack, adcTables(qv, pack), 18);
+    const hits = search(pack, qv, 18, pack.manifest.rerank_cand);
     const ms = performance.now() - tEmbed;
     if (my !== seq) return;
+    const stage = pack.refine
+      ? `OPQ 64 B → int8 re-rank of ${pack.manifest.rerank_cand}` : 'OPQ 64 B, coarse';
     $('liveStatus').innerHTML = `<b>${ms.toFixed(1)} ms</b> across `
       + `${pack.manifest.n.toLocaleString()} dishes in your browser · `
-      + `query embedded in ${(tEmbed - t0).toFixed(0)} ms · 64 bytes per dish`;
+      + `query embedded in ${(tEmbed - t0).toFixed(0)} ms · ${stage}`;
     $('liveGrid').replaceChildren(...hits.map(h => {
       const [name, cafe, urlSuffix] = pack.items[h.id];
       const fig = document.createElement('figure');
@@ -144,6 +194,7 @@
     clearTimeout(deb); deb = setTimeout(liveSearch, 250);
   });
   $('liveq').addEventListener('keydown', e => { if (e.key === 'Enter') liveSearch(); });
+  $('precision').addEventListener('click', addPrecision);
 </script>
 
 <section id="shape">
@@ -157,15 +208,17 @@
 data/scale.sqlite       the RECORDS — name, caption, cafe, url.
                         row id i here IS row i of every matrix below.
 
-data/img_emb_f16.npy    the SCAN — one packed (1M × 512) float16 matrix
+data/img_emb_f16.npy    the SCAN — one packed (690k × 512) float16 matrix
 data/txt_emb_f16.npy    per tower, memory-mapped: a query is a chunked
-                        matrix @ vector, not a million BLOB decodes.</pre>
+                        matrix @ vector, not 690k BLOB decodes.</pre>
   </div>
   <p>
-    The searches are the ones the repo already taught, unchanged:
+    The searches build on concepts the repo already taught:
     <b>brute</b> is <code>search.py</code>'s scan, chunked; <b>ivf</b> is
     <code>ann.py</code>'s inverted-file index trained on a 100k sample;
-    <b>int8</b> is <code>quantize.py</code>'s lesson applied to the whole matrix.
+    <b>int8</b> is <code>quantize.py</code>'s lesson, now with a <i>per-dimension</i>
+    scale; and <b>OPQ</b> (<code>opq.py</code>) shrinks a vector to <b>64 bytes</b> —
+    a coarse filter that a short exact re-rank turns back into the truth.
     Fused search never materialises a 1024-d matrix at all —
     <code>fusion.py</code>'s identity, <i>score = (image·q + text·q) / 2</i>,
     applied lazily across two towers.
@@ -174,125 +227,141 @@ data/txt_emb_f16.npy    per tower, memory-mapped: a query is a chunked
 
 <section id="numbers">
   <h2>The honest table</h2>
-  <p>Sizes first — a million rows fits in a coat pocket:</p>
+  <p>Sizes first — 690k rows fits in a coat pocket, and the compressed indexes in a much smaller one:</p>
   <table>
     <tr><th>file</th><th>what</th><th>size</th></tr>
-    <tr><td><code>scale.sqlite</code></td><td>1M records: names, captions, cafes, urls</td><td>288 MB</td></tr>
-    <tr><td><code>img_emb_f16.npy</code></td><td>1M × 512 image embeddings, float16</td><td>1.02 GB</td></tr>
-    <tr><td><code>txt_emb_f16.npy</code></td><td>1M × 512 text embeddings, float16</td><td>1.02 GB</td></tr>
-    <tr><td><code>img_emb_i8.npy</code></td><td>the same image tower in int8</td><td>512 MB</td></tr>
-    <tr><td><code>ivf.npz</code></td><td>1024 centroids + row order + offsets</td><td>10 MB</td></tr>
+    <tr><td><code>scale.sqlite</code></td><td>690k records: names, captions, cafes, urls</td><td>288 MB</td></tr>
+    <tr><td><code>img_emb_f16.npy</code></td><td>690k × 512 image embeddings, float16</td><td>707 MB</td></tr>
+    <tr><td><code>txt_emb_f16.npy</code></td><td>690k × 512 text embeddings, float16</td><td>707 MB</td></tr>
+    <tr><td><code>img_emb_i8.npy</code></td><td>the image tower in int8 (per-dim scale)</td><td>353 MB</td></tr>
+    <tr><td><code>img_opq_codes.npy</code></td><td>the image tower in OPQ — <b>64 bytes/vector</b></td><td><b>44 MB</b></td></tr>
+    <tr><td><code>ivf.npz</code></td><td>1024 centroids + row order + offsets</td><td>8 MB</td></tr>
   </table>
-  <p style="margin-top:26px">Then the query costs, median over real text queries, warm cache:</p>
+  <p style="margin-top:26px"><b>Compression vs. accuracy</b> — recall@{1,10,100} against the exact
+    top-k, self-queries (the hardest case), measured by <code>scale.py bench</code>:</p>
   <table>
-    <tr><th>search</th><th>ms / query</th><th>recall@10</th><th>rows scanned</th></tr>
-    <tr><td>brute force, f16 → f32</td><td>868</td><td>1.00 — the truth</td><td>100%</td></tr>
-    <tr><td>brute force, int8</td><td>235</td><td>0.68</td><td>100%</td></tr>
-    <tr><td>int8 top-100 → exact re-rank</td><td>235</td><td>0.91</td><td>100%</td></tr>
-    <tr><td>ivf, 8 probes</td><td>11.0</td><td>0.90</td><td>1.0%</td></tr>
-    <tr><td>brute force, f32 in RAM (<code>serve</code>)</td><td><b>27.7</b></td><td>1.00 — the truth</td><td>100%</td></tr>
-    <tr><td>ivf-RAM, 8 probes (<code>serve</code>)</td><td><b>4.0</b></td><td>0.90</td><td>1.0%</td></tr>
+    <tr><th>method</th><th>bytes/vec</th><th>recall@1</th><th>recall@10</th><th>recall@100</th></tr>
+    <tr><td>brute force, f32 (the truth)</td><td>2048</td><td>1.00</td><td>1.00</td><td>1.00</td></tr>
+    <tr><td>int8, per-dimension</td><td>512</td><td>0.60</td><td>0.86</td><td>0.93</td></tr>
+    <tr><td>int8 → exact re-rank</td><td>512</td><td>0.66</td><td><b>0.91</b></td><td>0.93</td></tr>
+    <tr><td>OPQ, coarse (64 bytes)</td><td><b>64</b></td><td>0.62</td><td>0.59</td><td>0.62</td></tr>
+    <tr><td>OPQ → exact re-rank</td><td><b>64</b></td><td>0.68</td><td><b>0.92</b></td><td>0.92</td></tr>
   </table>
   <p class="fine" style="margin-top:14px">
-    The last two rows are the punchline: the 868 ms scan was never really about math —
-    it was paging a memory-mapped gigabyte off disk and casting it, query after query.
-    <code>python3 scale.py serve</code> promotes both towers to f32 RAM once (~4 GB, under a
-    second from a warm file cache) and the <i>same exact scan</i> becomes one matmul:
-    <b>32× faster, identical answers</b>. That is the storage-hierarchy lesson at 1M —
-    change where the bytes live, not the algorithm.</p>
+    The bottom row is the headline: <b>64 bytes a vector — 32× smaller than float32 — and
+    recall@10 of 0.92</b>. Coarse OPQ keeps only 0.59 of the exact top-10 (compression
+    showing), but its top few hundred almost always <i>contain</i> the true neighbours, so a
+    short exact re-rank recovers them. Two lessons the 14-image gallery could never teach:
+    a <b>per-dimension</b> int8 scale beats one global scale on CLIP's outlier dimensions
+    (0.86 vs the old 0.68), and <b>OPQ's learned rotation</b> (<code>opq.py</code>) earns ~10
+    recall points over plain product quantization for free — same 64 bytes, just a better split.</p>
+  <p style="margin-top:26px"><b>Speed</b> — the storage hierarchy, exact answers throughout
+    (median over queries, warm cache):</p>
+  <table>
+    <tr><th>where the bytes live</th><th>ms / query</th><th>recall@10</th></tr>
+    <tr><td>f16 memmap (paged off disk)</td><td>110</td><td>1.00 — the truth</td></tr>
+    <tr><td>f32 in RAM (<code>serve</code>)</td><td><b>18.6</b></td><td>1.00 — the truth</td></tr>
+    <tr><td>f32 on the GPU / MPS (<code>serve</code>)</td><td><b>12.3</b></td><td>1.00 — the truth</td></tr>
+  </table>
+  <p class="fine" style="margin-top:14px">
+    The memmap scan was never really about math — it was paging a memory-mapped file off disk
+    and casting f16→f32, query after query. <code>python3 scale.py serve</code> promotes both
+    towers to f32 RAM once (~2.8 GB) and the <i>same exact scan</i> is one matmul; the GPU is
+    one more rung. Same answers, an order of magnitude apart — change where the bytes live, not
+    the algorithm.</p>
   <p style="margin-top:26px">And the whole point of <code>ann.py</code>, now a thousandfold louder —
-    recall is a <b>dial</b>, priced in rows scanned:</p>
+    recall is a <b>dial</b>, priced in rows scanned (f32 RAM):</p>
   <table>
     <tr><th>probes</th><th>ms / query</th><th>recall@10</th><th>scanned</th></tr>
-        <tr><td>1</td><td>2.3</td><td>0.42</td><td>0.2%</td></tr>
-    <tr><td>2</td><td>3.9</td><td>0.76</td><td>0.3%</td></tr>
-    <tr><td>4</td><td>6.1</td><td>0.81</td><td>0.5%</td></tr>
-    <tr><td>8</td><td>11.0</td><td>0.90</td><td>1.0%</td></tr>
-    <tr><td>16</td><td>19.7</td><td>0.95</td><td>1.9%</td></tr>
-    <tr><td>32</td><td>41.2</td><td>0.95</td><td>3.5%</td></tr>
+    <tr><td>1</td><td>0.3</td><td>0.62</td><td>0.1%</td></tr>
+    <tr><td>2</td><td>0.6</td><td>0.73</td><td>0.2%</td></tr>
+    <tr><td>4</td><td>1.2</td><td>0.81</td><td>0.5%</td></tr>
+    <tr><td>8</td><td>2.0</td><td>0.86</td><td>0.9%</td></tr>
+    <tr><td>16</td><td>4.8</td><td>0.90</td><td>1.7%</td></tr>
+    <tr><td>32</td><td>9.3</td><td>0.92</td><td>3.4%</td></tr>
   </table>
-  <p class="fine" style="margin-top:14px">Recall plateaus at 0.95 — a few true neighbours live in cells the probes never visit, and buying them back gets expensive. Recall is a dial, priced in rows scanned. The int8 line is the other half of the lesson: one shared scale is too coarse for CLIP's outlier dimensions (0.68 on its own), but quantisation noise rarely knocks the truth out of the top-100 — fetch cheap, score exactly, and 0.68 becomes 0.91 at the same speed.</p>
+  <p class="fine" style="margin-top:14px">Recall climbs, then flattens — a few true neighbours live in cells no nearby probe visits, and buying them back gets expensive. 16 probes keep 0.90 of the truth while touching under 2% of the rows.</p>
 </section>
 
 <section id="queries">
-  <h2>Real queries against the million</h2>
+  <h2>Real queries against the corpus</h2>
   <p>
     Live text queries, embedded by the same text tower the browser demo downloads,
-    scanning all 1,000,000 image embeddings exactly. What comes back — with its cafe
+    scanning all 690,000 embeddings exactly. What comes back — with its cafe
     and score:
   </p>
-    <div class="card">
-    <p><b>“quattro formaggi pizza”</b> — fused search, exact scan of 1,000,000: <b>1,768 ms</b></p>
+  <div class="card">
+    <p><b>“quattro formaggi pizza”</b> — fused search, exact scan of 690,000: <b>213 ms</b></p>
     <div class="showcase">
-    <figure class="linked">
-      <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/625e804df6ab1a0224b8b4e1/000976ac-d10a-11ec-8182-ba4ae5736fb3_8._4_formaggi.jpeg" alt="Quattro Formaggi Pizza" loading="lazy"
-           onerror="this.closest('figure').classList.add('hidden')">
-      <figcaption>+0.656 · Quattro Formaggi Pizza — Tal-Pizza</figcaption>
-    </figure>
     <figure class="linked">
       <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/61f3d002eb60fe6100e7b99e/d2d4becc-8031-11ec-9620-2e140ffddefb_quattro_formaggi_pizza.jpeg" alt="Quattro formaggi PIZZA" loading="lazy"
            onerror="this.closest('figure').classList.add('hidden')">
-      <figcaption>+0.654 · Quattro formaggi PIZZA — Mesopotamia</figcaption>
-    </figure>
-    <figure class="linked">
-      <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/6255647a6880fab7068470bb/6a529f96-ba64-11ec-ab49-22da72b2f03d_quattro_formaggi.jpeg" alt="Quattro formaggi pizza" loading="lazy"
-           onerror="this.closest('figure').classList.add('hidden')">
-      <figcaption>+0.654 · Quattro formaggi pizza — Splav Porto Nuovo</figcaption>
+      <figcaption>+0.653 · Quattro formaggi PIZZA — Mesopotamia</figcaption>
     </figure>
     <figure class="linked">
       <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/5fad51cc32c715e3ee51c9c1/c36d866a-30ca-11eb-a573-66f4bab0f182_4_quattro_formaggi.jpeg" alt="QUATTRO FORMAGGI PIZZA" loading="lazy"
            onerror="this.closest('figure').classList.add('hidden')">
-      <figcaption>+0.653 · QUATTRO FORMAGGI PIZZA — IL MULINO</figcaption>
+      <figcaption>+0.651 · QUATTRO FORMAGGI PIZZA — IL MULINO</figcaption>
+    </figure>
+    <figure class="linked">
+      <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/628b542d0d6d9c60683ed2a2/bf567814-da8a-11ec-b093-9e46c98a5116_pizza_quattro_formaggio.jpeg" alt="Quattro formaggi pizza" loading="lazy"
+           onerror="this.closest('figure').classList.add('hidden')">
+      <figcaption>+0.651 · Quattro formaggi pizza — Restoran Sunce</figcaption>
+    </figure>
+    <figure class="linked">
+      <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/6076af519f79d28604be894a/ca1a8c0a-6702-11ec-85c9-bec0899ba591_catering_kum__2_of_26_.jpeg" alt="Quattro formaggi pizza" loading="lazy"
+           onerror="this.closest('figure').classList.add('hidden')">
+      <figcaption>+0.650 · Quattro formaggi pizza — Catering Kum</figcaption>
     </figure>
     </div>
   </div>
   <div class="card">
-    <p><b>“ramen with a soft-boiled egg”</b> — image search, exact scan of 1,000,000: <b>910 ms</b></p>
+    <p><b>“ramen with a soft-boiled egg”</b> — image search, exact scan of 690,000: <b>110 ms</b></p>
     <div class="showcase">
     <figure class="linked">
       <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/606eb85bd39af46942cafe92/9b71b604-a26c-11eb-af6a-d6ea268410c4_kagaribi_10.jpeg" alt="味噌ラーメン" loading="lazy"
            onerror="this.closest('figure').classList.add('hidden')">
-      <figcaption>+0.362 · 味噌ラーメン — Kagaribi</figcaption>
+      <figcaption>+0.368 · 味噌ラーメン — Kagaribi</figcaption>
     </figure>
     <figure class="linked">
       <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/606178b725cb4bd60b8a4f4c/9c2b7966-95e9-11eb-b672-d2521aa88900_enya_05.jpeg" alt="人気NO.1！とろっとろ味玉濃厚つけ麺（溏心蛋蘸汁面）" loading="lazy"
            onerror="this.closest('figure').classList.add('hidden')">
-      <figcaption>+0.358 · 人気NO.1！とろっとろ味玉濃厚つけ麺（溏心蛋蘸汁面） — Tsukemen Enya</figcaption>
-    </figure>
-    <figure class="linked">
-      <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/617b9ed45332a07aedaf8b4a/c41ba992-3aed-11ec-8933-5694137cc5e7_no.5________.jpeg" alt="ちく玉天うどん" loading="lazy"
-           onerror="this.closest('figure').classList.add('hidden')">
-      <figcaption>+0.355 · ちく玉天うどん — Hanamaru Udon Delivery Setagaya Kamiuma</figcaption>
+      <figcaption>+0.363 · 人気NO.1！とろっとろ味玉濃厚つけ麺（溏心蛋蘸汁面） — Tsukemen Enya</figcaption>
     </figure>
     <figure class="linked">
       <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/617b9ed45332a07aedaf8b4a/9ab46f7a-3aee-11ec-829d-c2569b691759_no.25________________.jpeg" alt="ちく玉天おろしぶっかけうどん" loading="lazy"
            onerror="this.closest('figure').classList.add('hidden')">
-      <figcaption>+0.355 · ちく玉天おろしぶっかけうどん — Hanamaru Udon Delivery Setagaya Kamiuma</figcaption>
+      <figcaption>+0.361 · ちく玉天おろしぶっかけうどん — Hanamaru Udon Delivery Setagaya Kamiuma</figcaption>
+    </figure>
+    <figure class="linked">
+      <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/617b9ed45332a07aedaf8b4a/c41ba992-3aed-11ec-8933-5694137cc5e7_no.5________.jpeg" alt="ちく玉天うどん" loading="lazy"
+           onerror="this.closest('figure').classList.add('hidden')">
+      <figcaption>+0.360 · ちく玉天うどん — Hanamaru Udon Delivery Setagaya Kamiuma</figcaption>
     </figure>
     </div>
   </div>
   <div class="card">
-    <p><b>“fresh berries dessert”</b> — image search, exact scan of 1,000,000: <b>890 ms</b></p>
+    <p><b>“fresh berries dessert”</b> — image search, exact scan of 690,000: <b>109 ms</b></p>
     <div class="showcase">
     <figure class="linked">
-      <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/6214c089e4f4d2e68cf7efcb/9896911a-9e20-11ec-b595-4ad9d989d267_jak_w_domu_pierogi_z_owocamii.jpeg" alt="Pierogi z owocami leśnymi" loading="lazy"
+      <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/62c29e35954eb19854deb777/43404cd0-fd4b-11ec-90a3-c6193656a9c8________________1.jpeg" alt="המלבי שלנו" loading="lazy"
            onerror="this.closest('figure').classList.add('hidden')">
-      <figcaption>+0.320 · Pierogi z owocami leśnymi — Jak W Domu</figcaption>
+      <figcaption>+0.324 · המלבי שלנו — Segev Express | Hod Hasharon</figcaption>
     </figure>
     <figure class="linked">
       <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/62d692639d85f054b6762901/5475a368-097d-11ed-9ca7-0eeda827405a__88._panakota__.jpeg" alt="Panna Cotta" loading="lazy"
            onerror="this.closest('figure').classList.add('hidden')">
-      <figcaption>+0.319 · Panna Cotta — San Remo Confectionery</figcaption>
+      <figcaption>+0.323 · Panna Cotta — San Remo Confectionery</figcaption>
     </figure>
     <figure class="linked">
-      <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/6058989a60a5481ab1f81cee/db12080a-bc74-11eb-b8d3-1e3df7ae5922_10.pancake_tower.jpeg" alt="Pancake Tower" loading="lazy"
+      <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/6214c089e4f4d2e68cf7efcb/9896911a-9e20-11ec-b595-4ad9d989d267_jak_w_domu_pierogi_z_owocamii.jpeg" alt="Pierogi z owocami leśnymi" loading="lazy"
            onerror="this.closest('figure').classList.add('hidden')">
-      <figcaption>+0.316 · Pancake Tower — Gloria Jean&#x27;s Ayia Napa</figcaption>
+      <figcaption>+0.323 · Pierogi z owocami leśnymi — Jak W Domu</figcaption>
     </figure>
     <figure class="linked">
-      <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/5cc6deab0cacf1a57a74c77b/9ff28666-8364-11ec-a378-aeef833c477c_pannkook_4tk.jpeg" alt="Pannkook 4tk. (poolfabrikaat)" loading="lazy"
+      <img src="https://wolt-menu-images-cdn.wolt.com/menu-images/6034eec01ad9d90fc23e7492/695b01b2-7679-11eb-9708-d2d3a224e4d8_sanitas7889.jpeg" alt="Σανίτα" loading="lazy"
            onerror="this.closest('figure').classList.add('hidden')">
-      <figcaption>+0.316 · Pannkook 4tk. (poolfabrikaat) — Lido Solaris</figcaption>
+      <figcaption>+0.322 · Σανίτα — Μουσελίν</figcaption>
     </figure>
     </div>
   </div>
@@ -314,11 +383,11 @@ Qdrant/wolt-food-clip-ViT-B-32-embeddings/resolve/main/data/\
 part-$i-wolt-clip-ViT-B-32.parquet
 done
 
-python3 scale.py ingest        # 1M rows: parse, normalise, embed a million
-                               # dish names through the text tower (~35 min)
-python3 scale.py search "quattro formaggi pizza" --mode fused
-python3 scale.py bench --ram --queries "sushi,burger,ramen,pad thai"
-python3 scale.py serve         # the million live at localhost:8071 —
+python3 scale.py ingest        # parse, normalise, embed every dish name
+                               # through the text tower (~500 rows/s)
+python3 scale.py bench         # builds int8 + OPQ + ivf, prints the honest table
+python3 scale.py search "quattro formaggi pizza" --method opq   # 64B → re-rank
+python3 scale.py serve         # live at localhost:8071 — towers in RAM,
                                # fused + query-ensembled, cost on every answer</pre>
   </div>
   <p class="fine">

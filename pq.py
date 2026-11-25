@@ -20,9 +20,18 @@ That last property is why this file exists: the export fits GitHub Pages
 file's browser twin — runs the SAME table-lookup search over it in
 milliseconds, against a query embedded by the demo's own text tower.
 
-Accuracy is a measured tradeoff, as always in this repo: eval() reports
-recall@10 against the exact scan, and the export bakes that number into
-its manifest so the web page can print it honestly.
+Two things make the shipped index actually accurate, not just small:
+  · OPQ (opq.py) learns a rotation before the split, so the 64 codes carry
+    ~10 recall points more than plain PQ for free — the export ships the
+    rotation (512×512 f32, ~1 MB) and js/pq.js rotates the query.
+  · a two-stage search: the coarse codes nominate a few hundred candidates,
+    then an int8 REFINE tier (the same dishes at one byte per dimension,
+    ~51 MB, loaded only on demand) re-scores them exactly. Coarse alone keeps
+    ~0.56 of the exact top-10; with the refine tier, ~0.84.
+
+Accuracy is a measured tradeoff, as always in this repo: cmd_export measures
+BOTH numbers on the real slice and bakes them into the manifest, so the web
+page prints what it actually delivers, not what it hopes to.
 
 Run me:  python3 pq.py selftest                    (synthetic, CI-safe)
          python3 pq.py export                      (data/ -> docs/million/)
@@ -92,23 +101,48 @@ def pq_search(codes, tables, k=10):
     return top, scores[top]
 
 
-def recall_at_10(X, codes, books, n_queries=50, seed=0, within=10):
-    """How much of the exact top-10 PQ keeps in ITS top-`within`, self-queries
-    (the hardest case: a database vector hunting its own packed neighbours).
-    Pure PQ reshuffles a tight top-10 — that's the compression showing — but
-    it keeps the neighbourhood: measure both, publish both."""
+def _rotated(q, R):
+    return (R @ q).astype(np.float32) if R is not None else q
+
+
+def recall_opq(X, codes, books, R=None, n_queries=100, seed=0, within=10):
+    """How much of the exact top-10 the coarse codes keep in THEIR top-`within`,
+    self-queries (the hardest case). This is the base pack's honest number."""
     rng = np.random.default_rng(seed)
     hits = 0
     for i in rng.choice(len(X), n_queries, replace=False):
-        truth = np.argsort(X @ X[i])[::-1][:10]
-        found, _ = pq_search(codes, adc_tables(X[i], books), k=within)
-        hits += len(set(found) & set(truth))
+        truth = set(np.argsort(X @ X[i])[::-1][:10].tolist())
+        found, _ = pq_search(codes, adc_tables(_rotated(X[i], R), books), k=within)
+        hits += len(set(found.tolist()) & truth)
+    return hits / (10 * n_queries)
+
+
+def recall_rerank(X, codes, books, R, i8, i8_scale, cand=400, n_queries=100, seed=0):
+    """The two-stage number the browser actually delivers with the refine tier
+    loaded: coarse codes nominate `cand`, the int8 vectors re-score them exactly
+    (per-dim dequant folded into the query). Measured against the exact top-10."""
+    rng = np.random.default_rng(seed)
+    hits = 0
+    for i in rng.choice(len(X), n_queries, replace=False):
+        q = X[i]
+        truth = set(np.argsort(X @ q)[::-1][:10].tolist())
+        c, _ = pq_search(codes, adc_tables(_rotated(q, R), books), k=cand)
+        s = i8[c].astype(np.float32) @ (i8_scale * q)          # int8 · (scale ⊙ q)
+        top = c[np.argsort(s)[::-1][:10]]
+        hits += len(set(top.tolist()) & truth)
     return hits / (10 * n_queries)
 
 
 # ---------------------------------------------------------------- export --
 def cmd_export(args):
+    """Two tiers, both browser-ready:
+      base    OPQ 64-byte codes + the rotation — ~7 MB, loads on open, coarse.
+      refine  the same dishes in int8 (per-dim) — ~51 MB, loads only when the
+              user asks for precision, then a two-stage search re-ranks exactly.
+    The manifest bakes in the MEASURED recall of each tier so js/pq.js can
+    print honest numbers, not hopeful ones."""
     import scale
+    from opq import opq_encode, opq_train
 
     con = scale.connect()
     rows = scale.n_rows(con)
@@ -116,18 +150,27 @@ def cmd_export(args):
     pick = np.arange(0, rows, stride)[:args.rows]
     print(f"slice: every {stride}th row of {rows:,} -> {len(pick):,} dishes")
     X = np.asarray(np.load(scale.IMG, mmap_mode="r")[pick], dtype=np.float32)
+    X /= (np.linalg.norm(X, axis=1, keepdims=True) + 1e-12)
 
     t0 = time.time()
-    books = pq_train(X[:: max(1, len(X) // 200_000)], log=print)
-    codes = pq_encode(X, books)
-    rec = recall_at_10(X, codes, books)
-    rec50 = recall_at_10(X, codes, books, within=50)
-    print(f"trained + encoded in {time.time() - t0:,.0f}s — "
-          f"exact top-10 kept: {rec:.2f} in PQ top-10, {rec50:.2f} in PQ top-50")
+    R, books = opq_train(X[:: max(1, len(X) // 200_000)], m=M_SUB, ks=KS, log=print)
+    codes = opq_encode(X, R, books)                            # (n, 64) uint8
+    # int8 refine tier: one scale PER DIMENSION so CLIP's outlier dims don't
+    # eat the byte's range (measurably better than a single global scale).
+    i8_scale = np.abs(X).max(0) / 127.0
+    i8_scale[i8_scale == 0] = 1.0
+    i8 = np.round(X / i8_scale).astype(np.int8)                # (n, 512) int8
+    rec = recall_opq(X, codes, books, R)
+    rec_rr = recall_rerank(X, codes, books, R, i8, i8_scale.astype(np.float32), cand=args.cand)
+    print(f"trained + encoded in {time.time() - t0:,.0f}s — coarse OPQ recall@10 "
+          f"{rec:.2f}; with the int8 re-rank of {args.cand}: {rec_rr:.2f}")
 
     os.makedirs(OUT, exist_ok=True)
-    books.astype("<f4").tofile(os.path.join(OUT, "pq_books.bin"))
-    codes.tofile(os.path.join(OUT, "pq_codes.bin"))
+    books.astype("<f4").tofile(os.path.join(OUT, "pq_books.bin"))       # OPQ codebooks
+    codes.tofile(os.path.join(OUT, "pq_codes.bin"))                     # OPQ codes
+    R.astype("<f4").tofile(os.path.join(OUT, "opq_rotation.bin"))       # 512×512 f32 (JS-friendly)
+    i8.tofile(os.path.join(OUT, "refine_i8.bin"))                       # n×512 int8
+    i8_scale.astype("<f4").tofile(os.path.join(OUT, "refine_scale.bin"))  # 512 f32
 
     # metadata, trimmed for the wire: shared URL prefix factored out once
     by_id = {}
@@ -141,15 +184,21 @@ def cmd_export(args):
     items = [[by_id[int(i)][1][:60], (by_id[int(i)][2] or "")[:30],
               by_id[int(i)][3][len(prefix):] if by_id[int(i)][3].startswith(prefix)
               else by_id[int(i)][3]] for i in pick]
-    manifest = {"n": len(pick), "m": M_SUB, "ks": KS, "sub": 512 // M_SUB,
-                "of_rows": rows, "stride": stride, "recall10": round(float(rec), 2),
-                "recall10_in50": round(float(rec50), 2), "url_prefix": prefix}
+    manifest = {"n": len(pick), "m": M_SUB, "ks": KS, "sub": 512 // M_SUB, "d": 512,
+                "of_rows": rows, "stride": stride,
+                "recall10": round(float(rec), 2),          # base pack (coarse)
+                "recall10_rerank": round(float(rec_rr), 2),  # + refine tier
+                "rerank_cand": args.cand, "url_prefix": prefix,
+                "refine": {"codes": "refine_i8.bin", "scale": "refine_scale.bin",
+                           "bytes": int(i8.nbytes)}}
     with open(os.path.join(OUT, "meta.json"), "w") as f:
         json.dump({"manifest": manifest, "items": items}, f, ensure_ascii=False,
                   separators=(",", ":"))
-    for name in ("pq_books.bin", "pq_codes.bin", "meta.json"):
+    print("wrote:")
+    for name in ("pq_books.bin", "pq_codes.bin", "opq_rotation.bin",
+                 "refine_i8.bin", "refine_scale.bin", "meta.json"):
         p = os.path.join(OUT, name)
-        print(f"  {p:<28} {os.path.getsize(p) / 1e6:>6.1f} MB")
+        print(f"  {p:<30} {os.path.getsize(p) / 1e6:>6.1f} MB")
 
 
 # -------------------------------------------------------------- selftest --
@@ -183,7 +232,7 @@ def cmd_selftest(args):
     qi = int(rng.integers(n))
     self_found, _ = pq_search(codes, adc_tables(X[qi], books), k=10)
     check(qi in set(self_found), "a vector finds ITSELF in PQ's top-10")
-    rec50 = recall_at_10(X, codes, books, n_queries=30, within=50)
+    rec50 = recall_opq(X, codes, books, R=None, n_queries=30, within=50)
     check(rec50 >= 0.7, f"exact top-10 stays in PQ's top-50 (kept {rec50:.2f})")
     found, scores = pq_search(codes, T, k=10)
     check(np.all(np.diff(scores) <= 1e-6), "pq_search returns scores sorted")
@@ -195,8 +244,9 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("export", help="PQ-pack a slice of the million for docs/")
+    p = sub.add_parser("export", help="OPQ-pack a slice of the million for docs/ (+ int8 refine tier)")
     p.add_argument("--rows", type=int, default=WEB_ROWS)
+    p.add_argument("--cand", type=int, default=400, help="candidates the refine tier re-ranks")
     sub.add_parser("selftest", help="synthetic PQ math check, CI-safe")
     args = ap.parse_args()
     cmd_export(args) if args.cmd == "export" else cmd_selftest(args)

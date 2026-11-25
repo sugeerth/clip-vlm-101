@@ -1500,6 +1500,405 @@ def test_db_roundtrip():
     assert db.count_images(con) == 1
 
 
+def test_answer():
+    """answer.py: BM25 → rank → cite → extractive, pinned to the JS twin's fixture."""
+    import json
+    import answer
+    fx = json.loads(pathlib.Path("docs/js/ask_fixture.json").read_text())
+    assert answer.twin_fixture() == fx, "run: python3 answer.py --write-fixture"
+    top = answer.rank("why is the sky blue", [{"text": "Unrelated pizza.", "src": "x"}])
+    assert top == [] and answer.extractive("q", top) == "Not in sources."
+    # ≤2 passages per source, citation numbers follow rank order
+    ps = [{"text": "blue sky blue", "src": "a"}] * 3 + [{"text": "blue sky", "src": "b"}]
+    top = answer.rank("blue sky", ps, k=10)
+    answer.number_sources(top)
+    assert [p["src"] for p in top] == ["a", "a", "b"] and [p["n"] for p in top] == [1, 1, 2]
+    try:
+        import scrapling.fetchers  # noqa: F401 — the live crawl needs the optional extra
+    except ImportError:
+        return
+    answer.selftest()
+
+
+def test_web_tools():
+    """sources.py's 7 API parsers, the MCP server, and research.py's tool wiring — all local."""
+    os.environ.pop("FIRECRAWL_API_KEY", None)   # never spend real Firecrawl credits in tests
+    try:
+        import mcp  # noqa: F401
+        import scrapling.fetchers  # noqa: F401
+    except ImportError:
+        return                                   # optional extras; CI installs them
+    import asyncio
+    import json
+    import types
+    import answer
+    import mcp_server
+    import research
+    import sources
+    from mcp import Client
+
+    fixtures = {
+        "/wikipedia": json.dumps({"query": {"pages": {"2": {"index": 2, "title": "Sunset", "fullurl": "https://w/2",
+                                                            "extract": "Sunsets are red."},
+                                                      "1": {"index": 1, "title": "Rayleigh scattering", "fullurl": "https://w/1",
+                                                            "extract": "The sky is blue because of Rayleigh scattering."}}}}),
+        "/hackernews": json.dumps({"hits": [{"objectID": "7", "story_title": "Sky", "comment_text": "<p>Blue &amp; bright</p>"}]}),
+        "/stackexchange": json.dumps({"items": [{"item_type": "answer", "answer_id": 3, "question_id": 1,
+                                                 "title": "Why blue?", "excerpt": "Short <span>wavelengths</span>."}]}),
+        "/openalex": json.dumps({"results": [{"id": "https://o/1", "display_name": "Optics", "publication_year": 1871,
+                                              "abstract_inverted_index": {"sky": [1], "The": [0], "glows.": [2]}}]}),
+        "/arxiv": "<feed><entry><id>http://arxiv.org/abs/1</id><title> Light\n scattering </title>"
+                  "<summary>Blue light scatters.</summary></entry></feed>",
+        "/github": json.dumps({"items": [{"html_url": "https://g/x", "full_name": "a/x", "description": "sky tools",
+                                          "topics": ["optics"], "stargazers_count": 5, "language": "Python"}]}),
+        "/reddit": "not json",
+        "/page": answer.FIXTURE["/a"],
+    }
+    fixtures.update(answer.FIXTURE)
+    srv, base = answer._serve(fixtures)
+    import multimodal
+    saved_sources, saved_engines = dict(sources.SOURCES), dict(answer.ENGINES)
+    saved_images = dict(multimodal.IMAGE_SOURCES)
+    try:
+        for name, (tpl, parse) in saved_sources.items():
+            sources.SOURCES[name] = (f"{base}/{name}?q={{q}}", parse)
+        for name, (tpl, parse) in saved_images.items():     # no test may touch the real internet
+            multimodal.IMAGE_SOURCES[name] = (f"{base}/missing-{name}?q={{q}}", parse)
+        answer.ENGINES.clear()
+        answer.ENGINES["local"] = (base + "/search?q={q}", "a.hit", None)
+
+        got, errors = asyncio.run(sources.search_sources("sky"))
+        assert [d["title"] for d in got["wikipedia"]] == ["Rayleigh scattering", "Sunset"]   # API rank order kept
+        assert got["hackernews"][0]["text"] == "Blue & bright"
+        assert got["stackexchange"][0]["url"] == "https://stackoverflow.com/a/3"
+        assert got["openalex"][0]["text"] == "The sky glows."
+        assert got["arxiv"][0] == {"url": "http://arxiv.org/abs/1", "title": "Light scattering",
+                                   "text": "Blue light scatters.", "source": "arxiv"}
+        assert "5 stars" in got["github"][0]["text"]
+        assert got["reddit"] == [] and "reddit" in errors                 # one source down, the rest fine
+
+        async def via_mcp():
+            async with Client(mcp_server.server) as c:
+                assert {t.name for t in (await c.list_tools()).tools} == {"ask", "web_search", "read_page", "search_sources", "find_images", "gallery_search"}
+                page = json.loads((await c.call_tool("read_page", {"url": base + "/page"})).content[0].text)
+                ans = json.loads((await c.call_tool("ask", {"question": "why is the sky blue", "pages": 10})).content[0].text)
+                gal = json.loads((await c.call_tool("gallery_search", {"query": "outer space planet"})).content[0].text)
+                assert gal["hits"][0]["file"] == "images/011_pluto.jpg"
+                return page, ans
+        page, ans = asyncio.run(via_mcp())
+        assert page["title"] == "Rayleigh scattering" and "footer" not in page["text"].lower()
+        assert ans["stats"]["scraped"] == 3 and ans["stats"]["api_docs"] == 7
+        assert "[1]" in ans["answer"] and ans["passages"][0]["n"] == 1
+    finally:
+        sources.SOURCES.update(saved_sources)
+        multimodal.IMAGE_SOURCES.update(saved_images)
+        answer.ENGINES.clear()
+        answer.ENGINES.update(saved_engines)
+        srv.shutdown()
+
+    # research.py: what the tool runner is handed (a fake client — no API call)
+    seen = {}
+
+    class Runner:
+        def __init__(self, kw):
+            seen.update(kw)
+
+        async def __aiter__(self):
+            yield types.SimpleNamespace(stop_reason="end_turn",
+                                        content=[types.SimpleNamespace(type="text", text="Blue [1].\n\n[1] https://a")])
+
+    fake = types.SimpleNamespace(beta=types.SimpleNamespace(messages=types.SimpleNamespace(tool_runner=lambda **kw: Runner(kw))))
+    out = asyncio.run(research.research("q", server_tools=True, mcp=[("docs", "https://e.x/mcp")], client=fake))
+    names = [getattr(t, "name", None) or t.get("name") or t["type"] for t in seen["tools"]]
+    assert out.startswith("Blue [1]")
+    assert names == ["scrape_search", "read_page", "search_sources", "find_images", "gallery_search",
+                     "web_search", "web_fetch", "mcp_toolset"]
+    assert "mcp-client-2025-11-20" in seen["betas"] and seen["mcp_servers"][0]["name"] == "docs"
+    asyncio.run(research.research("where is this?", image="https://x/photo.jpg", client=fake))
+    assert seen["messages"][0]["content"][0] == {"type": "image", "source": {"type": "url", "url": "https://x/photo.jpg"}}
+
+
+def test_multimodal():
+    """Images out (page + API images, ranked, CLIP re-rank), images in (photo → query → vision)."""
+    os.environ.pop("FIRECRAWL_API_KEY", None)   # never spend real Firecrawl credits in tests
+    try:
+        import scrapling.fetchers  # noqa: F401
+    except ImportError:
+        return
+    import asyncio
+    import io
+    import json
+    import types
+    from PIL import Image
+    import answer
+    import multimodal
+
+    def png(rgb):
+        buf = io.BytesIO()
+        Image.new("RGB", (64, 64), rgb).save(buf, "PNG")
+        return buf.getvalue()
+
+    fixtures = dict(answer.FIXTURE)
+    fixtures.update({
+        "/sky.jpg": png((80, 140, 230)), "/red.png": png((220, 40, 30)),
+        "/commons": json.dumps({"query": {"pages": {"5": {"index": 1, "title": "File:Clear blue sky.jpg",
+            "imageinfo": [{"thumburl": "https://upload/x.jpg", "descriptionurl": "https://commons/x",
+                           "extmetadata": {"ImageDescription": {"value": "<b>Blue</b> sky"},
+                                           "LicenseShortName": {"value": "CC BY 4.0"}}}]}}}}),
+        "/openverse": json.dumps({"results": [{"url": "https://ov/y.jpg", "thumbnail": "https://ov/t.jpg",
+            "foreign_landing_url": "https://flickr/y", "title": "Pizza", "tags": [{"name": "food"}],
+            "license": "by", "license_version": "2.0"}]}),
+    })
+    srv, base = answer._serve(fixtures)
+    saved = dict(multimodal.IMAGE_SOURCES)
+    try:
+        for name, (tpl, parse) in saved.items():
+            multimodal.IMAGE_SOURCES[name] = (f"{base}/{name}?q={{q}}", parse)
+        imgs, errors = asyncio.run(multimodal.image_search("blue sky"))
+        assert not errors and imgs[0] == {"url": "https://upload/x.jpg", "page": "https://commons/x",
+                                          "alt": "Clear blue sky. Blue sky", "license": "CC BY 4.0", "source": "commons"}
+        assert imgs[1]["license"] == "CC BY 2.0" and imgs[1]["url"] == "https://ov/t.jpg"
+
+        # ranking: words + a bonus for images whose page is cited
+        docs = [{"url": "https://a", "title": "Sky", "images": [{"url": "https://a/sky.jpg", "alt": "blue sky", "caption": ""}]},
+                {"url": "https://b", "title": "Food", "images": [{"url": "https://b/p.jpg", "alt": "pizza", "caption": ""}]}]
+        top = multimodal.rank_images("why is the sky blue", docs, imgs, {"https://a": 1})
+        assert top[0]["url"] == "https://a/sky.jpg" and top[0]["n"] == 1
+        assert all("pizza" not in im["alt"].lower() for im in top)       # zero-overlap images are dropped
+
+        # CLIP re-rank with a stand-in embedder: blue pixels match "sky", red do not
+        class FakeClip:
+            def embed_texts(self, texts):
+                import numpy as np
+                return np.array([[0.0, 0.0, 1.0]])
+
+            def embed_images(self, paths):
+                import numpy as np
+                rows = [np.array(Image.open(p).convert("RGB").getpixel((0, 0)), float) for p in paths]
+                return np.array([r / np.linalg.norm(r) for r in rows])
+        cands = [{"url": base + "/red.png", "score": 1.0}, {"url": base + "/sky.jpg", "score": 0.9}]
+        out = asyncio.run(multimodal.clip_rerank("sky", cands, embedder=FakeClip()))
+        assert out[0]["url"].endswith("/sky.jpg") and out[0]["clip"] > out[1]["clip"]
+
+        # images in: photo → (fake) Claude vision query → answer that SEES photo + cited page image
+        calls = []
+
+        class Stream:
+            def __init__(self, kw):
+                calls.append(kw)
+                self.reply = "rayleigh scattering sky" if "ONE short web-search query" in kw["system"] \
+                    else "Rayleigh scattering [1]."
+                self.text_stream = iter([self.reply])
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get_final_message(self):
+                return types.SimpleNamespace(stop_reason="end_turn",
+                                             content=[types.SimpleNamespace(type="text", text=self.reply)])
+
+        fake = types.SimpleNamespace(beta=types.SimpleNamespace(messages=types.SimpleNamespace(stream=lambda **kw: Stream(kw))),
+                                     models=types.SimpleNamespace(list=lambda **kw: []))
+        photo = pathlib.Path(tempfile.mkdtemp()) / "q.png"
+        photo.write_bytes(png((90, 150, 235)))
+        real_client = answer._client
+        answer._client = lambda: fake
+        try:
+            r = answer.ask("why this color?", pages=10, use_llm=True, apis=(), image=str(photo),
+                           engines={"local": (base + "/search?q={q}", "a.hit", None)})
+        finally:
+            answer._client = real_client
+        assert r["image_query"] == "rayleigh scattering sky" and r["answer"] == "Rayleigh scattering [1]."
+        assert r["mode"].endswith("+ vision")
+        final = calls[-1]["messages"][0]["content"]
+        kinds = [(b["type"], b.get("source", {}).get("type")) for b in final]
+        assert kinds[:2] == [("text", None), ("image", "base64")]           # the user's photo first
+        assert ("image", "url") in kinds and any("Image from source [1]" in b.get("text", "") for b in final)
+    finally:
+        multimodal.IMAGE_SOURCES.update(saved)
+        srv.shutdown()
+
+
+def test_bridge():
+    """CLIP·search ⇄ ask·200: gallery photos name themselves, web answers search the gallery
+    and grow it — all on the committed gallery, no model, no network."""
+    import json
+    import multimodal
+    items = multimodal.load_gallery()
+    cat = next(it for it in items if it["file"].endswith("004_cat.jpg"))
+    # a gallery photo becomes a web query with NO model and NO key: its stored CLIP tags
+    q = multimodal.image_to_query("anything/004_cat.jpg", "what breed?", gallery=items)
+    assert q == "cat pet animal breed"
+    # a photo's VECTOR alone is named by its gallery neighbours: the right head tag for 13 of 14
+    # (the castle is outvoted by "tower" — the Eiffel Tower and Westminster are its neighbours)
+    named = [multimodal.knn_tags(it["image_emb"], items)[0] == it["tags"][0] for it in items]
+    assert sum(named) == 13 and not named[3]
+    # …versus 2/14 for plain similarity voting — why tags are weighted by 0.5^position
+    def plain(emb):
+        sims = [multimodal._dot(it["image_emb"], emb) for it in items]
+        votes = {}
+        for i in sorted(range(len(items)), key=lambda i: -sims[i])[:3]:
+            for t in items[i]["tags"]:
+                votes[t] = votes.get(t, 0.0) + sims[i]
+        return max(votes, key=votes.get)
+    assert sum(plain(it["image_emb"]) == it["tags"][0] for it in items) == 2
+    # the twin fixture still matches (JS pins the same numbers)
+    fx = json.loads(pathlib.Path("docs/js/ask_fixture.json").read_text())["bridge"]
+    assert [multimodal.knn_tags(it["text_emb"], items) for it in items] == fx["knn"]
+    # CLIP path: a query vector ranks by pixels (the cat's own caption finds the cat)
+    assert multimodal.gallery_search("", items, 1, qvec=cat["text_emb"])[0]["file"] == cat["file"]
+    try:
+        import scrapling.fetchers  # noqa: F401 — the download half needs the optional extra
+    except ImportError:
+        return
+    import asyncio
+    import io
+    import answer
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (320, 240), (90, 150, 235)).save(buf, "PNG")
+    srv, base = answer._serve({"/big.png": buf.getvalue(), "/dup.png": buf.getvalue()})
+    out = pathlib.Path(tempfile.mkdtemp())
+    try:
+        imgs = [{"url": base + "/big.png", "page": "https://p", "alt": "blue", "license": "CC0"},
+                {"url": base + "/dup.png", "page": "https://q", "alt": "same pixels"},
+                {"url": base + "/missing.png", "page": "https://r", "alt": "404"}]
+        wrote = asyncio.run(multimodal.save_images(imgs, out, "why is the sky blue"))
+        again = asyncio.run(multimodal.save_images(imgs, out))
+    finally:
+        srv.shutdown()
+    assert len(wrote) == 1 and wrote[0]["license"] == "CC0" and pathlib.Path(wrote[0]["file"]).exists()
+    assert again == [] and len(json.loads((out / "web_manifest.json").read_text())) == 1   # dedup by pixels
+
+
+def test_firecrawl():
+    """Firecrawl as a second engine — search, rescue of a blocked page, read_page fallback, the
+    hosted MCP wiring — against a local mock of the v2 API (shapes checked against the live API)."""
+    try:
+        import scrapling.fetchers  # noqa: F401
+    except ImportError:
+        return
+    import asyncio
+    import http.server
+    import json
+    import threading
+    import types
+    import answer
+    import firecrawl
+    import research
+    import sources
+
+    # markdown → text/images: menus and link targets dropped, icons filtered
+    md = ("[Jump to content](#x)\n# Rayleigh scattering\n![Blue sky over a field](https://u/sky.jpg)\n"
+          "![](https://u/noalt.jpg) ![logo](https://u/logo.png)\n"
+          "**Rayleigh scattering** makes the [sky](https://w/sky) blue because short wavelengths scatter more.\n"
+          "| a | b |\n|---|---|")
+    assert firecrawl.md_text(md) == "Rayleigh scattering makes the sky blue because short wavelengths scatter more."
+    assert [im["url"] for im in firecrawl.md_images(md)] == ["https://u/sky.jpg"]
+
+    seen = []
+
+    class FC(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            seen.append((self.path, self.headers.get("authorization"), body))
+            if body.get("query") == "broke":
+                out, code = {"success": False, "error": "Insufficient credits"}, 402
+            elif self.path == "/v2/search":
+                out, code = {"success": True, "data": {
+                    "news": [{"title": "Sky turns red over Sydney", "url": "https://news/1", "date": "2 days ago",
+                              "snippet": "Bushfire smoke scattered the blue light, leaving the sky red."}],
+                    "images": [{"title": "Blue sky over a field", "imageUrl": "https://img/sky.jpg", "url": "https://img/page"},
+                               {"title": "", "imageUrl": "https://img/untitled.jpg", "url": "https://img/p2"}],
+                    "web": [
+                    {"url": "https://nasa/sky", "title": "Why Is the Sky Blue?", "description": "short",
+                     "markdown": "# Why\nBlue light is scattered more than the other colors because it travels "
+                                 "as shorter, smaller waves. This is why we see a blue sky most of the time.",
+                     "metadata": {"sourceURL": "https://nasa/sky"}},
+                    {"url": "https://bare/x", "title": "No markdown", "description": "only a description here"}]}}, 200
+            else:
+                out, code = {"success": True, "data": {
+                    "markdown": "The blocked page explains that the sky is blue because air molecules scatter "
+                                "blue sunlight far more strongly than red sunlight, which is Rayleigh scattering.",
+                    "metadata": {"title": "Blocked but rescued", "sourceURL": body["url"]}}}, 200
+            data = json.dumps(out).encode()
+            self.send_response(code)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(data)
+
+    fc_srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FC)
+    threading.Thread(target=fc_srv.serve_forever, daemon=True).start()
+    fixtures = dict(answer.FIXTURE)
+    fixtures["/blocked"] = ""                     # 404s for Scrapling — a page it cannot read
+    web, base = answer._serve(fixtures)
+    old = {k: os.environ.get(k) for k in ("FIRECRAWL_API_KEY", "FIRECRAWL_API_URL")}
+    os.environ.update(FIRECRAWL_API_KEY="fc-test", FIRECRAWL_API_URL=f"http://127.0.0.1:{fc_srv.server_port}")
+    try:
+        docs = asyncio.run(firecrawl.search("why is the sky blue", 2))
+        assert [d["url"] for d in docs] == ["https://nasa/sky", "https://bare/x"]
+        both, imgs = asyncio.run(firecrawl.search_all("why is the sky blue", 2))
+        assert [d["source"] for d in both] == ["firecrawl", "firecrawl", "firecrawl-news"]
+        assert seen[-1][2]["sources"] == ["web", "news", "images"]
+        del seen[1:]
+        assert docs[1]["text"] == "only a description here"           # no markdown → the description
+        path, auth, body = seen[0]
+        assert path == "/v2/search" and auth == "Bearer fc-test"
+        assert body["scrapeOptions"] == {"formats": ["markdown"], "onlyMainContent": True}
+
+        # the pipeline: Firecrawl search adds a page; the page Scrapling can't read is rescued
+        engines = {"local": (base + "/search?q={q}", "a.hit", None)}
+        r = answer.ask("why is the sky blue", pages=10, use_llm=False, apis=(), engines=engines)
+        fl = r["ledger"]["firecrawl"]
+        assert fl["docs"] == 3 and fl["rescued"] == 1 and fl["images"] == 1 and not fl["errors"], fl
+        assert any(s_["title"] == "Sky turns red over Sydney (2 days ago)" for s_ in r["sources"]) or \
+            any(p_["src"] == "https://news/1" for p_ in r["passages"])          # dated news ranks with pages
+        assert "https://img/sky.jpg" in [im["url"] for im in r["images"]]       # untitled image dropped
+        assert r["stats"]["firecrawl"] == 4 and "[1]" in r["answer"]
+        rescued = [b["url"] for path, _, b in seen if path == "/v2/scrape"]
+        assert len(rescued) == 1 and rescued[0].endswith("/blocked")    # readable short pages cost nothing
+
+        # out of credits: the ledger says so and the answer still comes from Scrapling
+        r2 = answer.ask("broke", pages=5, use_llm=False, apis=(), engines=engines, firecrawl_rescue=0)
+        assert "402" in r2["ledger"]["firecrawl"]["errors"][0] and r2["stats"]["scraped"] == 3
+        assert r["stats"]["scraped"] == 3          # Scrapling's pages, counted apart from Firecrawl's
+
+        # read_page: Scrapling first, Firecrawl when the page is unreadable
+        page = asyncio.run(sources.read_page(base + "/blocked"))
+        assert page["engine"] == "firecrawl" and page["title"] == "Blocked but rescued"
+        assert asyncio.run(sources.read_page(base + "/a"))["engine"] == "scrapling"
+        # opt-out: --no-firecrawl spends nothing
+        n = len(seen)
+        answer.ask("why is the sky blue", pages=5, use_llm=False, apis=(), engines=engines, firecrawl=False)
+        assert len(seen) == n
+
+        # research.py --firecrawl-mcp: the hosted server, key in the Authorization header, never the URL
+        kw = {}
+
+        class Runner:
+            def __init__(self, k):
+                kw.update(k)
+
+            async def __aiter__(self):
+                yield types.SimpleNamespace(stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text="ok")])
+        fake = types.SimpleNamespace(beta=types.SimpleNamespace(messages=types.SimpleNamespace(tool_runner=lambda **k: Runner(k))))
+        asyncio.run(research.research("q", client=fake, firecrawl_mcp=True))
+        assert kw["mcp_servers"] == [{"type": "url", "name": "firecrawl", "url": "https://mcp.firecrawl.dev/v2/mcp",
+                                      "authorization_token": "fc-test"}]
+        assert {"type": "mcp_toolset", "mcp_server_name": "firecrawl"} in kw["tools"]
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        fc_srv.shutdown()
+        web.shutdown()
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

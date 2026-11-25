@@ -1,0 +1,447 @@
+{
+ "passages": [
+  {
+   "text": "The sky is blue because air molecules scatter short blue wavelengths of sunlight far more than red ones, an effect called Rayleigh scattering. Scattering strength rises with the inverse fourth power of wavelength.",
+   "src": "https://a",
+   "title": "A"
+  },
+  {
+   "text": "At sunset light crosses more air, so the blue is scattered away and the horizon glows red. The sky can look orange too.",
+   "src": "https://b",
+   "title": "B"
+  },
+  {
+   "text": "Blue sky on Mars is not blue: dust makes the daytime sky butterscotch while sunsets there look blue.",
+   "src": "https://c",
+   "title": "C"
+  },
+  {
+   "text": "Neapolitan pizza is baked in a wood fired oven at very high temperature for about ninety seconds.",
+   "src": "https://d",
+   "title": "D"
+  },
+  {
+   "text": "Rayleigh scattering also explains why the sky is blue at noon; blue light is scattered in every direction by tiny molecules of nitrogen and oxygen.",
+   "src": "https://a",
+   "title": "A"
+  },
+  {
+   "text": "Why is the sky blue? Short wavelengths scatter more. Why is the sky blue? Short wavelengths scatter more.",
+   "src": "https://a",
+   "title": "A"
+  }
+ ],
+ "cases": [
+  {
+   "q": "why is the sky blue",
+   "bm25": [
+    0.47626872,
+    0.484366898,
+    0.723388835,
+    0.0,
+    0.574745536,
+    0.715025813
+   ],
+   "rank": [
+    [
+     "https://c",
+     1,
+     0.7234
+    ],
+    [
+     "https://a",
+     2,
+     0.715
+    ],
+    [
+     "https://a",
+     2,
+     0.5747
+    ],
+    [
+     "https://b",
+     3,
+     0.4844
+    ]
+   ],
+   "extractive": "Blue sky on Mars is not blue: dust makes the daytime sky butterscotch while sunsets there look blue. [1]"
+  },
+  {
+   "q": "rayleigh scattering wavelength",
+   "bm25": [
+    3.266897974,
+    0.0,
+    0.0,
+    0.0,
+    2.067960316,
+    0.0
+   ],
+   "rank": [
+    [
+     "https://a",
+     1,
+     3.2669
+    ],
+    [
+     "https://a",
+     1,
+     2.068
+    ]
+   ],
+   "extractive": "Scattering strength rises with the inverse fourth power of wavelength. [1]"
+  },
+  {
+   "q": "pizza oven temperature",
+   "bm25": [
+    0.0,
+    0.0,
+    0.0,
+    5.166018414,
+    0.0,
+    0.0
+   ],
+   "rank": [
+    [
+     "https://d",
+     1,
+     5.166
+    ]
+   ],
+   "extractive": "Neapolitan pizza is baked in a wood fired oven at very high temperature for about ninety seconds. [1]"
+  },
+  {
+   "q": "mars sunset",
+   "bm25": [
+    0.0,
+    1.546969279,
+    1.587305513,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rank": [
+    [
+     "https://c",
+     1,
+     1.5873
+    ],
+    [
+     "https://b",
+     2,
+     1.547
+    ]
+   ],
+   "extractive": "At sunset light crosses more air, so the blue is scattered away and the horizon glows red. [2]"
+  }
+ ],
+ "chunk_text": "The sky is blue because air molecules scatter short blue wavelengths of sunlight far more than red ones, an effect called Rayleigh scattering. Scattering strength rises with the inverse fourth power of wavelength. At sunset light crosses more air, so the blue is scattered away and the horizon glows red. The sky can look orange too. Blue sky on Mars is not blue: dust makes the daytime sky butterscotch while sunsets there look blue. Neapolitan pizza is baked in a wood fired oven at very high temperature for about ninety seconds. Rayleigh scattering also explains why the sky is blue at noon; blue light is scattered in every direction by tiny molecules of nitrogen and oxygen. Why is the sky blue? Short wavelengths scatter more. Why is the sky blue? Short wavelengths scatter more.",
+ "chunk": [
+  "The sky is blue because air molecules scatter short blue wavelengths of sunlight far more than red ones, an effect called Rayleigh scattering.",
+  "Scattering strength rises with the inverse fourth power of wavelength. At sunset light crosses more air, so the blue is scattered away and the horizon glows red.",
+  "The sky can look orange too. Blue sky on Mars is not blue: dust makes the daytime sky butterscotch while sunsets there look blue.",
+  "Neapolitan pizza is baked in a wood fired oven at very high temperature for about ninety seconds. Rayleigh scattering also explains why the sky is blue at noon; blue light is scattered in every direction by tiny molecules of nitrogen and oxygen.",
+  "Why is the sky blue? Short wavelengths scatter more. Why is the sky blue? Short wavelengths scatter more."
+ ],
+ "bridge": {
+  "knn": [
+   [
+    "apple",
+    "moon",
+    "pizza"
+   ],
+   [
+    "bear",
+    "dog",
+    "pet"
+   ],
+   [
+    "bicycle",
+    "tower",
+    "cat"
+   ],
+   [
+    "tower",
+    "landmark",
+    "castle"
+   ],
+   [
+    "cat",
+    "pet",
+    "dog"
+   ],
+   [
+    "dog",
+    "pet",
+    "bear"
+   ],
+   [
+    "tower",
+    "landmark",
+    "castle"
+   ],
+   [
+    "tower",
+    "landmark",
+    "castle"
+   ],
+   [
+    "mountain",
+    "castle",
+    "building"
+   ],
+   [
+    "parrot",
+    "cat",
+    "waterfall"
+   ],
+   [
+    "apple",
+    "pizza",
+    "moon"
+   ],
+   [
+    "moon",
+    "apple",
+    "mountain"
+   ],
+   [
+    "sunflower",
+    "parrot",
+    "bear"
+   ],
+   [
+    "waterfall",
+    "parrot",
+    "bear"
+   ]
+  ],
+  "search": {
+   "a fluffy pet": [
+    [
+     "images/001_bear.jpg",
+     1.6555
+    ],
+    [
+     "images/004_cat.jpg",
+     1.6555
+    ],
+    [
+     "images/005_dog.jpg",
+     1.6555
+    ],
+    [
+     "images/009_parrot.jpg",
+     1.6555
+    ]
+   ],
+   "famous tower in paris": [
+    [
+     "images/003_castle.jpg",
+     2.001
+    ],
+    [
+     "images/006_eiffel_tower.jpg",
+     2.001
+    ],
+    [
+     "images/007_london.jpg",
+     2.001
+    ]
+   ],
+   "food": [
+    [
+     "images/000_apple.jpg",
+     2.4637
+    ],
+    [
+     "images/010_pizza.jpg",
+     2.4637
+    ]
+   ],
+   "outer space planet": [
+    [
+     "images/011_pluto.jpg",
+     6.3321
+    ]
+   ]
+  }
+ },
+ "firecrawl": [
+  {
+   "md": "[Jump to content](#x)\n# Rayleigh scattering\n![Blue sky over a field](https://u/sky.jpg)\n![](https://u/noalt.jpg) ![site logo](https://u/logo.png)\n**Rayleigh scattering** makes the [sky](https://w/sky) blue because short wavelengths scatter more.\n| col a | col b |\n|---|---|\n- A list item long enough to be kept as a sentence of the page\n1. Numbered steps also keep their words but lose the number marker entirely\n> Quoted text that is long enough to survive the forty character threshold!\nShort line\nA repeated line that appears twice in the markdown body here.\nA repeated line that appears twice in the markdown body here.",
+   "text": "Rayleigh scattering makes the sky blue because short wavelengths scatter more. A list item long enough to be kept as a sentence of the page. Numbered steps also keep their words but lose the number marker entirely. Quoted text that is long enough to survive the forty character threshold! Short line A repeated line that appears twice in the markdown body here. A repeated line that appears twice in the markdown body here.",
+   "images": [
+    {
+     "url": "https://u/sky.jpg",
+     "alt": "Blue sky over a field",
+     "caption": ""
+    }
+   ]
+  },
+  {
+   "md": "",
+   "text": "",
+   "images": []
+  },
+  {
+   "md": "Just one sentence without terminal punctuation that is long enough",
+   "text": "Just one sentence without terminal punctuation that is long enough.",
+   "images": []
+  }
+ ],
+ "feedback": {
+  "q": "why do the northern lights happen",
+  "passages": [
+   {
+    "text": "The Northern Lights Are Visible Tonight Across Canada. Northern lights tours sell out fast, so book your northern lights trip early. The aurora appears when solar wind particles reach the magnetic field.",
+    "src": "https://t1",
+    "title": "https://t1"
+   },
+   {
+    "text": "Northern lights photography tips: use a tripod. The aurora borealis glows green when solar particles strike oxygen high in the atmosphere.",
+    "src": "https://t2",
+    "title": "https://t2"
+   },
+   {
+    "text": "Auroras happen because charged particles from the solar wind are caught by the magnetic field and collide with atmospheric gases, which then glow.",
+    "src": "https://s1",
+    "title": "https://s1"
+   },
+   {
+    "text": "The magnetic field funnels solar particles toward the poles, which is why auroras are seen at high latitudes.",
+    "src": "https://s2",
+    "title": "https://s2"
+   },
+   {
+    "text": "Pizza ovens reach very high temperatures in about ninety seconds of baking time.",
+    "src": "https://x",
+    "title": "https://x"
+   }
+  ],
+  "expansion": [
+   "wind",
+   "aurora",
+   "field",
+   "magnetic",
+   "particles",
+   "solar"
+  ],
+  "rank": [
+   [
+    "https://t1",
+    1,
+    3.7636
+   ],
+   [
+    "https://s1",
+    2,
+    2.7068
+   ],
+   [
+    "https://t2",
+    3,
+    2.4636
+   ],
+   [
+    "https://s2",
+    4,
+    0.944
+   ]
+  ],
+  "extractive": "Northern lights tours sell out fast, so book your northern lights trip early. [1] Auroras happen because charged particles from the solar wind are caught by the magnetic field and collide with atmospheric gases, which then glow. [2]",
+  "headline": [
+   [
+    "When to See the Northern Lights in Norway",
+    true
+   ],
+   [
+    "The aurora appears when solar wind hits.",
+    false
+   ],
+   [
+    "Why Is the Sky Blue? A Short Answer",
+    true
+   ],
+   [
+    "Rayleigh scattering is strongest for short waves",
+    false
+   ]
+  ]
+ },
+ "images": {
+  "docs": [
+   {
+    "url": "https://a",
+    "title": "Rayleigh scattering",
+    "images": [
+     {
+      "url": "https://a/sky.jpg",
+      "alt": "Blue sky over a field",
+      "caption": "Why the sky is blue"
+     },
+     {
+      "url": "https://a/chart.png",
+      "alt": "Scattering versus wavelength",
+      "caption": ""
+     }
+    ]
+   },
+   {
+    "url": "https://d",
+    "title": "Pizza",
+    "images": [
+     {
+      "url": "https://d/pizza.jpg",
+      "alt": "Neapolitan pizza",
+      "caption": ""
+     }
+    ]
+   }
+  ],
+  "api": [
+   {
+    "url": "https://c/sky.jpg",
+    "page": "https://c",
+    "alt": "Clear blue sky at noon",
+    "license": "CC0",
+    "source": "commons"
+   },
+   {
+    "url": "https://a/sky.jpg",
+    "page": "https://dup",
+    "alt": "duplicate",
+    "license": "",
+    "source": "openverse"
+   }
+  ],
+  "cited": {
+   "https://a": 1
+  },
+  "ranked": [
+   [
+    "https://a/sky.jpg",
+    1,
+    2.6309
+   ],
+   [
+    "https://c/sky.jpg",
+    null,
+    1.5098
+   ],
+   [
+    "https://a/chart.png",
+    1,
+    1.0
+   ]
+  ]
+ },
+ "tokens": [
+  "sky",
+  "blue",
+  "s",
+  "rayleigh",
+  "scattering",
+  "4th",
+  "power"
+ ]
+}

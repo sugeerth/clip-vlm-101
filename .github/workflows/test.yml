@@ -15,6 +15,10 @@ jobs:
           python-version: "3.12"
       - run: pip install numpy pillow   # pillow: spider.py's icon-size gate runs in test_smoke
       - run: python test_smoke.py
+      - run: pip install "scrapling[fetchers]" mcp "anthropic[mcp]"   # answer.py crawl + MCP server + agent wiring
+      - run: python test_smoke.py          # again, now with the optional extras: test_web_tools runs for real
+      - run: python answer.py --selftest
+      - run: node docs/js/test_ask.mjs      # the browser answer engine: BM25/cites/extractive pinned to answer.py
       - run: node docs/js/test_rank.mjs     # the JS math must mirror the Python
       - run: node docs/js/test_lessons.mjs  # the live lessons must reproduce the Python-pinned numbers
       - run: node docs/js/test_crawler.mjs  # web-search fan-out: retries, error prose, dedup — all mocked
@@ -61,5 +65,6 @@ jobs:
       - run: test ! -f docs/db_grown.json || python validate_db.py --json docs/db_grown.json  # …and on the grown one when present
       - run: python scale.py selftest       # the million-row machinery, synthetic + model-free
       - run: python pq.py selftest          # product quantization: the browser index's math
+      - run: python opq.py selftest         # optimised PQ: the learned rotation earns its recall
       - run: node docs/js/test_pq.mjs       # …and its JS twin agrees, lookup for lookup
       - run: python hermes.py --image pizza --json docs/db.json
